@@ -1,8 +1,8 @@
 import { renderOverview } from './views/overview.js';
 import { renderSessions } from './views/sessions.js';
 import { renderTimeline } from './views/timeline.js';
-import { renderErrors }   from './views/errors.js';
 import { renderModels, renderCosts, renderTools } from './views/models.js';
+import { renderFlow }     from './views/flow.js';
 import { api }            from './api.js';
 import { getDateRange, initDatePicker } from './components/date-picker.js';
 
@@ -17,6 +17,7 @@ const routes = {
   models:   (p) => renderModels(container, getDateRange()),
   costs:    (p) => renderCosts(container, getDateRange()),
   tools:    (p) => renderTools(container, getDateRange()),
+  flow:     (p) => renderFlow(container, getDateRange()),
 };
 
 function currentView() {

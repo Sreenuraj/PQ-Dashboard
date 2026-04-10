@@ -55,26 +55,26 @@ pq-config.yaml → Task Scanner → Parser Modules → SQLite Cache → REST API
 - [x] Event detail side panel (click node → see full content)
 - [x] **TEST**: Navigate tasks, verify timeline accuracy
 
-### Phase 3: Error & Tool Analytics ⬜
+### Phase 3: Error & Tool Analytics ✅
 > Goal: Behavioral analysis dashboards.
 
-- [ ] Error & Failure Analytics view (error types, rates, cascades)
-- [ ] Tool Usage Analytics view (frequency, sequences, success rates)
-- [ ] **TEST**: Verify error detection, tool extraction accuracy
+- [x] Error & Failure Analytics view (error types, rates, cascades)
+- [x] Tool Usage Analytics view (frequency, sequences, success rates)
+- [x] **TEST**: Verify error detection, tool extraction accuracy
 
-### Phase 4: Model & Cost Analytics ⬜
+### Phase 4: Model & Cost Analytics ✅
 > Goal: Model comparison and cost tracking.
 
-- [ ] Model Comparison Matrix (dynamic multi-model table + radar)
-- [ ] Cost & Token Economics (spend tracking, cache efficiency)
-- [ ] **TEST**: Verify cost totals match raw data
+- [x] Model Comparison Matrix (dynamic multi-model table + radar)
+- [x] Cost & Token Economics (spend tracking, cache efficiency)
+- [x] **TEST**: Verify cost totals match raw data
 
-### Phase 5: Advanced Views ⬜
+### Phase 5: Advanced Views ✅
 > Goal: Reasoning analysis and flow visualization.
 
-- [ ] Reasoning Quality Analyzer (scoring, correlation)
-- [ ] Activity → Consequence Flow (Sankey diagram)
-- [ ] **TEST**: Verify reasoning extraction, flow categorization
+- [x] Reasoning Quality Analyzer (scoring, correlation)
+- [x] Activity → Consequence Flow (Sankey diagram)
+- [x] **TEST**: Verify reasoning extraction, flow categorization
 
 ---
 
@@ -228,3 +228,4 @@ CREATE INDEX idx_task_models_model ON task_models(model_id);
 | 2026-04-10 | Phase 2 ✅ | Session Explorer, Timeline, Errors, Models, Costs, Tools views built |
 | 2026-04-10 | Bug Fix | Fixed Express IPv4 binding + Vite proxy config for dev server |
 | 2026-04-10 | Bug Fix | Fixed issue where date-range wrapper was destroyed on view re-render |
+| 2026-04-10 | Phase 3-5 ✅ | Added Chart.js, D3.js, Radar Chart, Sankey Diagram, Error Cascade and Reasoning Analyzer |

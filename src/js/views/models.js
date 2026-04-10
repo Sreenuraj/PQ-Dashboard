@@ -1,5 +1,6 @@
 import { api } from '../api.js';
 import { fmtCost, fmtDuration } from '../utils.js';
+import { renderRadarChart } from '../components/charts.js';
 
 export async function renderModels(container, dateRange = {}) {
   container.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading models...</p></div>`;
@@ -23,6 +24,14 @@ export async function renderModels(container, dateRange = {}) {
         <p class="view-subtitle">${models.length} distinct models used across all sessions</p>
       </div>
       <!-- date picker injected here -->
+    </div>
+
+    <!-- RADAR CHART -->
+    <div class="panel">
+      <div class="panel-title">Model Efficiency Matrix</div>
+      <div class="chart-wrap tall">
+        <canvas id="modelRadarChart"></canvas>
+      </div>
     </div>
 
     <div class="panel" style="padding:0;overflow:hidden">
@@ -82,6 +91,8 @@ export async function renderModels(container, dateRange = {}) {
       </table>
     </div>
   `;
+
+  setTimeout(() => renderRadarChart('modelRadarChart', models), 0);
 }
 
 export async function renderCosts(container, dateRange = {}) {
@@ -144,7 +155,10 @@ export async function renderTools(container, dateRange = {}) {
   const params = {};
   if (dateRange.from) params.from = dateRange.from;
   if (dateRange.to)   params.to   = dateRange.to;
-  const data = await api.tools(params);
+  const [data, seqData] = await Promise.all([
+    api.tools(params),
+    api.sequences(params)
+  ]);
   const maxCount = Math.max(...(data.topTools||[]).map(t => t.count), 1);
 
   container.innerHTML = `
@@ -185,6 +199,25 @@ export async function renderTools(container, dateRange = {}) {
           </tbody>
         </table>
       </div>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
+      <div class="panel-title">Common Tool Sequences</div>
+      <table class="data-table">
+        <thead><tr><th>Sequence (Step A → Step B)</th><th>Frequency</th></tr></thead>
+        <tbody>
+          ${(seqData.target || []).map(s => `
+            <tr>
+              <td>
+                <span class="badge blue">${s.source}</span>
+                <span style="color:var(--text-3);margin:0 8px">→</span>
+                <span class="badge blue">${s.target}</span>
+              </td>
+              <td style="font-weight:600">${s.count}</td>
+            </tr>
+          `).join('') || '<tr><td colspan="2" style="text-align:center;color:var(--text-3)">No sequences detected</td></tr>'}
+        </tbody>
+      </table>
     </div>
   `;
 }

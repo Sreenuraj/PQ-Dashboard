@@ -169,6 +169,120 @@ module.exports = (db) => {
     res.json({ byTime });
   });
 
+  // GET /api/analytics/sequences
+  router.get('/sequences', (req, res) => {
+    const { from, to } = req.query;
+    const { where, params } = buildDateFilter(from, to, 't.');
+
+    const events = db.prepare(`
+      SELECT e.task_id, e.sub_type, e.tool_name, e.error_category
+      FROM events e
+      INNER JOIN tasks t ON t.id = e.task_id
+      ${where}
+      ORDER BY e.task_id, e.ts ASC
+    `).all(...params);
+
+    const transitions = {};
+    let lastTool = null;
+    let lastTask = null;
+
+    events.forEach(e => {
+      if (e.task_id !== lastTask) {
+        lastTool = null;
+        lastTask = e.task_id;
+      }
+      if (e.sub_type === 'tool' && e.tool_name) {
+        if (lastTool) {
+          const key = `${lastTool}->${e.tool_name}`;
+          transitions[key] = (transitions[key] || 0) + 1;
+        }
+        lastTool = e.tool_name;
+      }
+    });
+
+    const sequenceList = Object.entries(transitions)
+      .map(([key, count]) => {
+        const [source, target] = key.split('->');
+        return { source, target, count };
+      })
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 30);
+
+    res.json({ target: sequenceList });
+  });
+
+  // GET /api/analytics/flow
+  router.get('/flow', (req, res) => {
+    const { from, to } = req.query;
+    const { where, params } = buildDateFilter(from, to);
+
+    const tasks = db.prepare(`
+      SELECT id, status, has_reasoning, tool_call_count, error_count 
+      FROM tasks ${where}
+    `).all(...params);
+
+    let nodesHash = { 'Task Start': 0, 'Reasoning': 1, 'No Reasoning': 2, 'Tools Used': 3, 'No Tools': 4, 'Completed': 5, 'Interrupted': 6, 'Error': 7, 'Has API Errors': 8 };
+    let nIdx = 9;
+    
+    // Sankey requires: nodes: [{name}], links: [{source, target, value}]
+    // We will build a flow from Start -> Reasoning -> Tools -> Errors -> Status
+    
+    let linksMap = {};
+    const addLink = (src, tgt) => {
+      const key = `${src}->${tgt}`;
+      linksMap[key] = (linksMap[key] || 0) + 1;
+    };
+
+    tasks.forEach(t => {
+      // 1. Start to Reasoning
+      const rNode = t.has_reasoning ? 'Reasoning' : 'No Reasoning';
+      addLink('Task Start', rNode);
+
+      // 2. Reasoning to Tools
+      const tNode = t.tool_call_count > 0 ? 'Tools Used' : 'No Tools';
+      addLink(rNode, tNode);
+
+      // 3. Tools to Errors
+      let eNode = tNode; // pass through
+      if (t.error_count > 0) {
+        eNode = 'Has API Errors';
+        addLink(tNode, eNode);
+      }
+
+      // 4. to Final status
+      const sNode = t.status === 'completed' ? 'Completed' : t.status === 'interrupted' ? 'Interrupted' : 'Error';
+      addLink(eNode, sNode);
+    });
+
+    const nodes = Object.keys(nodesHash).map(name => ({ name }));
+    const links = Object.entries(linksMap).map(([k, v]) => {
+      const [src, tgt] = k.split('->');
+      return { source: nodesHash[src], target: nodesHash[tgt], value: v };
+    });
+
+    res.json({ nodes, links });
+  });
+
+  // GET /api/analytics/reasoning
+  router.get('/reasoning', (req, res) => {
+    const { from, to } = req.query;
+    const { where, params } = buildDateFilter(from, to);
+    
+    const stats = db.prepare(`
+      SELECT 
+        has_reasoning,
+        COUNT(*) as task_count,
+        SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) as completed,
+        AVG(duration) as avg_duration,
+        AVG(total_cost) as avg_cost,
+        AVG(error_count) as avg_errors
+      FROM tasks
+      ${where}
+      GROUP BY has_reasoning
+    `).all(...params);
+    res.json(stats);
+  });
+
   return router;
 };
 

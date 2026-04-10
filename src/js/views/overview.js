@@ -5,9 +5,10 @@ export async function renderOverview(container, dateRange = {}) {
   container.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading overview...</p></div>`;
 
   const params = buildParams(dateRange);
-  const [overview, models] = await Promise.all([
+  const [overview, models, reasoning] = await Promise.all([
     api.overview(params),
     api.models(params),
+    api.reasoning(params)
   ]);
 
   const completionRate = overview.total_tasks > 0
@@ -79,6 +80,35 @@ export async function renderOverview(container, dateRange = {}) {
           <div style="margin-top:4px">Latest: <span style="color:var(--text)">${overview.latest_task ? fmtDate(overview.latest_task) : '—'}</span></div>
         </div>
       </div>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
+      <div class="panel-title">Reasoning Impact Analysis</div>
+      <table class="data-table">
+        <thead><tr><th>Task Type</th><th>Sessions</th><th>Avg Cost</th><th>Avg Errors</th><th>Completion Rate</th></tr></thead>
+        <tbody>
+          ${(reasoning || []).map(r => {
+            const label = r.has_reasoning ? '<span class="badge purple">🧠 With Reasoning</span>' : '<span class="badge grey">No Reasoning</span>';
+            const compRate = r.task_count > 0 ? Math.round(r.completed / r.task_count * 100) : 0;
+            return `
+              <tr>
+                <td>${label}</td>
+                <td style="font-weight:600">${r.task_count}</td>
+                <td style="color:var(--green)">${fmtCost(r.avg_cost)}</td>
+                <td style="color:${r.avg_errors > 0 ? 'var(--red)' : 'var(--text-3)'}">${(r.avg_errors || 0).toFixed(1)}</td>
+                <td>
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <div class="progress-bar" style="width:60px">
+                      <div class="progress-fill ${compRate > 70 ? 'accent' : 'yellow'}" style="width:${compRate}%"></div>
+                    </div>
+                    <span style="font-size:11px;color:var(--text-3)">${compRate}%</span>
+                  </div>
+                </td>
+              </tr>
+            `;
+          }).join('') || '<tr><td colspan="5" style="text-align:center;color:var(--text-3)">No reasoning data available</td></tr>'}
+        </tbody>
+      </table>
     </div>
   `;
 }

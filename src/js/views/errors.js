@@ -1,4 +1,5 @@
 import { api } from '../api.js';
+import { renderErrorTrendChart } from '../components/charts.js';
 
 export async function renderErrors(container, dateRange = {}) {
   container.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading errors...</p></div>`;
@@ -36,6 +37,15 @@ export async function renderErrors(container, dateRange = {}) {
       </div>
 
       <div class="panel">
+        <div class="panel-title">Error Cascades / Trend</div>
+        <div class="chart-wrap tall">
+          <canvas id="errorTrendChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="panel">
         <div class="panel-title">Errors by Model</div>
         <table class="data-table">
           <thead><tr><th>Model</th><th>Error Type</th><th>Count</th></tr></thead>
@@ -66,6 +76,8 @@ export async function renderErrors(container, dateRange = {}) {
       </div>
     </div>
   `;
+
+  setTimeout(() => renderErrorTrendChart('errorTrendChart', data.overTime || []), 0);
 }
 
 const ERROR_EXPLANATIONS = [
