@@ -20,8 +20,10 @@ module.exports = (db) => {
     if (to)   { conditions.push('t.start_ts <= ?'); params.push(new Date(to).getTime()); }
     if (source) { conditions.push('t.source = ?'); params.push(source); }
     if (status) { conditions.push('t.status = ?'); params.push(status); }
-    if (hasErrors === 'true') { conditions.push('t.error_count > 0'); }
-    if (hasReasoning === 'true') { conditions.push('t.has_reasoning = 1'); }
+    if (hasErrors === 'true')  { conditions.push('t.error_count > 0'); }
+    if (hasErrors === 'false') { conditions.push('t.error_count = 0'); }
+    if (hasReasoning === 'true')  { conditions.push('t.has_reasoning = 1'); }
+    if (hasReasoning === 'false') { conditions.push('t.has_reasoning = 0'); }
     if (search) { conditions.push('t.first_message LIKE ?'); params.push(`%${search}%`); }
 
     if (error_category) {

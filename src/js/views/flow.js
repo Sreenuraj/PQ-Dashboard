@@ -19,13 +19,26 @@ export async function renderFlow(container, dateRange = {}) {
     <div class="top-bar">
       <div>
         <h1 class="view-title">Activity Flow</h1>
-        <p class="view-subtitle">Task transitions from start to completion · <span style="color:var(--accent-2);font-size:11px">Click any node to see matching sessions ↗</span></p>
+        <p class="view-subtitle">Task transitions from start → reasoning → tools → outcome &nbsp;·&nbsp; <span style="color:var(--accent-2);font-size:11px">Click any coloured node to see matching sessions ↗</span></p>
       </div>
       <!-- date picker injected here -->
     </div>
-    
-    <div class="panel" style="overflow-x: auto; overflow-y: hidden;">
-      <div id="sankey-container" style="min-width: 800px; height: 500px;"></div>
+
+    <div class="panel" style="overflow-x:auto;overflow-y:hidden">
+      <div id="sankey-container" style="min-width:800px;height:520px"></div>
+    </div>
+
+    <div class="panel" style="padding:14px 20px">
+      <div class="panel-title">How to read this diagram</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;font-size:12px;color:var(--text-2)">
+        <div><span style="color:var(--text-3)">&#11044;</span> <strong style="color:var(--text)">Task Start</strong> — every session begins here</div>
+        <div><span style="color:var(--purple)">&#11044;</span> <strong style="color:var(--text)">Reasoning</strong> — sessions with 🧠 thinking traces</div>
+        <div><span style="color:var(--border-2)">&#11044;</span> <strong style="color:var(--text)">No Reasoning</strong> — sessions without thinking</div>
+        <div><span style="color:var(--blue)">&#11044;</span> <strong style="color:var(--text)">Tools Used</strong> — sessions that called tools</div>
+        <div><span style="color:var(--green)">&#11044;</span> <strong style="color:var(--text)">Completed</strong> — task finished successfully</div>
+        <div><span style="color:var(--yellow)">&#11044;</span> <strong style="color:var(--text)">Interrupted</strong> — task paused mid-way</div>
+        <div><span style="color:var(--red)">&#11044;</span> <strong style="color:var(--text)">Has API Errors</strong> — sessions with API failures</div>
+      </div>
     </div>
   `;
 
@@ -107,19 +120,19 @@ function drawSankey(containerId, data) {
     .attr("ry", 4)
     .style("cursor", "pointer")
     .on("click", (event, d) => {
-      // Map Sankey node name to a sessions drilldown URL
       const name = d.name;
       let q = '';
-      if (name === 'Completed')         q = '?status=completed';
-      else if (name === 'Interrupted')  q = '?status=interrupted';
-      else if (name.includes('Error') || name === 'Has API Errors') q = '?status=error';
-      else if (name === 'Reasoning')    q = '?hasReasoning=true';
-      else if (name === 'No Reasoning') q = '?hasReasoning=false';
-      else if (name === 'Tools Used')   q = '?hasErrors=false';
+      if (name === 'Completed')                           q = '?status=completed';
+      else if (name === 'Interrupted')                    q = '?status=interrupted';
+      else if (name === 'Error' || name === 'Has API Errors') q = '?hasErrors=true';
+      else if (name === 'Reasoning')                      q = '?hasReasoning=true';
+      else if (name === 'No Reasoning')                   q = '?hasReasoning=false';
+      else if (name === 'Tools Used')                     q = '?hasErrors=false';
+      else if (name === 'No Tools')                       q = '?hasReasoning=false';
       if (q) window.location.hash = `#/sessions${q}`;
     })
     .append("title")
-    .text(d => `${d.name}\n${d.value} tasks\nClick to view sessions`);
+    .text(d => `${d.name}\n${d.value} tasks\nClick to view sessions ↗`);
 
   // Node labels
   node.append("text")
