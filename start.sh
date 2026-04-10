@@ -18,6 +18,7 @@ fi
 
 PORT=3456
 FRONTEND_PORT=5173
+DB_PATH="./data/dashboard.db"
 
 echo ""
 echo "  ⬡  PQ Dashboard"
@@ -28,13 +29,20 @@ lsof -ti:$PORT | xargs kill -9 2>/dev/null
 lsof -ti:$FRONTEND_PORT | xargs kill -9 2>/dev/null
 sleep 1
 
+# Detect first run (no DB yet)
+FIRST_RUN=false
+if [ ! -f "$DB_PATH" ]; then
+  FIRST_RUN=true
+  echo "  📦 First run detected — will auto-scan all tasks from pq-config.yaml"
+fi
+
 # Start backend server in background
 echo "  🚀 Starting backend server (port $PORT)..."
 node server/index.js &
 SERVER_PID=$!
 
-# Wait for server to be ready
-echo "  ⏳ Waiting for server to parse tasks..."
+# Wait for server to be ready (up to 30s)
+echo "  ⏳ Waiting for server to be ready..."
 for i in {1..30}; do
   if curl -s "http://127.0.0.1:$PORT/api/analytics/overview" >/dev/null 2>&1; then
     break
@@ -42,15 +50,29 @@ for i in {1..30}; do
   sleep 1
 done
 
+# On first run, trigger a full parse via the refresh API
+if [ "$FIRST_RUN" = true ]; then
+  echo "  🔍 Scanning tasks from pq-config.yaml..."
+  curl -s -X POST "http://127.0.0.1:$PORT/api/refresh" >/dev/null 2>&1
+
+  # Poll until parsing is done (up to 120s)
+  for i in {1..120}; do
+    PARSING=$(curl -s "http://127.0.0.1:$PORT/api/refresh/status" 2>/dev/null | grep -o '"parsing":false')
+    if [ -n "$PARSING" ]; then
+      break
+    fi
+    sleep 1
+  done
+  echo "  ✅ Initial parse complete"
+fi
+
 # Start Vite frontend
 echo "  🎨 Starting frontend (port $FRONTEND_PORT)..."
 npm run dev &
 VITE_PID=$!
 
-# Wait for Vite to be ready
+# Wait for Vite to be ready then open browser
 sleep 3
-
-# Open browser
 echo "  🌐 Opening dashboard in browser..."
 open "http://localhost:$FRONTEND_PORT"
 
