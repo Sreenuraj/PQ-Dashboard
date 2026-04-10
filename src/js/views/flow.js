@@ -45,7 +45,7 @@ function drawSankey(containerId, data) {
     .attr("width", width)
     .attr("height", height)
     .append("g")
-    .attr("transform", \`translate(\${margin.left},\${margin.top})\`);
+    .attr("transform", `translate(${margin.left},${margin.top})`);
 
   const sankeyGen = sankey()
     .nodeWidth(20)
@@ -89,7 +89,7 @@ function drawSankey(containerId, data) {
 
   // Tooltip for links
   link.append("title")
-    .text(d => \`\${d.source.name} → \${d.target.name}\\n\${d.value} tasks\`);
+    .text(d => `${d.source.name} → ${d.target.name}\n${d.value} tasks`);
 
   // Draw nodes
   const node = svg.append("g")
@@ -106,7 +106,7 @@ function drawSankey(containerId, data) {
     .attr("rx", 4)
     .attr("ry", 4)
     .append("title")
-    .text(d => \`\${d.name}\\n\${d.value}\`);
+    .text(d => `${d.name}\n${d.value}`);
 
   // Node labels
   node.append("text")
