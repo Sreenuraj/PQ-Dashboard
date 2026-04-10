@@ -1,6 +1,6 @@
 import { api } from '../api.js';
-import { fmtCost, fmtDuration } from '../utils.js';
-import { renderRadarChart } from '../components/charts.js';
+import { fmtCost } from '../utils.js';
+import { renderRadarChart, renderCostChart, renderToolsChart } from '../components/charts.js';
 
 export async function renderModels(container, dateRange = {}) {
   container.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading models...</p></div>`;
@@ -14,21 +14,18 @@ export async function renderModels(container, dateRange = {}) {
     return;
   }
 
-  const maxCost = Math.max(...models.map(m => m.total_cost || 0));
-  const maxTasks = Math.max(...models.map(m => m.task_count || 0));
-
   container.innerHTML = `
     <div class="top-bar">
       <div>
         <h1 class="view-title">Model Analytics</h1>
-        <p class="view-subtitle">${models.length} distinct models used across all sessions</p>
+        <p class="view-subtitle">${models.length} distinct models · <span style="color:var(--accent-2);font-size:11px">Click any row to see sessions for that model ↗</span></p>
       </div>
       <!-- date picker injected here -->
     </div>
 
     <!-- RADAR CHART -->
     <div class="panel">
-      <div class="panel-title">Model Efficiency Matrix</div>
+      <div class="panel-title">Model Efficiency Matrix <span style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">(top 5 models)</span></div>
       <div class="chart-wrap tall">
         <canvas id="modelRadarChart"></canvas>
       </div>
@@ -38,32 +35,29 @@ export async function renderModels(container, dateRange = {}) {
       <table class="data-table">
         <thead>
           <tr>
-            <th>Model</th>
-            <th>Provider</th>
-            <th>Mode</th>
-            <th>Sessions</th>
-            <th>Total Cost</th>
-            <th>Avg Cost</th>
-            <th>Errors</th>
-            <th>Completion Rate</th>
-            <th>Cache %</th>
-            <th>Reasoning</th>
-            <th>Tier</th>
+            <th>Model <span style="font-weight:400;color:var(--text-3);font-size:9px">↕ bar = relative cost</span></th>
+            <th>Provider</th><th>Mode</th><th>Sessions</th>
+            <th>Total Cost</th><th>Avg Cost</th><th>Errors</th>
+            <th>Completion Rate</th><th>Cache %</th><th>Reasoning</th><th>Tier</th>
           </tr>
         </thead>
         <tbody>
           ${models.map(m => {
-            const errRate = m.total_api_calls > 0 ? (m.total_errors / m.total_api_calls * 100).toFixed(1) : 0;
+            const maxCost = Math.max(...models.map(x => x.total_cost || 0));
             const completionPct = m.task_count > 0 ? Math.round(m.completed / m.task_count * 100) : 0;
             const cacheHit = (m.total_tokens_in + m.total_cache_reads) > 0
               ? Math.round(m.total_cache_reads / (m.total_tokens_in + m.total_cache_reads) * 100) : 0;
             const costWidth = maxCost > 0 ? (m.total_cost / maxCost * 100) : 0;
 
             return `
-              <tr class="hover-row" style="cursor:pointer" onclick="window.location.hash='#/sessions?model_id=${encodeURIComponent(m.model_id)}'">
+              <tr style="cursor:pointer" title="Click to view sessions for this model"
+                onclick="window.location.hash='#/sessions?model_id=${encodeURIComponent(m.model_id)}'">
                 <td style="padding-left:14px">
-                  <div class="mono" style="font-size:12px">${m.model_id || '—'}</div>
-                  <div style="margin-top:4px;width:${Math.max(costWidth,2)}%;height:3px;background:var(--accent);border-radius:99px;opacity:0.6"></div>
+                  <div style="display:flex;align-items:center;gap:6px">
+                    <div class="mono" style="font-size:12px">${m.model_id || '—'}</div>
+                    <span style="font-size:9px;color:var(--accent-2);opacity:0.7">↗</span>
+                  </div>
+                  <div style="margin-top:4px;width:${Math.max(costWidth,2)}%;height:3px;background:var(--accent);border-radius:99px;opacity:0.5"></div>
                 </td>
                 <td style="font-size:12px;color:var(--text-2)">${m.provider_id || '—'}</td>
                 <td><span class="badge grey" style="font-size:10px">${m.mode || '—'}</span></td>
@@ -107,25 +101,15 @@ export async function renderCosts(container, dateRange = {}) {
     <div class="top-bar">
       <div>
         <h1 class="view-title">Cost & Tokens</h1>
-        <p class="view-subtitle">Total: <strong style="color:var(--green)">${fmtCost(totalCost)}</strong></p>
+        <p class="view-subtitle">Total spend: <strong style="color:var(--green)">${fmtCost(totalCost)}</strong> · <span style="color:var(--accent-2);font-size:11px">Click a bar to see sessions ↗</span></p>
       </div>
       <!-- date picker injected here -->
     </div>
 
     <div class="panel">
       <div class="panel-title">Cost by Model</div>
-      <div class="error-bar-list">
-        ${models.sort((a,b) => b.total_cost - a.total_cost).map(m => {
-          const pct = totalCost > 0 ? (m.total_cost / totalCost * 100) : 0;
-          return `
-            <div class="error-bar-item">
-              <div class="error-bar-label mono" style="font-size:11px">${(m.model_id||'?').split('/').pop()}</div>
-              <div class="error-bar-track">
-                <div class="error-bar-fill" style="width:${pct}%;background:var(--accent)"></div>
-              </div>
-              <div style="font-size:12px;color:var(--green);min-width:60px;text-align:right">${fmtCost(m.total_cost)}</div>
-            </div>`;
-        }).join('') || '<div style="color:var(--text-3)">No data</div>'}
+      <div style="height:${Math.max(models.length * 36 + 24, 200)}px;position:relative">
+        <canvas id="costByModelChart"></canvas>
       </div>
     </div>
 
@@ -148,6 +132,8 @@ export async function renderCosts(container, dateRange = {}) {
       </table>
     </div>
   `;
+
+  setTimeout(() => renderCostChart('costByModelChart', models, totalCost), 0);
 }
 
 export async function renderTools(container, dateRange = {}) {
@@ -159,34 +145,46 @@ export async function renderTools(container, dateRange = {}) {
     api.tools(params),
     api.sequences(params)
   ]);
-  const maxCount = Math.max(...(data.topTools||[]).map(t => t.count), 1);
+
+  const tools = data.topTools || [];
 
   container.innerHTML = `
     <div class="top-bar">
       <div>
         <h1 class="view-title">Tool Usage</h1>
-        <p class="view-subtitle">Agent tool calls across all sessions</p>
+        <p class="view-subtitle">Agent tool calls across all sessions · <span style="color:var(--accent-2);font-size:11px">Click a bar to see sessions using that tool ↗</span></p>
       </div>
       <!-- date picker injected here -->
     </div>
 
+    <div class="panel">
+      <div class="panel-title">Top Tools Used <span style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">(interactive — click to drilldown)</span></div>
+      <div style="height:${Math.max(tools.length * 36 + 24, 220)}px;position:relative">
+        <canvas id="toolsChart"></canvas>
+      </div>
+    </div>
+
     <div class="grid-2">
       <div class="panel">
-        <div class="panel-title">Top Tools Used</div>
-        <div class="error-bar-list">
-          ${(data.topTools || []).map(t => `
-            <div class="error-bar-item" style="cursor:pointer" onclick="window.location.hash='#/sessions?tool_name=${encodeURIComponent(t.tool_name)}'">
-              <div class="error-bar-label mono" style="font-size:11px;color:var(--text)">${t.tool_name}</div>
-              <div class="error-bar-track">
-                <div class="error-bar-fill" style="width:${t.count/maxCount*100}%;background:var(--blue)"></div>
-              </div>
-              <div class="error-bar-count">${t.count}</div>
-            </div>
-          `).join('') || '<div style="color:var(--text-3)">No tool data</div>'}
-        </div>
+        <div class="panel-title">Common Tool Sequences <span style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">(Step A → Step B)</span></div>
+        <table class="data-table">
+          <thead><tr><th>Sequence</th><th>Frequency</th></tr></thead>
+          <tbody>
+            ${(seqData.target || []).map(s => `
+              <tr>
+                <td>
+                  <span class="badge blue">${s.source}</span>
+                  <span style="color:var(--text-3);margin:0 8px">→</span>
+                  <span class="badge accent">${s.target}</span>
+                </td>
+                <td style="font-weight:600">${s.count}</td>
+              </tr>
+            `).join('') || '<tr><td colspan="2" style="text-align:center;color:var(--text-3)">No sequences detected</td></tr>'}
+          </tbody>
+        </table>
       </div>
       <div class="panel">
-        <div class="panel-title">Common Commands</div>
+        <div class="panel-title">Common Commands Executed</div>
         <table class="data-table">
           <thead><tr><th>Command</th><th>Count</th></tr></thead>
           <tbody>
@@ -200,26 +198,9 @@ export async function renderTools(container, dateRange = {}) {
         </table>
       </div>
     </div>
-
-    <div class="panel" style="margin-top:16px">
-      <div class="panel-title">Common Tool Sequences</div>
-      <table class="data-table">
-        <thead><tr><th>Sequence (Step A → Step B)</th><th>Frequency</th></tr></thead>
-        <tbody>
-          ${(seqData.target || []).map(s => `
-            <tr>
-              <td>
-                <span class="badge blue">${s.source}</span>
-                <span style="color:var(--text-3);margin:0 8px">→</span>
-                <span class="badge blue">${s.target}</span>
-              </td>
-              <td style="font-weight:600">${s.count}</td>
-            </tr>
-          `).join('') || '<tr><td colspan="2" style="text-align:center;color:var(--text-3)">No sequences detected</td></tr>'}
-        </tbody>
-      </table>
-    </div>
   `;
+
+  setTimeout(() => renderToolsChart('toolsChart', tools), 0);
 }
 
 function fmtK(n) {

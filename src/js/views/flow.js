@@ -19,7 +19,7 @@ export async function renderFlow(container, dateRange = {}) {
     <div class="top-bar">
       <div>
         <h1 class="view-title">Activity Flow</h1>
-        <p class="view-subtitle">Task transitions from start to completion</p>
+        <p class="view-subtitle">Task transitions from start to completion · <span style="color:var(--accent-2);font-size:11px">Click any node to see matching sessions ↗</span></p>
       </div>
       <!-- date picker injected here -->
     </div>
@@ -106,17 +106,20 @@ function drawSankey(containerId, data) {
     .attr("rx", 4)
     .attr("ry", 4)
     .style("cursor", "pointer")
-    .on("click", (e, d) => {
-      // Map node name to query param
+    .on("click", (event, d) => {
+      // Map Sankey node name to a sessions drilldown URL
+      const name = d.name;
       let q = '';
-      if (d.name.includes('Error')) q = '?status=error';
-      else if (d.name === 'Completed') q = '?status=completed';
-      else if (d.name === 'Interrupted') q = '?status=interrupted';
-      else if (d.name === 'Reasoning') q = '?hasReasoning=true';
+      if (name === 'Completed')         q = '?status=completed';
+      else if (name === 'Interrupted')  q = '?status=interrupted';
+      else if (name.includes('Error') || name === 'Has API Errors') q = '?status=error';
+      else if (name === 'Reasoning')    q = '?hasReasoning=true';
+      else if (name === 'No Reasoning') q = '?hasReasoning=false';
+      else if (name === 'Tools Used')   q = '?hasErrors=false';
       if (q) window.location.hash = `#/sessions${q}`;
     })
     .append("title")
-    .text(d => `${d.name}\n${d.value}`);
+    .text(d => `${d.name}\n${d.value} tasks\nClick to view sessions`);
 
   // Node labels
   node.append("text")

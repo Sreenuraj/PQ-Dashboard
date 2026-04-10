@@ -2,6 +2,7 @@ import { renderOverview } from './views/overview.js';
 import { renderSessions } from './views/sessions.js';
 import { renderTimeline } from './views/timeline.js';
 import { renderModels, renderCosts, renderTools } from './views/models.js';
+import { renderErrors }   from './views/errors.js';
 import { renderFlow }     from './views/flow.js';
 import { api }            from './api.js';
 import { getDateRange, initDatePicker } from './components/date-picker.js';
@@ -55,16 +56,18 @@ function navigate() {
   });
 }
 
-// Re-render current view when date range changes
+// Re-render current view when date range changes — preserve existing URL params
 window.addEventListener('daterange:change', () => {
   const view = currentView();
+  const queryStr = window.location.hash.split('?')[1] || '';
+  const params = new URLSearchParams(queryStr);
   const render = routes[view] || routes.overview;
 
   const wrapper = document.getElementById('date-range-wrapper');
   if (wrapper) document.body.appendChild(wrapper);
 
   container.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading...</p></div>`;
-  render(new URLSearchParams()).then(() => {
+  Promise.resolve(render(params)).then(() => {
     setTimeout(() => initDatePicker('view-container'), 50);
   }).catch(console.error);
 });
