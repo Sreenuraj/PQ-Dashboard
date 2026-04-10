@@ -9,7 +9,7 @@ module.exports = (db) => {
       page = 1, limit = 20,
       from, to, model, source,
       hasErrors, hasReasoning, status,
-      search
+      error_category, tool_name, search
     } = req.query;
 
     const offset = (parseInt(page) - 1) * parseInt(limit);
@@ -23,6 +23,15 @@ module.exports = (db) => {
     if (hasErrors === 'true') { conditions.push('t.error_count > 0'); }
     if (hasReasoning === 'true') { conditions.push('t.has_reasoning = 1'); }
     if (search) { conditions.push('t.first_message LIKE ?'); params.push(`%${search}%`); }
+
+    if (error_category) {
+      conditions.push('t.id IN (SELECT task_id FROM events WHERE error_category = ?)');
+      params.push(error_category);
+    }
+    if (tool_name) {
+      conditions.push('t.id IN (SELECT task_id FROM events WHERE tool_name = ?)');
+      params.push(tool_name);
+    }
 
     let modelJoin = '';
     if (model) {

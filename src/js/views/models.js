@@ -60,8 +60,8 @@ export async function renderModels(container, dateRange = {}) {
             const costWidth = maxCost > 0 ? (m.total_cost / maxCost * 100) : 0;
 
             return `
-              <tr>
-                <td>
+              <tr class="hover-row" style="cursor:pointer" onclick="window.location.hash='#/sessions?model_id=${encodeURIComponent(m.model_id)}'">
+                <td style="padding-left:14px">
                   <div class="mono" style="font-size:12px">${m.model_id || '—'}</div>
                   <div style="margin-top:4px;width:${Math.max(costWidth,2)}%;height:3px;background:var(--accent);border-radius:99px;opacity:0.6"></div>
                 </td>
@@ -175,8 +175,8 @@ export async function renderTools(container, dateRange = {}) {
         <div class="panel-title">Top Tools Used</div>
         <div class="error-bar-list">
           ${(data.topTools || []).map(t => `
-            <div class="error-bar-item">
-              <div class="error-bar-label mono" style="font-size:11px">${t.tool_name}</div>
+            <div class="error-bar-item" style="cursor:pointer" onclick="window.location.hash='#/sessions?tool_name=${encodeURIComponent(t.tool_name)}'">
+              <div class="error-bar-label mono" style="font-size:11px;color:var(--text)">${t.tool_name}</div>
               <div class="error-bar-track">
                 <div class="error-bar-fill" style="width:${t.count/maxCount*100}%;background:var(--blue)"></div>
               </div>

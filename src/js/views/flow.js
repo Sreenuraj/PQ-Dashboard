@@ -105,6 +105,16 @@ function drawSankey(containerId, data) {
     .attr("fill", d => getNodeColor(d.name))
     .attr("rx", 4)
     .attr("ry", 4)
+    .style("cursor", "pointer")
+    .on("click", (e, d) => {
+      // Map node name to query param
+      let q = '';
+      if (d.name.includes('Error')) q = '?status=error';
+      else if (d.name === 'Completed') q = '?status=completed';
+      else if (d.name === 'Interrupted') q = '?status=interrupted';
+      else if (d.name === 'Reasoning') q = '?hasReasoning=true';
+      if (q) window.location.hash = `#/sessions${q}`;
+    })
     .append("title")
     .text(d => `${d.name}\n${d.value}`);
 

@@ -25,7 +25,7 @@ export async function renderErrors(container, dateRange = {}) {
           ${(data.byCategory || []).map(r => {
             const pct = total > 0 ? (r.count / total * 100) : 0;
             return `
-              <div class="error-bar-item">
+              <div class="error-bar-item hover-row" style="cursor:pointer" onclick="window.location.hash='#/sessions?error_category=${encodeURIComponent(r.error_category)}'">
                 <div class="error-bar-label">${formatErrorCategory(r.error_category)}</div>
                 <div class="error-bar-track">
                   <div class="error-bar-fill" style="width:${pct}%;background:${errorColor(r.error_category)}"></div>
@@ -51,7 +51,7 @@ export async function renderErrors(container, dateRange = {}) {
           <thead><tr><th>Model</th><th>Error Type</th><th>Count</th></tr></thead>
           <tbody>
             ${(data.byModel || []).slice(0, 15).map(r => `
-              <tr>
+              <tr class="hover-row" style="cursor:pointer" onclick="window.location.hash='#/sessions?model_id=${encodeURIComponent(r.model_id)}&error_category=${encodeURIComponent(r.error_category)}'">
                 <td class="mono" style="font-size:11px">${r.model_id || '—'}</td>
                 <td><span class="badge ${errorBadgeColor(r.error_category)}">${formatErrorCategory(r.error_category)}</span></td>
                 <td style="font-weight:600">${r.count}</td>

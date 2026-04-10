@@ -11,7 +11,7 @@ const container = document.getElementById('view-container');
 // ── Routes ──
 const routes = {
   overview: (p) => renderOverview(container, getDateRange()),
-  sessions: (p) => renderSessions(container, getDateRange()),
+  sessions: (p) => renderSessions(container, getDateRange(), p),
   timeline: (p) => renderTimeline(container, p.get('task')),
   errors:   (p) => renderErrors(container, getDateRange()),
   models:   (p) => renderModels(container, getDateRange()),
@@ -43,7 +43,8 @@ function navigate() {
   if (wrapper) document.body.appendChild(wrapper);
 
   container.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading...</p></div>`;
-  render(params).catch(err => {
+  
+  Promise.resolve(render(params)).catch(err => {
     console.error(err);
     container.innerHTML = `
       <div class="empty-state">

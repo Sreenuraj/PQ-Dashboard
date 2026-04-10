@@ -4,12 +4,23 @@ import { fmtCost, fmtDuration, fmtDate, fmtDateTime } from '../utils.js';
 let currentPage = 1;
 let currentFilters = {};
 
-export async function renderSessions(container, dateRange = {}) {
+export async function renderSessions(container, dateRange = {}, queryParams = new URLSearchParams()) {
+  // Capture URL overrides
+  const urlStatus = queryParams.get('status');
+  const urlModel = queryParams.get('model_id');
+  const urlErrorCat = queryParams.get('error_category');
+  const urlTool = queryParams.get('tool_name');
+
+  const hasUrlFilters = urlStatus || urlModel || urlErrorCat || urlTool;
+
   container.innerHTML = `
     <div class="top-bar">
       <div>
         <h1 class="view-title">Sessions</h1>
-        <p class="view-subtitle">All PostQode agent task sessions</p>
+        <p class="view-subtitle">
+          All PostQode agent task sessions 
+          ${hasUrlFilters ? `<a href="#/sessions" class="badge red" style="margin-left:8px;text-decoration:none">✕ Clear Drilldown Filters</a>` : ''}
+        </p>
       </div>
       <!-- date picker injected here -->
     </div>
@@ -64,20 +75,23 @@ export async function renderSessions(container, dateRange = {}) {
     debounceTimer = setTimeout(() => { currentPage = 1; loadSessions(container); }, 350);
   });
   ['f-status', 'f-source', 'f-errors'].forEach(id => {
-    document.getElementById(id)?.addEventListener('change', () => { currentPage = 1; loadSessions(container); });
+    document.getElementById(id)?.addEventListener('change', () => { currentPage = 1; loadSessions(container, {urlStatus, urlModel, urlErrorCat, urlTool}); });
   });
 
-  await loadSessions(container);
+  await loadSessions(container, {urlStatus, urlModel, urlErrorCat, urlTool});
 }
 
-async function loadSessions(container) {
+async function loadSessions(container, {urlStatus, urlModel, urlErrorCat, urlTool} = {}) {
   const filters = {
     page: currentPage,
     limit: 25,
     search: document.getElementById('f-search')?.value || '',
-    status: document.getElementById('f-status')?.value || '',
+    status: urlStatus || document.getElementById('f-status')?.value || '',
     source: document.getElementById('f-source')?.value || '',
     hasErrors: document.getElementById('f-errors')?.value || '',
+    model: urlModel || '',
+    error_category: urlErrorCat || '',
+    tool_name: urlTool || '',
   };
 
   // Remove empty

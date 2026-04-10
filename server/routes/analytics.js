@@ -40,8 +40,8 @@ module.exports = (db) => {
     const models = db.prepare(`
       SELECT 
         tm.model_id,
-        tm.provider_id,
-        tm.mode,
+        MAX(tm.provider_id) as provider_id,
+        MAX(tm.mode) as mode,
         COUNT(DISTINCT tm.task_id) as task_count,
         SUM(t.total_cost) as total_cost,
         AVG(t.total_cost) as avg_cost,
@@ -58,7 +58,7 @@ module.exports = (db) => {
       FROM task_models tm
       INNER JOIN tasks t ON t.id = tm.task_id
       ${where}
-      GROUP BY tm.model_id, tm.provider_id, tm.mode
+      GROUP BY tm.model_id
       ORDER BY task_count DESC
     `).all(...params);
 

@@ -107,6 +107,12 @@ export function renderErrorTrendChart(canvasId, overTimeData) {
       responsive: true,
       maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
+      onClick: (e, elements, chart) => {
+        if (!elements.length) return;
+        const index = elements[0].datasetIndex;
+        const cat = chart.data.datasets[index].label;
+        window.location.hash = `#/sessions?error_category=${encodeURIComponent(cat)}`;
+      },
       scales: {
         x: { grid: { display: false } },
         y: { 
