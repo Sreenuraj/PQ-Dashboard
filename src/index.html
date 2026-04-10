@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PQ Dashboard — PostQode AI Observability</title>
+  <meta name="description" content="Observe and analyze PostQode AI agent task history — models, costs, errors, timelines." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./css/index.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Sidebar -->
+    <aside id="sidebar">
+      <div class="sidebar-header">
+        <div class="logo">
+          <div class="logo-mark">PQ</div>
+          <div>
+            <div class="logo-text">PostQode</div>
+            <span class="logo-sub">Agent Dashboard</span>
+          </div>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <div class="nav-section-label">Analytics</div>
+        <a href="#/overview" class="nav-item active" data-view="overview">
+          <span class="nav-icon">▦</span><span>Overview</span>
+        </a>
+        <a href="#/sessions" class="nav-item" data-view="sessions">
+          <span class="nav-icon">☰</span><span>Sessions</span>
+        </a>
+        <a href="#/errors"   class="nav-item" data-view="errors">
+          <span class="nav-icon">⚠</span><span>Errors</span>
+        </a>
+
+        <div class="nav-section-label" style="margin-top:8px">Models</div>
+        <a href="#/models" class="nav-item" data-view="models">
+          <span class="nav-icon">◉</span><span>Model Stats</span>
+        </a>
+        <a href="#/costs"  class="nav-item" data-view="costs">
+          <span class="nav-icon">$</span><span>Costs</span>
+        </a>
+
+        <div class="nav-section-label" style="margin-top:8px">Activity</div>
+        <a href="#/timeline" class="nav-item" data-view="timeline">
+          <span class="nav-icon">→</span><span>Timeline</span>
+        </a>
+        <a href="#/tools"    class="nav-item" data-view="tools">
+          <span class="nav-icon">⚙</span><span>Tools</span>
+        </a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <button id="refresh-btn" class="refresh-btn">
+          <span class="refresh-icon">↻</span>
+          <span id="refresh-label">Refresh Data</span>
+        </button>
+        <div id="refresh-status" class="refresh-status"></div>
+        <div id="refresh-hint" style="font-size:10px;color:var(--text-3);text-align:center;margin-top:3px">
+          Only scans new/changed tasks
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main id="main">
+      <div id="view-container">
+        <div class="loading-state">
+          <div class="spinner"></div>
+          <p>Loading dashboard...</p>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Date range picker (shared/global) -->
+  <div id="date-range-wrapper" class="date-range-wrapper" style="display:none">
+    <button id="date-range-btn" class="date-range-btn">
+      <span class="cal-icon">📅</span>
+      <span id="date-range-label">All Time</span>
+      <span class="chevron">▾</span>
+    </button>
+    <div id="date-range-dropdown" class="date-range-dropdown" style="display:none"></div>
+  </div>
+
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
