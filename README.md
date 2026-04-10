@@ -5,8 +5,9 @@ A robust, incremental, and config-driven observability dashboard for analyzing y
 ## Features
 - **Incremental Parsing:** Only new or changed tasks are processed when you click "Refresh Data", leveraging a lightweight, high-performance SQLite caching layer.
 - **Config-Driven Source Paths:** Centralized configuration via `pq-config.yaml` lets you manage multiple IDE sources (VS Code, VS Code Insiders, Cursor, etc.).
-- **Behavioral Analytics:** Track AI task completions vs interruptions, along with cost tracking and deep error classification (e.g., API failures, compliance errors, or provider downtimes).
-- **Interactive Timelines:** Drill down into a per-task view revealing step-by-step reasoning traces, API calls, tool dispatches, and checkpoints.
+- **Behavioral & Reasoning Analytics:** Track AI task completions vs interruptions, deep error classification (API failures, tool errors), and quantify the exact metric impact of 🧠 reasoning traces on success and cost metrics.
+- **Interactive Timelines & Sequences:** Drill down into a per-task view revealing step-by-step reasoning traces, API calls, and tool usage sequences.
+- **Advanced Visualizations:** Includes a D3.js powered *Activity Flow* Sankey diagram tracing task execution, and Chart.js powered *Model Efficiency Matrices* and *Error Cascades*.
 - **PostQode Native Aesthetic:** Carefully matched styling to the modern PostQode dark theme for visual seamlessness.
 
 ## Prerequisites
@@ -34,8 +35,8 @@ Alternatively, you can run them manually in two terminals:
 - Terminal 2: `npm run dev` (Runs the Vite frontend on port 5173)
 
 ## Architecture
-- **Backend (`server/`):** Express.js + `better-sqlite3`. Contains the config loader, filesystem scanner, event extraction logic (`ui_messages.json` parsing), task cache deduplication, and REST API routes.
-- **Frontend (`src/`):** A lightweight `Vite` setup using Vanilla HTML/JS/CSS. Dynamic routing logic and encapsulated API clients present the curated data visually.
+- **Backend (`server/`):** Express.js + `better-sqlite3`. Contains the config loader, filesystem scanner, event extraction logic (`ui_messages.json` parsing), task cache deduplication, and REST API routes (including advanced on-the-fly sequence mapping and Sankey node generators).
+- **Frontend (`src/`):** A lightweight `Vite` setup using Vanilla HTML/JS/CSS. Dynamic routing logic and encapsulated API clients present the curated data visually alongside high-performance charts rendered via `d3-sankey` AND `chart.js`.
 - **Cache (`data/`):** Local SQLite WAL-mode cache mapping historical task events dynamically.
 
 ## Troubleshooting
