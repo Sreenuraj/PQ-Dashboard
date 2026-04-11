@@ -2,6 +2,41 @@ import { api } from '../api.js';
 import { fmtCost, fmtDuration, fmtDate, fmtDateTime } from '../utils.js';
 
 let currentPage = 1;
+let selectedTasks = new Set();
+
+function updateActionBar() {
+  const actionBar = document.getElementById('session-action-bar');
+  if (!actionBar) return;
+  if (selectedTasks.size === 0) {
+    actionBar.style.display = 'none';
+    return;
+  }
+  
+  actionBar.style.display = 'flex';
+  const countEl = document.getElementById('selected-count');
+  countEl.textContent = `${selectedTasks.size} task${selectedTasks.size > 1 ? 's' : ''} selected`;
+
+  const btnInvestigate = document.getElementById('btn-investigate');
+  const btnEvaluate = document.getElementById('btn-evaluate');
+  const btnCompare = document.getElementById('btn-compare');
+
+  if (selectedTasks.size === 1) {
+    btnInvestigate.style.display = 'block';
+    btnEvaluate.style.display = 'block';
+    btnCompare.style.display = 'none';
+  } else {
+    btnInvestigate.style.display = 'none';
+    btnEvaluate.style.display = 'none';
+    btnCompare.style.display = 'block';
+    btnCompare.textContent = `Compare (${selectedTasks.size})`;
+  }
+}
+
+function handleSelection(id, checked) {
+  if (checked) selectedTasks.add(id);
+  else selectedTasks.delete(id);
+  updateActionBar();
+}
 
 export async function renderSessions(container, dateRange = {}, queryParams = new URLSearchParams()) {
   // Capture URL-based drilldown filters
@@ -24,8 +59,9 @@ export async function renderSessions(container, dateRange = {}, queryParams = ne
 
   const hasUrlFilters  = activeFilters.length > 0;
 
-  // Reset page on fresh render
+  // Reset page and selection on fresh render
   currentPage = 1;
+  selectedTasks.clear();
 
   container.innerHTML = `
     <div class="top-bar">
@@ -66,10 +102,11 @@ export async function renderSessions(container, dateRange = {}, queryParams = ne
       </select>
     </div>
 
-    <div class="panel" style="padding:0;overflow:hidden">
+    <div class="panel" style="padding:0;overflow:hidden;position:relative">
       <table class="data-table">
         <thead>
           <tr>
+            <th style="width:30px"></th>
             <th>Session</th><th>Started</th><th>Duration</th>
             <th>Model(s)</th><th>Cost</th><th>Errors</th>
             <th>Reasoning</th><th>Status</th><th>Source</th>
@@ -81,7 +118,41 @@ export async function renderSessions(container, dateRange = {}, queryParams = ne
       </table>
     </div>
     <div class="pagination" id="pagination"></div>
+
+    <!-- Floating Action Bar -->
+    <div id="session-action-bar" style="display:none;position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--bg-2);border:1px solid var(--border-2);padding:10px 16px;border-radius:var(--radius);box-shadow:0 8px 24px rgba(0,0,0,0.2);display:none;align-items:center;gap:16px;z-index:1000">
+      <div id="selected-count" style="font-size:13px;font-weight:500;color:var(--text)">0 selected</div>
+      <div style="width:1px;height:24px;background:var(--border)"></div>
+      <div style="display:flex;gap:8px">
+        <button id="btn-investigate" class="action-btn" style="background:var(--accent);color:#fff;border:none;padding:6px 12px;border-radius:4px;cursor:pointer;font-size:12px;display:none;">🔍 Investigate</button>
+        <button id="btn-evaluate" class="action-btn" style="background:var(--bg-3);color:var(--text);border:1px solid var(--border);padding:6px 12px;border-radius:4px;cursor:pointer;font-size:12px;display:none;">★ Evaluate</button>
+        <button id="btn-compare" class="action-btn" style="background:var(--accent);color:#fff;border:none;padding:6px 12px;border-radius:4px;cursor:pointer;font-size:12px;display:none;">Compare</button>
+        <button id="btn-clear-sel" class="action-btn" style="background:transparent;color:var(--text-3);border:none;padding:6px 12px;cursor:pointer;font-size:12px;">✕ Cancel</button>
+      </div>
+    </div>
   `;
+
+  // Action bar wiring
+  document.getElementById('btn-clear-sel')?.addEventListener('click', () => {
+    selectedTasks.clear();
+    document.querySelectorAll('.session-checkbox').forEach(cb => cb.checked = false);
+    updateActionBar();
+  });
+
+  document.getElementById('btn-investigate')?.addEventListener('click', () => {
+    const id = Array.from(selectedTasks)[0];
+    window.location.hash = `#/investigate?task=${id}`;
+  });
+
+  document.getElementById('btn-evaluate')?.addEventListener('click', () => {
+    const id = Array.from(selectedTasks)[0];
+    window.location.hash = `#/eval?task=${id}`;
+  });
+
+  document.getElementById('btn-compare')?.addEventListener('click', () => {
+    const ids = Array.from(selectedTasks).join(',');
+    window.location.hash = `#/compare?tasks=${ids}`;
+  });
 
   const drilldown = { urlStatus, urlModel, urlErrorCat, urlTool, urlHasErrors, urlHasReasoning };
 
@@ -143,6 +214,9 @@ async function loadSessions(container, dateRange = {}, drilldown = {}) {
   if (tbody) {
     tbody.innerHTML = data.tasks.map(t => `
       <tr data-id="${t.id}" class="session-row" style="cursor:pointer">
+        <td style="padding-left:14px" onclick="event.stopPropagation()">
+          <input type="checkbox" class="session-checkbox" data-id="${t.id}" ${selectedTasks.has(t.id) ? 'checked' : ''} style="cursor:pointer" />
+        </td>
         <td>
           <div style="font-size:11px;color:var(--text-3);font-family:'JetBrains Mono',monospace">${t.id.substring(0,20)}…</div>
           <div style="font-size:12px;color:var(--text-2);margin-top:2px;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
@@ -170,12 +244,31 @@ async function loadSessions(container, dateRange = {}, drilldown = {}) {
     `).join('');
   }
 
-  // Row click → timeline
+  // Row click -> toggle checkbox OR go to timeline? Let's just go to timeline for backward compat
+  // and let the user use checkboxes to select. But maybe clicking row toggles checkbox?
+  // Let's make clicking row toggle checkbox, clicking a specific "view" button goes to investigate?
+  // User asked to have multiple selection. Let's make row click toggle checkbox to be easier.
   document.querySelectorAll('.session-row').forEach(row => {
-    row.addEventListener('click', () => {
-      window.location.hash = `#/timeline?task=${row.dataset.id}`;
+    row.addEventListener('click', (e) => {
+      // If they clicked a link or the checkbox directly, don't toggle again
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'A') return;
+      
+      const cb = row.querySelector('.session-checkbox');
+      if (cb) {
+        cb.checked = !cb.checked;
+        handleSelection(cb.dataset.id, cb.checked);
+      }
     });
   });
+
+  // Wiring checkboxes directly
+  document.querySelectorAll('.session-checkbox').forEach(cb => {
+    cb.addEventListener('change', (e) => {
+      handleSelection(e.target.dataset.id, e.target.checked);
+    });
+  });
+
+  updateActionBar();
 
   renderPagination(data.total, data.page, data.limit, container, dateRange, drilldown);
 }

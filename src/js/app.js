@@ -4,6 +4,9 @@ import { renderTimeline } from './views/timeline.js';
 import { renderModels, renderCosts, renderTools } from './views/models.js';
 import { renderErrors }   from './views/errors.js';
 import { renderFlow }     from './views/flow.js';
+import { renderInvestigate } from './views/investigate.js';
+import { renderCompare }  from './views/compare.js';
+import { renderEval }     from './views/eval.js';
 import { api }            from './api.js';
 import { getDateRange, initDatePicker } from './components/date-picker.js';
 import { applyChartTheme } from './components/charts.js';
@@ -36,14 +39,17 @@ const container = document.getElementById('view-container');
 
 // ── Routes ──
 const routes = {
-  overview: (p) => renderOverview(container, getDateRange()),
-  sessions: (p) => renderSessions(container, getDateRange(), p),
-  timeline: (p) => renderTimeline(container, p.get('task')),
-  errors:   (p) => renderErrors(container, getDateRange()),
-  models:   (p) => renderModels(container, getDateRange()),
-  costs:    (p) => renderCosts(container, getDateRange()),
-  tools:    (p) => renderTools(container, getDateRange()),
-  flow:     (p) => renderFlow(container, getDateRange()),
+  overview:    (p) => renderOverview(container, getDateRange()),
+  sessions:    (p) => renderSessions(container, getDateRange(), p),
+  timeline:    (p) => renderTimeline(container, p.get('task')),
+  errors:      (p) => renderErrors(container, getDateRange()),
+  models:      (p) => renderModels(container, getDateRange()),
+  costs:       (p) => renderCosts(container, getDateRange()),
+  tools:       (p) => renderTools(container, getDateRange()),
+  flow:        (p) => renderFlow(container, getDateRange()),
+  investigate: (p) => renderInvestigate(container, p.get('task')),
+  compare:     (p) => renderCompare(container, p.get('tasks')),
+  eval:        (p) => renderEval(container, p.get('task')),
 };
 
 function currentView() {

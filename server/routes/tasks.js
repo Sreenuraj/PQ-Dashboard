@@ -91,6 +91,74 @@ module.exports = (db) => {
     res.json(events);
   });
 
+  // GET /api/tasks/:id/evaluate — Automated heuristic metrics
+  router.get('/:id/evaluate', (req, res) => {
+    const taskId = req.params.id;
+    const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+
+    const events = db.prepare('SELECT * FROM events WHERE task_id = ? ORDER BY ts ASC').all(taskId);
+
+    let metrics = { tue: null, rd: null, ce: null, err: null };
+    let evidence = { tue: '', rd: '', ce: '', err: '' };
+
+    // Calculate TUE
+    const toolEvents = events.filter(e => e.sub_type === 'tool');
+    const errorEvents = events.filter(e => !!e.error_category);
+    const toolErrors = errorEvents.filter(e => e.error_category === 'tool_failure' || e.error_category === 'validation_error');
+    if (toolEvents.length > 0) {
+       const successful = toolEvents.length - toolErrors.length;
+       metrics.tue = Math.round((Math.max(0, successful) / toolEvents.length) * 100);
+       evidence.tue = `${successful} out of ${toolEvents.length} tool calls executed without failure.`;
+    } else {
+       metrics.tue = 100;
+       evidence.tue = `No tool invocations were used.`;
+    }
+
+    // Calculate RD (Reasoning Density)
+    const reasoningEvents = events.filter(e => e.sub_type === 'reasoning');
+    const apiEvents = events.filter(e => e.sub_type === 'api_req_started');
+    const totalActions = reasoningEvents.length + apiEvents.length + toolEvents.length;
+    if (totalActions > 0) {
+       metrics.rd = Math.round((reasoningEvents.length / totalActions) * 100);
+       evidence.rd = `${reasoningEvents.length} reasoning block(s) across ${totalActions} core actions.`;
+    } else {
+       metrics.rd = 0;
+       evidence.rd = 'No core actions found.';
+    }
+
+    // Calculate CE (Context Efficiency)
+    const ctxEvents = apiEvents.filter(e => e.context_pct != null);
+    if (ctxEvents.length > 0) {
+       const avgCtx = ctxEvents.reduce((acc, e) => acc + e.context_pct, 0) / ctxEvents.length;
+       metrics.ce = Math.round(100 - avgCtx); // 100 is best (0% used), 0 is worst (100% used)
+       evidence.ce = `Average context window used: ${Math.round(avgCtx)}%.`;
+    } else {
+       metrics.ce = 100;
+       evidence.ce = 'No context usage reported.';
+    }
+
+    // Calculate ERR (Error Recovery Rate)
+    const totalErrors = task.error_count || errorEvents.length;
+    if (totalErrors === 0) {
+       metrics.err = 100;
+       evidence.err = 'Task completed cleanly with zero errors.';
+    } else {
+       if (task.status === 'completed') {
+          metrics.err = 100;
+          evidence.err = `Task successfully completed despite encountering ${totalErrors} error(s). (Perfect recovery)`;
+       } else {
+          metrics.err = 0;
+          evidence.err = `Task failed/interrupted after encountering ${totalErrors} error(s).`;
+       }
+    }
+
+    // Add an Overall average score
+    metrics.overall = Math.round((metrics.tue + metrics.rd + metrics.ce + metrics.err) / 4);
+
+    res.json({ metrics, evidence });
+  });
+
   return router;
 };
 

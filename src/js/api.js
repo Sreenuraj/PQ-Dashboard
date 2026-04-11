@@ -30,6 +30,7 @@ export const api = {
   tasks:      (p={}) => get('/tasks', p),
   task:       (id)   => get(`/tasks/${id}`),
   taskEvents: (id,p={}) => get(`/tasks/${id}/events`, p),
+  evaluate:   (id)   => get(`/tasks/${id}/evaluate`),
   refresh:    ()     => post('/refresh'),
   config:     ()     => get('/config'),
 };

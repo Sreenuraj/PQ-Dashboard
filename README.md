@@ -8,6 +8,9 @@ A robust, incremental, and config-driven observability dashboard for analyzing y
 - **Behavioral & Reasoning Analytics:** Track AI task completions vs interruptions, deep error classification (API failures, tool errors), and quantify the exact metric impact of 🧠 reasoning traces on success and cost metrics.
 - **Interactive Timelines & Sequences:** Drill down into a per-task view revealing step-by-step reasoning traces, API calls, and tool usage sequences.
 - **Advanced Visualizations:** Includes a D3.js powered *Activity Flow* Sankey diagram tracing task execution, and Chart.js powered *Model Efficiency Matrices* and *Error Cascades*.
+- **Agentic Evaluation (Eval):** Deterministic, heuristic-backed evaluation metrics derived inspired by frameworks like DeepEval and Raga.ai Catalyst. Automatically calculate *Tool Utilization Efficacy (TUE)*, *Error Recovery Rate (ERR)*, *Reasoning Density (RD)*, and *Context Efficiency (CE)* natively from log traces without expensive secondary LLM judge calls.
+- **Task Investigation View:** A powerful deep-dive observability trace viewer. Intelligently displays full tool invocations, logic breakdowns, and payloads. Features an integrated live search across all task events (prompts, responses, errors, tools).
+- **Task Comparison Dashboard:** Choose multiple tasks from your Session index and run a side-by-side flex grid comparison of execution variables, cost/duration bars, and automated agentic scorecard metrics.
 - **PostQode Native Aesthetic:** Carefully matched styling to the modern PostQode dark theme for visual seamlessness.
 
 ## Prerequisites
