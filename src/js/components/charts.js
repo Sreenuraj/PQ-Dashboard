@@ -1,17 +1,24 @@
 import Chart from 'chart.js/auto';
 
-// Global config to match PostQode UI
-Chart.defaults.color = '#a1a1aa';
 Chart.defaults.font.family = "'Inter', sans-serif";
-Chart.defaults.plugins.tooltip.backgroundColor = '#18181b';
-Chart.defaults.plugins.tooltip.titleColor = '#fafafa';
-Chart.defaults.plugins.tooltip.bodyColor = '#a1a1aa';
-Chart.defaults.plugins.tooltip.borderColor = '#3f3f46';
 Chart.defaults.plugins.tooltip.borderWidth = 1;
 Chart.defaults.plugins.tooltip.padding = 10;
 Chart.defaults.plugins.tooltip.cornerRadius = 6;
-Chart.defaults.plugins.legend.labels.color = '#a1a1aa';
 Chart.defaults.plugins.legend.labels.usePointStyle = true;
+
+export function applyChartTheme() {
+  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+  
+  Chart.defaults.color = isLight ? '#3f3f46' : '#a1a1aa';
+  Chart.defaults.plugins.tooltip.backgroundColor = isLight ? '#e4e4e7' : '#18181b';
+  Chart.defaults.plugins.tooltip.titleColor = isLight ? '#18181b' : '#fafafa';
+  Chart.defaults.plugins.tooltip.bodyColor = isLight ? '#3f3f46' : '#a1a1aa';
+  Chart.defaults.plugins.tooltip.borderColor = isLight ? '#d4d4d8' : '#3f3f46';
+  Chart.defaults.plugins.legend.labels.color = isLight ? '#3f3f46' : '#a1a1aa';
+}
+
+// Initial application
+applyChartTheme();
 
 const THEME_COLORS = [
   'rgba(13, 148, 136, 1)',   // Teal (PostQode Accent)

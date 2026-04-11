@@ -6,6 +6,31 @@ import { renderErrors }   from './views/errors.js';
 import { renderFlow }     from './views/flow.js';
 import { api }            from './api.js';
 import { getDateRange, initDatePicker } from './components/date-picker.js';
+import { applyChartTheme } from './components/charts.js';
+
+// ── Theme Init ──
+const root = document.documentElement;
+const themeToggle = document.getElementById('theme-toggle');
+const themeIcon = document.getElementById('theme-icon');
+
+function setTheme(theme) {
+  root.setAttribute('data-theme', theme);
+  localStorage.setItem('pq-theme', theme);
+  themeIcon.textContent = theme === 'light' ? '☾' : '☼';
+  applyChartTheme();
+}
+
+// Load saved theme
+const savedTheme = localStorage.getItem('pq-theme') || 'dark';
+setTheme(savedTheme);
+
+if (themeToggle) {
+  themeToggle.addEventListener('click', () => {
+    const isLight = root.getAttribute('data-theme') === 'light';
+    setTheme(isLight ? 'dark' : 'light');
+    navigate(); // Re-render to pick up chart color changes
+  });
+}
 
 const container = document.getElementById('view-container');
 
