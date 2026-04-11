@@ -188,8 +188,8 @@ export function renderToolsChart(canvasId, tools) {
       datasets: [{
         label: 'Calls',
         data,
-        backgroundColor: 'rgba(59, 130, 246, 0.7)',
-        borderColor: 'rgba(59, 130, 246, 1)',
+        backgroundColor: sorted.map((_, i) => THEME_COLORS[i % THEME_COLORS.length].replace('1)', '0.7)')),
+        borderColor: sorted.map((_, i) => THEME_COLORS[i % THEME_COLORS.length]),
         borderWidth: 1,
         borderRadius: 4,
       }]

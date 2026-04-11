@@ -185,29 +185,39 @@ module.exports = (db) => {
     `).all(...params);
 
     const transitions = {};
-    let lastTool = null;
+    let history = [];
     let lastTask = null;
 
     events.forEach(e => {
       if (e.task_id !== lastTask) {
-        lastTool = null;
+        history = [];
         lastTask = e.task_id;
       }
       if (e.sub_type === 'tool' && e.tool_name) {
-        if (lastTool) {
-          const key = `${lastTool}->${e.tool_name}`;
-          transitions[key] = (transitions[key] || 0) + 1;
+        history.push(e.tool_name);
+        if (history.length > 4) history.shift();
+
+        // Track pairs
+        if (history.length >= 2) {
+          const k2 = `${history[history.length-2]}->${history[history.length-1]}`;
+          transitions[k2] = (transitions[k2] || 0) + 1;
         }
-        lastTool = e.tool_name;
+        // Track triplets
+        if (history.length >= 3) {
+          const k3 = `${history[history.length-3]}->${history[history.length-2]}->${history[history.length-1]}`;
+          transitions[k3] = (transitions[k3] || 0) + 1;
+        }
       }
     });
 
     const sequenceList = Object.entries(transitions)
-      .map(([key, count]) => {
-        const [source, target] = key.split('->');
-        return { source, target, count };
+      .map(([key, count]) => ({ steps: key.split('->'), count }))
+      .filter(s => s.count > 1) // Only meaningful sequences
+      .sort((a, b) => {
+        // Prioritize longer chains if counts are close, but primarily sort by frequency
+        if (b.count === a.count) return b.steps.length - a.steps.length;
+        return b.count - a.count;
       })
-      .sort((a, b) => b.count - a.count)
       .slice(0, 30);
 
     res.json({ target: sequenceList });

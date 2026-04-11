@@ -172,10 +172,11 @@ export async function renderTools(container, dateRange = {}) {
           <tbody>
             ${(seqData.target || []).map(s => `
               <tr>
-                <td>
-                  <span class="badge blue">${s.source}</span>
-                  <span style="color:var(--text-3);margin:0 8px">→</span>
-                  <span class="badge accent">${s.target}</span>
+                <td style="line-height:2.2">
+                  ${s.steps.map((st, i) => `
+                    <span class="badge ${i === 0 ? 'blue' : i === s.steps.length - 1 ? 'accent' : 'purple'}" style="white-space:nowrap">${st}</span>
+                    ${i < s.steps.length - 1 ? `<span style="color:var(--text-3);margin:0 4px">→</span>` : ''}
+                  `).join('')}
                 </td>
                 <td style="font-weight:600">${s.count}</td>
               </tr>
