@@ -60,7 +60,7 @@ export function initDatePicker(containerId) {
     const topBar = container.querySelector('.top-bar');
     if (topBar) topBar.appendChild(wrapper);
   }
-  wrapper.style.display = 'block';
+  wrapper.style.display = 'flex';
 
   // Keep label in sync with current selection
   label.textContent = getCurrentRangeLabel();

@@ -65,12 +65,6 @@
         <div id="refresh-hint" style="font-size:10px;color:var(--text-3);text-align:center;margin-top:3px">
           Only scans new/changed tasks
         </div>
-        
-        <div style="display:flex;justify-content:center;margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
-          <button id="theme-toggle" style="background:none;border:none;color:var(--text-3);cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;padding:4px;border-radius:var(--radius-xs);transition:color var(--transition)" title="Toggle Theme" onmouseenter="this.style.color='var(--text)'" onmouseleave="this.style.color='var(--text-3)'">
-            <span id="theme-icon">☼</span>
-          </button>
-        </div>
       </div>
     </aside>
 
@@ -85,14 +79,19 @@
     </main>
   </div>
 
-  <!-- Date range picker (shared/global) -->
-  <div id="date-range-wrapper" class="date-range-wrapper" style="display:none">
-    <button id="date-range-btn" class="date-range-btn">
-      <span class="cal-icon">📅</span>
-      <span id="date-range-label">All Time</span>
-      <span class="chevron">▾</span>
+  <!-- Date range picker and Theme Switch (shared/global) -->
+  <div id="date-range-wrapper" class="date-range-wrapper" style="display:none; gap:12px; align-items:center">
+    <button id="theme-toggle" style="background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;padding:6px 10px;border-radius:var(--radius-sm);transition:all var(--transition)" title="Toggle Theme" onmouseenter="this.style.borderColor='var(--border-2)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--text-2)'">
+      <span id="theme-icon">☼</span>
     </button>
-    <div id="date-range-dropdown" class="date-range-dropdown" style="display:none"></div>
+    <div style="position:relative">
+      <button id="date-range-btn" class="date-range-btn">
+        <span class="cal-icon">📅</span>
+        <span id="date-range-label">All Time</span>
+        <span class="chevron">▾</span>
+      </button>
+      <div id="date-range-dropdown" class="date-range-dropdown" style="display:none; right:0"></div>
+    </div>
   </div>
 
   <script type="module" src="./js/app.js"></script>

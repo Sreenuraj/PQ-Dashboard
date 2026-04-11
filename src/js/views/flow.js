@@ -86,6 +86,8 @@ function drawSankey(containerId, data) {
     return colorMap[name] || 'var(--accent)';
   }
 
+  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+
   // Draw links
   const link = svg.append("g")
     .attr("fill", "none")
@@ -93,7 +95,7 @@ function drawSankey(containerId, data) {
     .selectAll("g")
     .data(links)
     .enter().append("g")
-    .style("mix-blend-mode", "screen"); // good for dark mode
+    .style("mix-blend-mode", isLight ? "multiply" : "screen");
 
   link.append("path")
     .attr("d", sankeyLinkHorizontal())
