@@ -1,9 +1,10 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const { scanTasks } = require('./task-scanner');
-const { parseUIMessages } = require('./ui-messages');
+const { parseUIMessages, setModelRegistry } = require('./ui-messages');
 const { parseMetadata, parseFocusChain } = require('./metadata');
 const { getDB, isTaskCached, saveTask, markParsed } = require('../cache/db');
+const { getModelInfo } = require('../model-registry');
 
 function fileHash(filePath) {
   if (!filePath || !fs.existsSync(filePath)) return 'none';
@@ -12,6 +13,8 @@ function fileHash(filePath) {
 }
 
 async function runParser(config, onProgress) {
+  // Wire model registry into the parser for context_pct computation
+  setModelRegistry(getModelInfo);
   const db = getDB(config.cache.db_path);
   const tasks = scanTasks(config);
 
@@ -33,6 +36,7 @@ async function runParser(config, onProgress) {
 
       const { events, summary } = parseUIMessages(
         task.uiMessagesPath,
+        task.apiConversationHistoryPath,
         config.processing.max_file_size
       );
 

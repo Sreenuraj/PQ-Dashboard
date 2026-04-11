@@ -97,13 +97,14 @@ module.exports = (db) => {
 
     const byModel = db.prepare(`
       SELECT 
+        e.provider_id,
         e.model_id,
         e.error_category,
         COUNT(*) as count
       FROM events e
       INNER JOIN tasks t ON t.id = e.task_id
       WHERE e.error_category IS NOT NULL AND e.model_id IS NOT NULL ${where ? 'AND ' + where.slice(6) : ''}
-      GROUP BY e.model_id, e.error_category
+      GROUP BY e.provider_id, e.model_id, e.error_category
       ORDER BY count DESC
     `).all(...params);
 
@@ -283,8 +284,102 @@ module.exports = (db) => {
     res.json(stats);
   });
 
+  // GET /api/analytics/errors/export — download error events as CSV or JSON
+  router.get('/errors/export', (req, res) => {
+    const { from, to, categories, model_id, format = 'csv' } = req.query;
+    
+    // Build date filter based on task start_ts
+    const conditions = ['e.error_category IS NOT NULL'];
+    const params = [];
+    
+    if (from) { conditions.push('t.start_ts >= ?'); params.push(new Date(from).getTime()); }
+    if (to)   { conditions.push('t.start_ts <= ?'); params.push(new Date(to).getTime()); }
+    
+    // Category filter
+    if (categories && categories !== 'other') {
+      const cats = categories.split(',').map(c => c.trim()).filter(Boolean);
+      if (cats.length > 0) {
+        conditions.push(`e.error_category IN (${cats.map(() => '?').join(',')})`);
+        params.push(...cats);
+      }
+    } else if (categories === 'other') {
+      // Exclude API and tool error categories
+      const apiCats = ['api_failure','rate_limit_error','timeout_error','availability_error','provider_error','auth_error','billing_error','moderation_error','prompt_error'];
+      const toolCats = ['tool_error','compliance_error'];
+      const allKnown = [...apiCats, ...toolCats];
+      conditions.push(`e.error_category NOT IN (${allKnown.map(() => '?').join(',')})`);
+      params.push(...allKnown);
+    }
+
+    if (model_id) {
+      conditions.push('e.model_id = ?');
+      params.push(model_id);
+    }
+
+    const rows = db.prepare(`
+      SELECT 
+        e.task_id,
+        e.ts,
+        e.error_category,
+        e.error_message,
+        e.model_id,
+        e.provider_id,
+        e.tokens_in,
+        e.tokens_out,
+        e.cost,
+        e.request_text,
+        e.response_text,
+        e.retry_count,
+        e.context_pct
+      FROM events e
+      INNER JOIN tasks t ON t.id = e.task_id
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY e.ts DESC
+    `).all(...params);
+
+    if (format === 'json') {
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', 'attachment; filename=pq-errors-export.json');
+      return res.json(rows);
+    }
+
+    // CSV format
+    const headers = ['task_id','timestamp','error_category','error_message','model_id','provider_id','tokens_in','tokens_out','cost','request_text','response_text','retry_count','context_pct'];
+    const csvLines = [headers.join(',')];
+    
+    for (const row of rows) {
+      csvLines.push([
+        row.task_id,
+        row.ts ? new Date(row.ts).toISOString() : '',
+        row.error_category || '',
+        csvEscape(row.error_message || ''),
+        row.model_id || '',
+        row.provider_id || '',
+        row.tokens_in || 0,
+        row.tokens_out || 0,
+        row.cost || 0,
+        csvEscape(row.request_text || ''),
+        csvEscape(row.response_text || ''),
+        row.retry_count || 0,
+        row.context_pct != null ? row.context_pct : '',
+      ].join(','));
+    }
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename=pq-errors-export.csv');
+    res.send(csvLines.join('\n'));
+  });
+
   return router;
 };
+
+function csvEscape(str) {
+  if (typeof str !== 'string') return str;
+  if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
 
 function buildDateFilter(from, to, prefix = '') {
   const conditions = [];

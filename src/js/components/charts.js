@@ -211,3 +211,34 @@ export function renderToolsChart(canvasId, tools) {
     }
   });
 }
+
+/** Doughnut chart for categorical distribution (e.g. Models or Error Types) */
+export function renderDoughnutChart(canvasId, labels, data) {
+  const ctx = document.getElementById(canvasId);
+  if (!ctx || !labels.length) return null;
+
+  return new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels,
+      datasets: [{
+        data,
+        backgroundColor: THEME_COLORS.map(c => c.replace('1)', '0.85)')),
+        borderColor: '#18181b', // Match background
+        borderWidth: 2,
+        hoverOffset: 4
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: '65%',
+      plugins: {
+        legend: {
+          position: 'right',
+          labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 } }
+        }
+      }
+    }
+  });
+}

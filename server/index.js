@@ -4,6 +4,7 @@ const path = require('path');
 const { loadConfig, saveConfig } = require('./config');
 const { runParser } = require('./parser/index');
 const { getDB } = require('./cache/db');
+const { loadModelRegistry, getAllModels, getModelInfo } = require('./model-registry');
 
 const app = express();
 app.use(cors());
@@ -23,6 +24,9 @@ app.use('/api/analytics', analyticsRouter);
 // GET /api/config
 app.get('/api/config', (req, res) => res.json(config));
 
+// GET /api/models/registry — full merged model map
+app.get('/api/models/registry', (req, res) => res.json(getAllModels()));
+
 // PUT /api/config
 app.put('/api/config', (req, res) => {
   try {
@@ -39,6 +43,7 @@ app.post('/api/refresh', async (req, res) => {
   parsing = true;
   res.json({ status: 'started' });
   try {
+    loadModelRegistry(config.sources);
     await runParser(config);
   } finally {
     parsing = false;
@@ -61,6 +66,8 @@ app.get('/{*path}', (req, res) => {
 const { port } = config.server;
 app.listen(port, '0.0.0.0', async () => {
   console.log(`\n🚀 PQ Dashboard server running at http://localhost:${port}\n`);
+  console.log('Loading model registry...');
+  loadModelRegistry(config.sources);
   console.log('Starting initial data parse...');
   parsing = true;
   try {

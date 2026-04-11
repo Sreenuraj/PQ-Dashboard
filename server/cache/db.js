@@ -86,6 +86,19 @@ function initSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_tasks_source ON tasks(source);
     CREATE INDEX IF NOT EXISTS idx_task_models_model ON task_models(model_id);
   `);
+
+  // Schema migrations — add new columns to existing tables
+  const migrations = [
+    'ALTER TABLE events ADD COLUMN request_text TEXT',
+    'ALTER TABLE events ADD COLUMN retry_count INTEGER DEFAULT 0',
+    'ALTER TABLE events ADD COLUMN context_pct INTEGER',
+    'ALTER TABLE events ADD COLUMN response_text TEXT',
+  ];
+  for (const sql of migrations) {
+    try { db.exec(sql); } catch (e) {
+      // Column already exists — ignore
+    }
+  }
 }
 
 function isTaskCached(db, taskId, fileHash) {
@@ -122,8 +135,8 @@ function saveTask(db, taskId, source, summary, metadata, focusCompletion, events
   const insertEvent = db.prepare(`INSERT INTO events 
     (task_id,ts,type,sub_type,tool_name,command_text,error_message,error_category,
      cost,tokens_in,tokens_out,cache_reads,cache_writes,model_id,provider_id,mode,
-     reasoning_text,content_preview,model_switched) 
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+     reasoning_text,content_preview,model_switched,request_text,retry_count,context_pct,response_text) 
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
 
   const insertEventBatch = db.transaction((events) => {
     for (const e of events) {
@@ -133,7 +146,11 @@ function saveTask(db, taskId, source, summary, metadata, focusCompletion, events
         e.cost, e.tokens_in, e.tokens_out, e.cache_reads, e.cache_writes,
         e.model_id, e.provider_id, e.mode,
         e.reasoning_text, e.content_preview,
-        e.model_switched ? 1 : 0
+        e.model_switched ? 1 : 0,
+        e.request_text || null,
+        e.retry_count || 0,
+        e.context_pct != null ? e.context_pct : null,
+        e.response_text || null
       );
     }
   });

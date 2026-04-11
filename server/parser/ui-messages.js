@@ -1,10 +1,18 @@
 const fs = require('fs');
 
+// Model registry will be injected via setModelRegistry()
+let getModelInfoFn = null;
+
+function setModelRegistry(fn) {
+  getModelInfoFn = fn;
+}
+
 /**
  * Parses ui_messages.json — the richest data source.
+ * Also reads api_conversation_history.json to attach pure model responses.
  * Returns structured event list + task summary.
  */
-function parseUIMessages(filePath, maxFileSize) {
+function parseUIMessages(filePath, apiHistoryPath, maxFileSize) {
   if (!filePath || !fs.existsSync(filePath)) return { events: [], summary: {} };
 
   const stat = fs.statSync(filePath);
@@ -28,6 +36,20 @@ function parseUIMessages(filePath, maxFileSize) {
   }
 
   if (!Array.isArray(messages)) return { events: [], summary: {} };
+
+  // Load api_conversation_history to extract LLM responses
+  let assistantResponses = [];
+  if (apiHistoryPath && fs.existsSync(apiHistoryPath)) {
+    try {
+      const apiRaw = fs.readFileSync(apiHistoryPath, 'utf8');
+      const apiMessages = JSON.parse(apiRaw);
+      if (Array.isArray(apiMessages)) {
+        assistantResponses = apiMessages.filter(m => m.role === 'assistant');
+      }
+    } catch (e) {
+      console.warn(`[ui-messages] Failed to parse api history: ${e.message}`);
+    }
+  }
 
   const events = [];
   let totalCost = 0;
@@ -74,6 +96,9 @@ function parseUIMessages(filePath, maxFileSize) {
       reasoning_text: null,
       content_preview: null,
       model_switched: false,
+      request_text: null,
+      retry_count: 0,
+      context_pct: null,
     };
 
     // Detect model switch
@@ -108,6 +133,7 @@ function parseUIMessages(filePath, maxFileSize) {
         event.tokens_out = parsed.tokensOut;
         event.cache_reads = parsed.cacheReads;
         event.cache_writes = parsed.cacheWrites;
+        event.request_text = parsed.requestText;
 
         totalCost += parsed.cost || 0;
         totalTokensIn += parsed.tokensIn || 0;
@@ -115,10 +141,29 @@ function parseUIMessages(filePath, maxFileSize) {
         totalCacheReads += parsed.cacheReads || 0;
         totalCacheWrites += parsed.cacheWrites || 0;
 
-        // Zero-cost = API failure
+        // Compute context window percentage
+        if (modelId && parsed.tokensIn > 0 && getModelInfoFn) {
+          const modelInfo = getModelInfoFn(modelId);
+          if (modelInfo && modelInfo.contextWindow) {
+            event.context_pct = Math.round((parsed.tokensIn / modelInfo.contextWindow) * 100);
+          }
+        }
+
+        // Map to corresponding assistant response (they correspond 1:1 with API requests that didn't fail at provider)
+        if (assistantResponses.length > apiCallCount - 1) {
+          const assistantReply = assistantResponses[apiCallCount - 1];
+          if (assistantReply && assistantReply.content) {
+            // content can be string or array of blocks
+            const content = assistantReply.content;
+            event.response_text = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
+          }
+        }
+
+        // Zero-cost = API failure (no assistant response would be generated for this)
         if (parsed.cost === 0 && parsed.tokensIn === 0) {
           event.error_category = 'api_failure';
           errorCount++;
+          event.response_text = null; // Enforce null if it strictly failed at provider layer
         }
       }
     }
@@ -168,6 +213,11 @@ function parseUIMessages(filePath, maxFileSize) {
     events.push(event);
   }
 
+  // ── Post-processing: Retry detection ──
+  // Walk events in order. When we see an error, look back at the preceding api_req_started.
+  // Multiple consecutive errors before the next api call = multiple retries.
+  computeRetryCounts(events);
+
   const summary = {
     first_ts: firstTs,
     last_ts: lastTs,
@@ -189,6 +239,36 @@ function parseUIMessages(filePath, maxFileSize) {
   return { events, summary };
 }
 
+/**
+ * Compute retry counts on error events.
+ * Walk events in order. When we find consecutive error events
+ * (without an intervening api_req_started), mark each subsequent
+ * error with incrementing retry_count.
+ */
+function computeRetryCounts(events) {
+  let consecutiveErrors = 0;
+
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i];
+
+    if (e.sub_type === 'error' || (e.error_category && e.error_category !== 'interruption')) {
+      consecutiveErrors++;
+      if (consecutiveErrors > 1) {
+        // This is a retry — the previous error was the original
+        e.retry_count = consecutiveErrors - 1;
+      }
+    } else if (e.sub_type === 'api_req_started') {
+      // If we had consecutive errors before this api call, this is the retry attempt
+      if (consecutiveErrors > 0) {
+        e.retry_count = consecutiveErrors;
+      }
+      consecutiveErrors = 0;
+    } else {
+      // Non-error, non-api event doesn't reset counter
+    }
+  }
+}
+
 function extractApiReqData(text) {
   // The text field is a JSON string containing {request, tokensIn, tokensOut, cacheWrites, cacheReads, cost}
   // It starts with {"request":"..." so we find the outer JSON
@@ -200,6 +280,8 @@ function extractApiReqData(text) {
       cacheReads: obj.cacheReads || 0,
       cacheWrites: obj.cacheWrites || 0,
       cost: obj.cost || 0,
+      // Extract request text, truncated to 2000 chars
+      requestText: obj.request ? String(obj.request).substring(0, 2000) : null,
     };
   } catch {
     return null;
@@ -233,4 +315,4 @@ function classifyError(msg) {
   return 'tool_error';
 }
 
-module.exports = { parseUIMessages };
+module.exports = { parseUIMessages, setModelRegistry };

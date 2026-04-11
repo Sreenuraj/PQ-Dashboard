@@ -520,3 +520,162 @@ html, body {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--bg-4); border-radius: 99px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--bg-hover); }
+
+/* ── Model Switch Dividers ── */
+.timeline-model-switch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+  padding: 0 6px;
+  min-width: 140px;
+}
+
+.timeline-model-switch-line {
+  width: 100%;
+  height: 0;
+  border-top: 2px dashed var(--blue);
+  opacity: 0.5;
+  position: absolute;
+  top: 50%;
+}
+
+.timeline-model-switch-badge {
+  position: relative;
+  z-index: 1;
+  background: var(--blue-dim);
+  border: 1px solid var(--blue);
+  border-radius: 12px;
+  padding: 3px 10px;
+  font-size: 10px;
+  color: var(--blue);
+  font-weight: 600;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ── Context Window Badges (Timeline) ── */
+.ctx-badge {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-top: 2px;
+  white-space: nowrap;
+}
+
+.ctx-badge.ctx-green  { background: var(--green-dim); color: var(--green); }
+.ctx-badge.ctx-yellow { background: var(--yellow-dim); color: var(--yellow); }
+.ctx-badge.ctx-red    { background: var(--red-dim); color: var(--red); }
+
+.ctx-badge-inline {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+.ctx-badge-inline.ctx-green  { background: var(--green-dim); color: var(--green); }
+.ctx-badge-inline.ctx-yellow { background: var(--yellow-dim); color: var(--yellow); }
+.ctx-badge-inline.ctx-red    { background: var(--red-dim); color: var(--red); }
+
+/* ── Retry Badge ── */
+.retry-badge {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--red);
+  background: var(--red-dim);
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-top: 2px;
+}
+
+.retry-badge-inline {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--red);
+  background: var(--red-dim);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+/* ── Error Filter Pills ── */
+.error-filter-bar .filter-pill {
+  padding: 5px 14px;
+  border-radius: 20px;
+  border: 1px solid var(--border-2);
+  background: var(--bg-3);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 500;
+  font-family: 'Inter', sans-serif;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.error-filter-bar .filter-pill:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.error-filter-bar .filter-pill.active {
+  background: var(--accent-glow);
+  border-color: var(--accent);
+  color: var(--accent-2);
+  font-weight: 600;
+}
+
+/* ── Error Bar Items ── */
+.error-bar-list { display: flex; flex-direction: column; gap: 8px; }
+.error-bar-item { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-radius: var(--radius-xs); transition: background var(--transition); }
+.error-bar-item:hover { background: var(--bg-3); }
+.error-bar-label { min-width: 160px; font-size: 12px; color: var(--text-2); }
+.error-bar-track { flex: 1; height: 6px; background: var(--bg-4); border-radius: 99px; overflow: hidden; }
+.error-bar-fill { height: 100%; border-radius: 99px; transition: width 0.3s ease; }
+.error-bar-count { font-size: 12px; font-weight: 600; color: var(--text); min-width: 32px; text-align: right; }
+
+/* ── Context Log (Timeline detail) ── */
+.context-log {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.context-log-entry {
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-3);
+  border: 1px solid transparent;
+  transition: all var(--transition);
+}
+
+.context-log-entry.context-log-selected {
+  background: var(--accent-glow);
+  border-color: var(--accent);
+}
+
+.context-log-entry.context-log-minor {
+  opacity: 0.55;
+  padding: 4px 12px;
+}
+
+/* ── Export Button ── */
+.btn-primary {
+  padding: 7px 16px;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius-sm);
+  color: #fff;
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+.btn-primary:hover { background: var(--accent-dark); }
+.btn-primary:disabled { opacity: 0.5; cursor: default; }
+
+/* ── Hover row ── */
+.hover-row { transition: background var(--transition); }
+.hover-row:hover { background: var(--bg-3); }
