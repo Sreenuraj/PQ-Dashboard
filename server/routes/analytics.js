@@ -87,11 +87,12 @@ module.exports = (db) => {
       SELECT 
         strftime('%Y-%m-%d', e.ts / 1000, 'unixepoch') as day,
         e.error_category,
+        e.model_id,
         COUNT(*) as count
       FROM events e
       INNER JOIN tasks t ON t.id = e.task_id
       WHERE e.error_category IS NOT NULL ${where ? 'AND ' + where.slice(6) : ''}
-      GROUP BY day, e.error_category
+      GROUP BY day, e.error_category, e.model_id
       ORDER BY day ASC
     `).all(...params);
 

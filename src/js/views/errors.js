@@ -21,31 +21,44 @@ export async function renderErrors(container, dateRange = {}) {
   let activeModelFilter = 'all';
 
   function getFilteredData() {
-    let byCategory = data.byCategory || [];
-    let byModel = data.byModel || [];
-    let overTime = data.overTime || [];
+    let rawModels = data.byModel || [];
+    let rawOverTime = data.overTime || [];
 
     if (activeFilter !== 'all') {
       const cats = activeFilter === 'api' ? API_ERROR_CATEGORIES : 
                    activeFilter === 'tool' ? TOOL_ERROR_CATEGORIES : [];
       
-      const catCheck = (r) => activeFilter === 'other' 
-        ? !API_ERROR_CATEGORIES.includes(r.error_category) && !TOOL_ERROR_CATEGORIES.includes(r.error_category)
-        : cats.includes(r.error_category);
+      const catCheck = (c) => activeFilter === 'other' 
+        ? !API_ERROR_CATEGORIES.includes(c) && !TOOL_ERROR_CATEGORIES.includes(c)
+        : cats.includes(c);
 
-      byCategory = byCategory.filter(catCheck);
-      byModel = byModel.filter(catCheck);
-      overTime = overTime.filter(catCheck);
+      rawModels = rawModels.filter(r => catCheck(r.error_category));
+      rawOverTime = rawOverTime.filter(r => catCheck(r.error_category));
     }
 
     if (activeModelFilter !== 'all') {
-      byCategory = byCategory.filter(r => r.model_id === activeModelFilter);
-      byModel = byModel.filter(r => r.model_id === activeModelFilter);
-      overTime = overTime.filter(r => r.model_id === activeModelFilter); // assuming overTime query could potentially be joined with model_id if we have it, wait overTime endpoint doesn't return model_id. Hmm.
-      // Wait, `/api/analytics/errors` returns overTime without model_id!
+      rawModels = rawModels.filter(r => r.model_id === activeModelFilter);
+      rawOverTime = rawOverTime.filter(r => r.model_id === activeModelFilter);
     }
+
+    // Aggregate byCategory from the filtered byModel data
+    const catMap = {};
+    rawModels.forEach(r => {
+      if (!catMap[r.error_category]) catMap[r.error_category] = 0;
+      catMap[r.error_category] += r.count;
+    });
+    const byCategory = Object.entries(catMap).map(([k, v]) => ({ error_category: k, count: v }));
+
+    // Aggregate overTime (in case 'all' models is selected, we must collapse the same day/cat combinations)
+    const timeMap = {};
+    rawOverTime.forEach(r => {
+      const key = r.day + '|' + r.error_category;
+      if (!timeMap[key]) timeMap[key] = { day: r.day, error_category: r.error_category, count: 0 };
+      timeMap[key].count += r.count;
+    });
+    const overTime = Object.values(timeMap);
     
-    return { byCategory, byModel, overTime };
+    return { byCategory, byModel: rawModels, overTime };
   }
 
   function render() {

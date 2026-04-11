@@ -19,6 +19,15 @@ export async function renderOverview(container, dateRange = {}) {
   const errRate = overview.total_api_calls > 0
     ? ((overview.total_errors / overview.total_api_calls) * 100).toFixed(1) : 0;
 
+  const providerStats = {};
+  models.forEach(m => {
+    const prov = m.provider_id || 'unknown';
+    if (!providerStats[prov]) providerStats[prov] = { count: 0, cost: 0 };
+    providerStats[prov].count += m.task_count;
+    providerStats[prov].cost += m.total_cost || 0;
+  });
+  const providersList = Object.entries(providerStats).sort((a,b) => b[1].count - a[1].count);
+
   container.innerHTML = `
     <div class="top-bar">
       <div>
@@ -71,6 +80,21 @@ export async function renderOverview(container, dateRange = {}) {
       </div>
 
       <div class="panel">
+        <div class="panel-title">API Providers Utilized</div>
+        ${providersList.length > 0 ? providersList.map(([prov, stats]) => `
+          <div class="model-row" style="cursor:default">
+            <div style="display:flex;align-items:center;gap:8px">
+              <div class="mono" style="color:var(--text);font-size:13px;text-transform:capitalize">${prov}</div>
+            </div>
+            <span style="font-size:12.5px;font-weight:600;color:var(--text-2);margin-left:auto">${stats.count} sess</span>
+            <span style="font-size:12px;color:var(--green);font-weight:600;width:70px;text-align:right">${fmtCost(stats.cost)}</span>
+          </div>
+        `).join('') : '<div class="empty-state"><p>No provider data</p></div>'}
+      </div>
+    </div>
+
+    <div class="grid-2" style="margin-top:16px">
+      <div class="panel">
         <div class="panel-title">Session Status</div>
         ${clickStatusBar('Completed',   overview.completed,   overview.total_tasks, 'accent', '#/sessions?status=completed')}
         ${clickStatusBar('Interrupted', overview.interrupted, overview.total_tasks, 'yellow', '#/sessions?status=interrupted')}
@@ -85,7 +109,6 @@ export async function renderOverview(container, dateRange = {}) {
           <div style="margin-top:4px">Latest: <span style="color:var(--text)">${overview.latest_task ? fmtDate(overview.latest_task) : '—'}</span></div>
         </div>
       </div>
-    </div>
 
     <div class="panel" style="margin-top:16px">
       <div class="panel-title">Reasoning Impact Analysis <span style="float:right;font-weight:400;font-size:10px;text-transform:none;color:var(--text-3)">Click row to filter sessions</span></div>
