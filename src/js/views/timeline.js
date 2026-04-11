@@ -120,7 +120,7 @@ function buildTimeline(events) {
       return `
         ${modelSwitchDivider}
         ${i > 0 && !modelSwitchDivider ? `<div class="timeline-connector ${e.error_category ? 'error-gap' : ''}"></div>` : ''}
-        <div class="timeline-node" data-idx="${i}" title="${e.sub_type}: ${e.content_preview || ''}">
+        <div class="timeline-node" data-idx="${i}" title="${e.sub_type}: ${escHtml(e.content_preview || '')}">
           <div class="timeline-node-dot ${nodeClass(e)}">
             ${nodeIcon(e)}
           </div>
@@ -401,5 +401,10 @@ function statusBadge(status) {
 }
 
 function escHtml(s) {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  if (!s) return '';
+  return s.replace(/&/g,'&amp;')
+          .replace(/</g,'&lt;')
+          .replace(/>/g,'&gt;')
+          .replace(/"/g,'&quot;')
+          .replace(/'/g,'&#39;');
 }
