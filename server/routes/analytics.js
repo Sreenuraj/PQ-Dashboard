@@ -381,6 +381,81 @@ module.exports = (db) => {
     res.send(csvLines.join('\n'));
   });
 
+  // ── CodeBurn-inspired Activity Intelligence endpoints ──
+
+  // GET /api/analytics/activity — Activity category breakdown with one-shot rates
+  router.get('/activity', (req, res) => {
+    const { from, to } = req.query;
+    const { where, params } = buildDateFilter(from, to);
+
+    const rows = db.prepare(`
+      SELECT 
+        activity_category as category,
+        COUNT(*) as task_count,
+        SUM(total_cost) as total_cost,
+        SUM(tool_call_count) as total_turns,
+        SUM(edit_turns) as edit_turns,
+        SUM(oneshot_turns) as oneshot_turns,
+        SUM(retry_cycles) as retry_cycles,
+        AVG(duration) as avg_duration,
+        SUM(error_count) as total_errors,
+        SUM(total_tokens_in) as total_tokens_in,
+        SUM(total_tokens_out) as total_tokens_out,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed
+      FROM tasks ${where}
+      GROUP BY activity_category
+      ORDER BY total_cost DESC
+    `).all(...params);
+
+    // Compute one-shot rate per category
+    const result = rows.map(r => ({
+      ...r,
+      oneshot_rate: r.edit_turns > 0 ? Math.round((r.oneshot_turns / r.edit_turns) * 100) : null,
+    }));
+
+    res.json(result);
+  });
+
+  // GET /api/analytics/shell-commands — Top shell command frequency
+  router.get('/shell-commands', (req, res) => {
+    const { from, to } = req.query;
+    const { where, params } = buildDateFilter(from, to, 't.');
+
+    const rows = db.prepare(`
+      SELECT 
+        sc.command_base,
+        SUM(sc.count) as count,
+        COUNT(DISTINCT sc.task_id) as task_count
+      FROM task_shell_commands sc
+      INNER JOIN tasks t ON t.id = sc.task_id
+      ${where}
+      GROUP BY sc.command_base
+      ORDER BY count DESC
+      LIMIT 20
+    `).all(...params);
+
+    res.json(rows);
+  });
+
+  // GET /api/analytics/activity/daily — Daily cost by activity category
+  router.get('/activity/daily', (req, res) => {
+    const { from, to } = req.query;
+    const { where, params } = buildDateFilter(from, to);
+
+    const rows = db.prepare(`
+      SELECT 
+        strftime('%Y-%m-%d', start_ts / 1000, 'unixepoch') as day,
+        activity_category as category,
+        SUM(total_cost) as cost,
+        COUNT(*) as task_count
+      FROM tasks ${where}
+      GROUP BY day, activity_category
+      ORDER BY day ASC
+    `).all(...params);
+
+    res.json(rows);
+  });
+
   return router;
 };
 

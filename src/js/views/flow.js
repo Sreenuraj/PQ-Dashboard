@@ -19,18 +19,21 @@ export async function renderFlow(container, dateRange = {}) {
     <div class="top-bar">
       <div>
         <h1 class="view-title">Activity Flow</h1>
-        <p class="view-subtitle">Task transitions from start → reasoning → tools → outcome &nbsp;·&nbsp; <span style="color:var(--accent-2);font-size:11px">Click any coloured node to see matching sessions ↗</span></p>
+        <p class="view-subtitle">Task transitions from start → reasoning → tools → outcome &nbsp;·&nbsp; <span style="color:var(--accent-2);font-size:11px">Click status and reasoning nodes to see matching sessions ↗</span></p>
       </div>
       <!-- date picker injected here -->
     </div>
 
-    <div class="panel" style="overflow-x:auto;overflow-y:hidden">
-      <div id="sankey-container" style="min-width:800px;height:520px"></div>
+    <div class="panel">
+      <div class="panel-title">Flow Diagram</div>
+      <div class="panel-body" style="overflow-x:auto;overflow-y:hidden">
+        <div id="sankey-container" style="min-width:800px;height:520px"></div>
+      </div>
     </div>
 
-    <div class="panel" style="padding:14px 20px">
+    <div class="panel">
       <div class="panel-title">How to read this diagram</div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;font-size:12px;color:var(--text-2)">
+      <div class="panel-body" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;font-size:12px;color:var(--text-2)">
         <div><span style="color:var(--text-3)">&#11044;</span> <strong style="color:var(--text)">Task Start</strong> — every session begins here</div>
         <div><span style="color:var(--purple)">&#11044;</span> <strong style="color:var(--text)">Reasoning</strong> — sessions with 🧠 thinking traces</div>
         <div><span style="color:var(--border-2)">&#11044;</span> <strong style="color:var(--text)">No Reasoning</strong> — sessions without thinking</div>
@@ -86,6 +89,15 @@ function drawSankey(containerId, data) {
     return colorMap[name] || 'var(--accent)';
   }
 
+  function queryForNode(name) {
+    if (name === 'Completed') return '?status=completed';
+    if (name === 'Interrupted') return '?status=interrupted';
+    if (name === 'Error' || name === 'Has API Errors') return '?hasErrors=true';
+    if (name === 'Reasoning') return '?hasReasoning=true';
+    if (name === 'No Reasoning') return '?hasReasoning=false';
+    return '';
+  }
+
   const isLight = document.documentElement.getAttribute('data-theme') === 'light';
 
   // Draw links
@@ -120,21 +132,15 @@ function drawSankey(containerId, data) {
     .attr("fill", d => getNodeColor(d.name))
     .attr("rx", 4)
     .attr("ry", 4)
-    .style("cursor", "pointer")
+    .style("cursor", d => queryForNode(d.name) ? "pointer" : "default")
     .on("click", (event, d) => {
-      const name = d.name;
-      let q = '';
-      if (name === 'Completed')                           q = '?status=completed';
-      else if (name === 'Interrupted')                    q = '?status=interrupted';
-      else if (name === 'Error' || name === 'Has API Errors') q = '?hasErrors=true';
-      else if (name === 'Reasoning')                      q = '?hasReasoning=true';
-      else if (name === 'No Reasoning')                   q = '?hasReasoning=false';
-      else if (name === 'Tools Used')                     q = '?hasErrors=false';
-      else if (name === 'No Tools')                       q = '?hasReasoning=false';
+      const q = queryForNode(d.name);
       if (q) window.location.hash = `#/sessions${q}`;
     })
     .append("title")
-    .text(d => `${d.name}\n${d.value} tasks\nClick to view sessions ↗`);
+    .text(d => queryForNode(d.name)
+      ? `${d.name}\n${d.value} tasks\nClick to view sessions ↗`
+      : `${d.name}\n${d.value} tasks`);
 
   // Node labels
   node.append("text")

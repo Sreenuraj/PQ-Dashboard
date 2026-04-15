@@ -88,7 +88,7 @@ export async function renderErrors(container, dateRange = {}) {
 
       <div style="display:flex;gap:8px;align-items:center">
         <span style="font-size:12px;color:var(--text-3)">Model:</span>
-        <select id="error-model-select" style="padding:4px 8px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg-2);color:var(--text-1);font-size:12px;outline:none">
+        <select id="error-model-select" class="filter-select" style="padding:4px 8px">
           <option value="all">All Models</option>
           ${[...new Set((data.byModel || []).map(r => r.model_id))].filter(Boolean).map(m => `
             <option value="${m}" ${activeModelFilter === m ? 'selected' : ''}>${m}</option>
@@ -100,14 +100,14 @@ export async function renderErrors(container, dateRange = {}) {
     <div class="grid-2">
       <div class="panel">
         <div class="panel-title">Error Types Breakdown</div>
-        <div class="chart-wrap tall" style="display:flex;align-items:center;justify-content:center">
+        <div class="panel-body chart-wrap tall" style="display:flex;align-items:center;justify-content:center">
           ${filtered.byCategory?.length ? `<canvas id="errorTypesDoughnut"></canvas>` : '<div style="color:var(--text-3);font-size:13px">No errors found 🎉</div>'}
         </div>
       </div>
 
       <div class="panel">
         <div class="panel-title">Error Cascades / Trend</div>
-        <div class="chart-wrap tall">
+        <div class="panel-body chart-wrap tall">
           <canvas id="errorTrendChart"></canvas>
         </div>
       </div>
@@ -116,31 +116,33 @@ export async function renderErrors(container, dateRange = {}) {
     <div class="grid-2">
       <div class="panel">
         <div class="panel-title">Errors by Model</div>
-        <table class="data-table">
-          <thead><tr><th>Model</th><th>Error Type</th><th>Count</th></tr></thead>
-          <tbody>
-            ${(filtered.byModel || []).slice(0, 15).map(r => `
-              <tr class="hover-row" style="cursor:pointer" onclick="window.location.hash='#/sessions?model_id=${encodeURIComponent(r.model_id)}&error_category=${encodeURIComponent(r.error_category)}'">
-                <td class="mono" style="font-size:11px">${r.provider_id ? `<span style="color:var(--text-3)">${r.provider_id}/</span>` : ''}${r.model_id || '—'}</td>
-                <td><span class="badge ${errorBadgeColor(r.error_category)}">${formatErrorCategory(r.error_category)}</span></td>
-                <td style="font-weight:600">${r.count}</td>
-              </tr>
-            `).join('') || '<tr><td colspan="3" style="text-align:center;color:var(--text-3)">No data</td></tr>'}
-          </tbody>
-        </table>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead><tr><th>Model</th><th>Error Type</th><th>Count</th></tr></thead>
+            <tbody>
+              ${(filtered.byModel || []).slice(0, 15).map(r => `
+                <tr class="hover-row" onclick="window.location.hash='#/sessions?model_id=${encodeURIComponent(r.model_id)}&error_category=${encodeURIComponent(r.error_category)}'">
+                  <td class="mono" style="font-size:11px">${r.provider_id ? `<span style="color:var(--text-3)">${r.provider_id}/</span>` : ''}${r.model_id || '—'}</td>
+                  <td><span class="badge ${errorBadgeColor(r.error_category)}">${formatErrorCategory(r.error_category)}</span></td>
+                  <td><strong>${r.count}</strong></td>
+                </tr>
+              `).join('') || '<tr><td colspan="3" style="text-align:center;color:var(--text-3)">No data</td></tr>'}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
 
     <!-- Export panel -->
     <div class="panel" id="export-panel-section">
-      <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center">
+      <div class="panel-title">
         <span>Export Errors</span>
-        <span style="font-size:12px;color:var(--text-3)" id="export-count-label">${filteredTotal} errors will be exported</span>
+        <span class="panel-title-meta" id="export-count-label">${filteredTotal} errors will be exported</span>
       </div>
-      <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:8px">
+      <div class="panel-body" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
         <div style="display:flex;gap:8px;align-items:center">
           <label style="font-size:12px;color:var(--text-2)">Format:</label>
-          <select id="export-format" style="padding:4px 10px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg-2);color:var(--text-1);font-size:12px">
+          <select id="export-format" class="filter-select" style="padding:4px 10px">
             <option value="csv">CSV</option>
             <option value="json">JSON</option>
           </select>
@@ -153,7 +155,7 @@ export async function renderErrors(container, dateRange = {}) {
 
     <div class="panel">
       <div class="panel-title">Error Categories Explained</div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px">
+      <div class="panel-body" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px">
         ${ERROR_EXPLANATIONS.map(e => `
           <div style="padding:12px;background:var(--bg-3);border-radius:var(--radius-sm)">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">

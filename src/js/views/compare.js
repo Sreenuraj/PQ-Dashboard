@@ -70,11 +70,15 @@ function renderTaskColumn(t, ev, maxCost, maxDuration) {
   }
 
   return `
-    <div class="panel" style="flex:1;min-width:300px;max-width:400px;display:flex;flex-direction:column;gap:16px;">
+    <div class="panel" style="flex:1;min-width:300px;max-width:400px;">
+       <div class="panel-title">
+         <span class="mono" style="font-size:11px;color:var(--text-2)">${t.id.substring(0,8)}</span>
+         ${statusBadge(t.status)}
+       </div>
+       <div class="panel-body" style="display:flex;flex-direction:column;gap:16px;">
        <div>
          <div style="display:flex;justify-content:space-between;align-items:center;">
-           <span class="mono" style="font-size:11px;color:var(--text-3)">${t.id.substring(0,8)}</span>
-           ${statusBadge(t.status)}
+           <span class="summary-label" style="margin-bottom:0">Started</span>
          </div>
          <div style="font-size:12px;color:var(--text-2);margin-top:6px;">${fmtDateTime(t.start_ts)}</div>
        </div>
@@ -118,7 +122,7 @@ function renderTaskColumn(t, ev, maxCost, maxDuration) {
            ${escHtml(t.first_message || '-')}
          </div>
        </div>
-
+       </div>
     </div>
   `;
 }

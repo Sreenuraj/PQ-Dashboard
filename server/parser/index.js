@@ -5,6 +5,7 @@ const { parseUIMessages, setModelRegistry } = require('./ui-messages');
 const { parseMetadata, parseFocusChain } = require('./metadata');
 const { getDB, isTaskCached, saveTask, markParsed } = require('../cache/db');
 const { getModelInfo } = require('../model-registry');
+const { classifyTask } = require('../classifier');
 
 function fileHash(filePath) {
   if (!filePath || !fs.existsSync(filePath)) return 'none';
@@ -49,7 +50,10 @@ async function runParser(config, onProgress) {
       const focusCompletion = parseFocusChain(task.focusChainPath);
       const hasContextReset = !!task.contextHistoryPath;
 
-      saveTask(db, task.id, task.source, summary, metadata, focusCompletion, events, hasContextReset);
+      // CodeBurn-inspired activity classification
+      const classification = classifyTask(events, summary.first_message);
+
+      saveTask(db, task.id, task.source, summary, metadata, focusCompletion, events, hasContextReset, classification);
       markParsed(db, task.id, task.source, hash);
 
       processed++;

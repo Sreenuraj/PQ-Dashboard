@@ -93,12 +93,30 @@ function initSchema(db) {
     'ALTER TABLE events ADD COLUMN retry_count INTEGER DEFAULT 0',
     'ALTER TABLE events ADD COLUMN context_pct INTEGER',
     'ALTER TABLE events ADD COLUMN response_text TEXT',
+    // CodeBurn-inspired activity classification
+    'ALTER TABLE tasks ADD COLUMN activity_category TEXT DEFAULT \'general\'',
+    'ALTER TABLE tasks ADD COLUMN edit_turns INTEGER DEFAULT 0',
+    'ALTER TABLE tasks ADD COLUMN oneshot_turns INTEGER DEFAULT 0',
+    'ALTER TABLE tasks ADD COLUMN retry_cycles INTEGER DEFAULT 0',
+    'ALTER TABLE tasks ADD COLUMN shell_command_count INTEGER DEFAULT 0',
   ];
   for (const sql of migrations) {
     try { db.exec(sql); } catch (e) {
       // Column already exists — ignore
     }
   }
+
+  // Shell commands frequency table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS task_shell_commands (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id TEXT,
+      command_base TEXT,
+      count INTEGER DEFAULT 1
+    );
+    CREATE INDEX IF NOT EXISTS idx_shell_cmd_task ON task_shell_commands(task_id);
+    CREATE INDEX IF NOT EXISTS idx_shell_cmd_base ON task_shell_commands(command_base);
+  `);
 }
 
 function isTaskCached(db, taskId, fileHash) {
@@ -106,13 +124,19 @@ function isTaskCached(db, taskId, fileHash) {
   return row && row.file_hash === fileHash;
 }
 
-function saveTask(db, taskId, source, summary, metadata, focusCompletion, events, hasContextReset) {
+function saveTask(db, taskId, source, summary, metadata, focusCompletion, events, hasContextReset, classification) {
   const env = metadata.environment || {};
   const status = deriveStatus(events, summary);
+  const cls = classification || { category: 'general', editTurns: 0, oneShotTurns: 0, retryCycles: 0, shellCommands: {} };
 
-  db.prepare(`INSERT OR REPLACE INTO tasks VALUES (
-    ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
-  )`).run(
+  db.prepare(`INSERT OR REPLACE INTO tasks 
+    (id,source,start_ts,end_ts,duration,total_cost,total_tokens_in,total_tokens_out,
+     total_cache_reads,total_cache_writes,error_count,tool_call_count,api_call_count,
+     status,has_reasoning,has_context_reset,first_message,focus_chain_completion,
+     environment,pq_version,event_count,
+     activity_category,edit_turns,oneshot_turns,retry_cycles,shell_command_count)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(
     taskId, source,
     summary.first_ts, summary.last_ts, summary.duration,
     summary.total_cost, summary.total_tokens_in, summary.total_tokens_out,
@@ -125,12 +149,18 @@ function saveTask(db, taskId, source, summary, metadata, focusCompletion, events
     focusCompletion,
     JSON.stringify(env),
     env.pq_version || null,
-    summary.event_count
+    summary.event_count,
+    cls.category,
+    cls.editTurns,
+    cls.oneShotTurns,
+    cls.retryCycles,
+    Object.values(cls.shellCommands).reduce((s, v) => s + v, 0)
   );
 
-  // Delete old events for this task (replace)
+  // Delete old events + related data for this task (replace)
   db.prepare('DELETE FROM events WHERE task_id = ?').run(taskId);
   db.prepare('DELETE FROM task_models WHERE task_id = ?').run(taskId);
+  db.prepare('DELETE FROM task_shell_commands WHERE task_id = ?').run(taskId);
 
   const insertEvent = db.prepare(`INSERT INTO events 
     (task_id,ts,type,sub_type,tool_name,command_text,error_message,error_category,
@@ -155,6 +185,17 @@ function saveTask(db, taskId, source, summary, metadata, focusCompletion, events
     }
   });
   insertEventBatch(events);
+
+  // Shell commands
+  if (cls.shellCommands && Object.keys(cls.shellCommands).length > 0) {
+    const insertCmd = db.prepare('INSERT INTO task_shell_commands (task_id, command_base, count) VALUES (?,?,?)');
+    const insertCmdBatch = db.transaction((cmds) => {
+      for (const [base, count] of Object.entries(cmds)) {
+        insertCmd.run(taskId, base, count);
+      }
+    });
+    insertCmdBatch(cls.shellCommands);
+  }
 
   // Task models
   const insertModel = db.prepare(`INSERT INTO task_models (task_id,model_id,provider_id,mode,ts) VALUES (?,?,?,?,?)`);

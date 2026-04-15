@@ -14,6 +14,8 @@ export async function renderModels(container, dateRange = {}) {
     return;
   }
 
+  const maxModelCost = Math.max(...models.map(m => m.total_cost || 0), 0);
+
   container.innerHTML = `
     <div class="top-bar">
       <div>
@@ -23,66 +25,72 @@ export async function renderModels(container, dateRange = {}) {
       <!-- date picker injected here -->
     </div>
 
-    <!-- RADAR CHART -->
     <div class="panel">
       <div class="panel-title">Model Efficiency Matrix <span style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">(top 5 models)</span></div>
-      <div class="chart-wrap tall">
-        <canvas id="modelRadarChart"></canvas>
+      <div class="panel-body">
+        <div class="chart-wrap tall">
+          <canvas id="modelRadarChart"></canvas>
+        </div>
       </div>
     </div>
 
-    <div class="panel" style="padding:0;overflow:hidden">
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Model <span style="font-weight:400;color:var(--text-3);font-size:9px">↕ bar = relative cost</span></th>
-            <th>Provider</th><th>Mode</th><th>Sessions</th>
-            <th>Total Cost</th><th>Avg Cost</th><th>Errors</th>
-            <th>Completion Rate</th><th>Cache %</th><th>Reasoning</th><th>Tier</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${models.map(m => {
-            const maxCost = Math.max(...models.map(x => x.total_cost || 0));
-            const completionPct = m.task_count > 0 ? Math.round(m.completed / m.task_count * 100) : 0;
-            const cacheHit = (m.total_tokens_in + m.total_cache_reads) > 0
-              ? Math.round(m.total_cache_reads / (m.total_tokens_in + m.total_cache_reads) * 100) : 0;
-            const costWidth = maxCost > 0 ? (m.total_cost / maxCost * 100) : 0;
+    <div class="panel">
+      <div class="panel-title">
+        <span>Model Performance Table</span>
+        <span class="panel-title-meta">Relative cost bar appears beside each model</span>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th>Provider</th><th>Mode</th><th>Sessions</th>
+              <th>Total Cost</th><th>Avg Cost</th><th>Errors</th>
+              <th>Completion Rate</th><th>Cache %</th><th>Reasoning</th><th>Tier</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${models.map(m => {
+              const completionPct = m.task_count > 0 ? Math.round(m.completed / m.task_count * 100) : 0;
+              const cacheHit = (m.total_tokens_in + m.total_cache_reads) > 0
+                ? Math.round(m.total_cache_reads / (m.total_tokens_in + m.total_cache_reads) * 100) : 0;
+              const costWidth = maxModelCost > 0 ? (m.total_cost / maxModelCost * 100) : 0;
 
-            return `
-              <tr style="cursor:pointer" title="Click to view sessions for this model"
-                onclick="window.location.hash='#/sessions?model_id=${encodeURIComponent(m.model_id)}'">
-                <td style="padding-left:14px">
-                  <div style="display:flex;align-items:center;gap:6px">
-                    <div class="mono" style="font-size:12px">${m.model_id || '—'}</div>
-                    <span style="font-size:9px;color:var(--accent-2);opacity:0.7">↗</span>
-                  </div>
-                  <div style="margin-top:4px;width:${Math.max(costWidth,2)}%;height:3px;background:var(--accent);border-radius:99px;opacity:0.5"></div>
-                </td>
-                <td style="font-size:12px;color:var(--text-2)">${m.provider_id || '—'}</td>
-                <td><span class="badge grey" style="font-size:10px">${m.mode || '—'}</span></td>
-                <td style="font-weight:600">${m.task_count}</td>
-                <td style="color:var(--green);font-weight:600">${fmtCost(m.total_cost)}</td>
-                <td style="color:var(--text-2)">${fmtCost(m.avg_cost)}</td>
-                <td style="color:${m.total_errors > 0 ? 'var(--red)' : 'var(--text-3)'};font-weight:${m.total_errors > 0 ? '600' : '400'}">
-                  ${m.total_errors}
-                </td>
-                <td>
-                  <div style="display:flex;align-items:center;gap:8px">
-                    <div class="progress-bar" style="width:60px">
-                      <div class="progress-fill ${completionPct > 70 ? 'green' : completionPct > 40 ? '' : 'red'}" style="width:${completionPct}%"></div>
+              return `
+                <tr title="Click to view sessions for this model"
+                  onclick="window.location.hash='#/sessions?model_id=${encodeURIComponent(m.model_id)}'">
+                  <td style="padding-left:14px">
+                    <div style="display:flex;align-items:center;gap:6px">
+                      <div class="mono data-primary" style="font-size:12px">${m.model_id || '—'}</div>
+                      <span style="font-size:9px;color:var(--accent-2);opacity:0.7">↗</span>
                     </div>
-                    <span style="font-size:11px;color:var(--text-3)">${completionPct}%</span>
-                  </div>
-                </td>
-                <td style="font-size:12px;color:${cacheHit > 20 ? 'var(--cyan)' : 'var(--text-3)'}">${cacheHit}%</td>
-                <td>${m.with_reasoning > 0 ? '<span class="badge purple">🧠 Yes</span>' : '<span style="color:var(--text-3);font-size:12px">—</span>'}</td>
-                <td>${m.is_free ? '<span class="badge yellow">Free</span>' : '<span class="badge green">Paid</span>'}</td>
-              </tr>
-            `;
-          }).join('')}
-        </tbody>
-      </table>
+                    <div style="margin-top:4px;width:${Math.max(costWidth, 2)}%;height:3px;background:var(--accent);border-radius:99px;opacity:0.5"></div>
+                  </td>
+                  <td style="font-size:12px;color:var(--text-2)">${m.provider_id || '—'}</td>
+                  <td><span class="badge grey" style="font-size:10px">${m.mode || '—'}</span></td>
+                  <td><strong>${m.task_count}</strong></td>
+                  <td style="color:var(--green);font-weight:600">${fmtCost(m.total_cost)}</td>
+                  <td style="color:var(--text-2)">${fmtCost(m.avg_cost)}</td>
+                  <td style="color:${m.total_errors > 0 ? 'var(--red)' : 'var(--text-3)'};font-weight:${m.total_errors > 0 ? '600' : '400'}">
+                    ${m.total_errors}
+                  </td>
+                  <td>
+                    <div style="display:flex;align-items:center;gap:8px">
+                      <div class="progress-bar" style="width:60px">
+                        <div class="progress-fill ${completionPct > 70 ? 'green' : completionPct > 40 ? '' : 'red'}" style="width:${completionPct}%"></div>
+                      </div>
+                      <span style="font-size:11px;color:var(--text-3)">${completionPct}%</span>
+                    </div>
+                  </td>
+                  <td style="font-size:12px;color:${cacheHit > 20 ? 'var(--cyan)' : 'var(--text-3)'}">${cacheHit}%</td>
+                  <td>${m.with_reasoning > 0 ? '<span class="badge purple">🧠 Yes</span>' : '<span style="color:var(--text-3);font-size:12px">—</span>'}</td>
+                  <td>${m.is_free ? '<span class="badge yellow">Free</span>' : '<span class="badge green">Paid</span>'}</td>
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
     </div>
   `;
 
@@ -108,28 +116,32 @@ export async function renderCosts(container, dateRange = {}) {
 
     <div class="panel">
       <div class="panel-title">Cost by Model</div>
-      <div style="height:${Math.max(models.length * 36 + 24, 200)}px;position:relative">
-        <canvas id="costByModelChart"></canvas>
+      <div class="panel-body">
+        <div style="height:${Math.max(models.length * 36 + 24, 200)}px;position:relative">
+          <canvas id="costByModelChart"></canvas>
+        </div>
       </div>
     </div>
 
     <div class="panel">
       <div class="panel-title">Daily Cost Trend</div>
-      <table class="data-table">
-        <thead><tr><th>Date</th><th>Sessions</th><th>Cost</th><th>Tokens In</th><th>Tokens Out</th><th>Cached</th></tr></thead>
-        <tbody>
-          ${(costs.byTime || []).slice(-30).reverse().map(d => `
-            <tr>
-              <td>${d.period}</td>
-              <td>${d.task_count}</td>
-              <td style="color:var(--green);font-weight:600">${fmtCost(d.cost)}</td>
-              <td style="font-size:12px;color:var(--text-2)">${fmtK(d.tokens_in)}</td>
-              <td style="font-size:12px;color:var(--text-2)">${fmtK(d.tokens_out)}</td>
-              <td style="font-size:12px;color:var(--cyan)">${fmtK(d.cache_reads)}</td>
-            </tr>
-          `).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--text-3)">No data</td></tr>'}
-        </tbody>
-      </table>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>Date</th><th>Sessions</th><th>Cost</th><th>Tokens In</th><th>Tokens Out</th><th>Cached</th></tr></thead>
+          <tbody>
+            ${(costs.byTime || []).slice(-30).reverse().map(d => `
+              <tr>
+                <td>${d.period}</td>
+                <td><strong>${d.task_count}</strong></td>
+                <td style="color:var(--green);font-weight:600">${fmtCost(d.cost)}</td>
+                <td style="font-size:12px;color:var(--text-2)">${fmtK(d.tokens_in)}</td>
+                <td style="font-size:12px;color:var(--text-2)">${fmtK(d.tokens_out)}</td>
+                <td style="font-size:12px;color:var(--cyan)">${fmtK(d.cache_reads)}</td>
+              </tr>
+            `).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--text-3)">No data</td></tr>'}
+          </tbody>
+        </table>
+      </div>
     </div>
   `;
 
@@ -159,44 +171,53 @@ export async function renderTools(container, dateRange = {}) {
 
     <div class="panel">
       <div class="panel-title">Top Tools Used <span style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">(interactive — click to drilldown)</span></div>
-      <div style="height:${Math.max(tools.length * 36 + 24, 220)}px;position:relative">
-        <canvas id="toolsChart"></canvas>
+      <div class="panel-body">
+        <div style="height:${Math.max(tools.length * 36 + 24, 220)}px;position:relative">
+          <canvas id="toolsChart"></canvas>
+        </div>
       </div>
     </div>
 
     <div class="grid-2">
       <div class="panel">
-        <div class="panel-title">Common Tool Sequences <span style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">(Step A → Step B)</span></div>
-        <table class="data-table">
-          <thead><tr><th>Sequence</th><th>Frequency</th></tr></thead>
-          <tbody>
-            ${(seqData.target || []).map(s => `
-              <tr>
-                <td style="line-height:2.2">
-                  ${s.steps.map((st, i) => `
-                    <span class="badge ${i === 0 ? 'blue' : i === s.steps.length - 1 ? 'accent' : 'purple'}" style="white-space:nowrap">${st}</span>
-                    ${i < s.steps.length - 1 ? `<span style="color:var(--text-3);margin:0 4px">→</span>` : ''}
-                  `).join('')}
-                </td>
-                <td style="font-weight:600">${s.count}</td>
-              </tr>
-            `).join('') || '<tr><td colspan="2" style="text-align:center;color:var(--text-3)">No sequences detected</td></tr>'}
-          </tbody>
-        </table>
+        <div class="panel-title">
+          <span>Common Tool Sequences</span>
+          <span class="panel-title-meta">Step A → Step B</span>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead><tr><th>Sequence</th><th>Frequency</th></tr></thead>
+            <tbody>
+              ${(seqData.target || []).map(s => `
+                <tr>
+                  <td style="line-height:2.2">
+                    ${s.steps.map((st, i) => `
+                      <span class="badge ${i === 0 ? 'blue' : i === s.steps.length - 1 ? 'accent' : 'purple'}" style="white-space:nowrap">${st}</span>
+                      ${i < s.steps.length - 1 ? `<span style="color:var(--text-3);margin:0 4px">→</span>` : ''}
+                    `).join('')}
+                  </td>
+                  <td><strong>${s.count}</strong></td>
+                </tr>
+              `).join('') || '<tr><td colspan="2" style="text-align:center;color:var(--text-3)">No sequences detected</td></tr>'}
+            </tbody>
+          </table>
+        </div>
       </div>
       <div class="panel">
         <div class="panel-title">Common Commands Executed</div>
-        <table class="data-table">
-          <thead><tr><th>Command</th><th>Count</th></tr></thead>
-          <tbody>
-            ${(data.commandTypes || []).map(c => `
-              <tr>
-                <td class="mono" style="font-size:11px">${c.command_text}</td>
-                <td style="font-weight:600">${c.count}</td>
-              </tr>
-            `).join('') || '<tr><td colspan="2" style="text-align:center;color:var(--text-3)">No commands</td></tr>'}
-          </tbody>
-        </table>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead><tr><th>Command</th><th>Count</th></tr></thead>
+            <tbody>
+              ${(data.commandTypes || []).map(c => `
+                <tr>
+                  <td class="mono" style="font-size:11px">${c.command_text}</td>
+                  <td><strong>${c.count}</strong></td>
+                </tr>
+              `).join('') || '<tr><td colspan="2" style="text-align:center;color:var(--text-3)">No commands</td></tr>'}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   `;

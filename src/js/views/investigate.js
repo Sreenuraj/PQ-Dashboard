@@ -22,7 +22,7 @@ export async function renderInvestigate(container, taskId) {
   const uniqueTools = [...new Set(events.filter(e => e.tool_name).map(e => e.tool_name))];
   
   container.innerHTML = `
-    <div class="view-header" style="margin-bottom:16px;">
+    <div class="view-header">
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
         <a href="#/sessions" style="color:var(--text-3);text-decoration:none;font-size:13px">← Sessions</a>
         <h1 class="view-title" style="margin:0">Investigate Task</h1>
@@ -32,25 +32,28 @@ export async function renderInvestigate(container, taskId) {
     </div>
 
     <!-- Metrics Bar -->
-    <div class="panel" style="display:flex;gap:32px;padding:16px 20px;margin-bottom:16px;flex-wrap:wrap">
-       <div><span style="display:block;font-size:11px;color:var(--text-3);margin-bottom:4px">TOTAL COST</span><span style="font-size:16px;font-weight:600;color:var(--green)">${fmtCost(task.total_cost)}</span></div>
-       <div><span style="display:block;font-size:11px;color:var(--text-3);margin-bottom:4px">DURATION</span><span style="font-size:16px;font-weight:600">${fmtDuration(task.duration)}</span></div>
-       <div><span style="display:block;font-size:11px;color:var(--text-3);margin-bottom:4px">MODELS USED</span><span style="font-size:13px;font-weight:500" class="mono">${models.length ? models.join(', ') : 'None'}</span></div>
-       <div><span style="display:block;font-size:11px;color:var(--text-3);margin-bottom:4px">ERRORS</span><span style="font-size:16px;font-weight:600;color:${task.error_count > 0 ? 'var(--red)' : 'var(--text)'}">${task.error_count || 0}</span></div>
-       <div><span style="display:block;font-size:11px;color:var(--text-3);margin-bottom:4px">API CALLS</span><span style="font-size:16px;font-weight:600">${task.api_call_count || 0}</span></div>
-       <div><span style="display:block;font-size:11px;color:var(--text-3);margin-bottom:4px">TOOLS USED</span><span style="font-size:13px;font-weight:500" class="mono">${uniqueTools.length ? uniqueTools.join(', ') : '0'}</span></div>
+    <div class="panel">
+      <div class="panel-title">Task Summary</div>
+      <div class="summary-grid">
+        <div class="summary-item"><span class="summary-label">Total Cost</span><span class="summary-value" style="color:var(--green)">${fmtCost(task.total_cost)}</span></div>
+        <div class="summary-item"><span class="summary-label">Duration</span><span class="summary-value">${fmtDuration(task.duration)}</span></div>
+        <div class="summary-item"><span class="summary-label">Models Used</span><span class="summary-value mono">${models.length ? models.join(', ') : 'None'}</span></div>
+        <div class="summary-item"><span class="summary-label">Errors</span><span class="summary-value" style="color:${task.error_count > 0 ? 'var(--red)' : 'var(--text)'}">${task.error_count || 0}</span></div>
+        <div class="summary-item"><span class="summary-label">API Calls</span><span class="summary-value">${task.api_call_count || 0}</span></div>
+        <div class="summary-item"><span class="summary-label">Tools Used</span><span class="summary-value mono">${uniqueTools.length ? uniqueTools.join(', ') : '0'}</span></div>
+      </div>
     </div>
 
     <!-- Search / Highlight Toolbar -->
-    <div style="display:flex;gap:12px;margin-bottom:16px;align-items:center;">
-       <input type="text" id="inv-search" placeholder="Search prompts, responses, tool payloads, or errors..." style="flex:1;background:var(--bg-2);border:1px solid var(--border);color:var(--text);padding:10px 14px;border-radius:6px;font-size:13px;" />
+    <div class="search-toolbar">
+       <input type="text" id="inv-search" class="filter-input" placeholder="Search prompts, responses, tool payloads, or errors..." style="padding:10px 14px;" />
        <div id="search-matches" style="font-size:12px;color:var(--text-3);min-width:100px;"></div>
     </div>
 
-    <div style="display:flex;gap:20px;">
+    <div class="flex-row">
        <!-- Side Navigation of Events -->
-       <div class="panel" style="width:300px;flex-shrink:0;padding:0;overflow:hidden;display:flex;flex-direction:column;height:calc(100vh - 280px);">
-          <div style="padding:12px 16px;background:var(--bg-2);border-bottom:1px solid var(--border);font-size:12px;font-weight:600;display:flex;justify-content:space-between;align-items:center;">
+       <div class="panel" style="width:300px;flex-shrink:0;display:flex;flex-direction:column;height:calc(100vh - 280px);">
+          <div class="panel-title">
              <span>Event Stream</span>
              <span class="badge grey">${events.length}</span>
           </div>
@@ -163,7 +166,7 @@ function renderEventDetail(e) {
 
    if (e.model_id || e.cost != null) {
       html += `
-       <div style="display:flex;gap:24px;background:var(--bg-2);padding:12px;border-radius:6px;border:1px solid var(--border);margin-bottom:20px;font-size:12px;">
+       <div class="code-block" style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:20px;font-size:12px;">
          ${e.model_id ? `<div><div style="color:var(--text-3);margin-bottom:2px;font-size:10px;">MODEL</div><span class="mono">${e.provider_id ? e.provider_id+'/' : ''}${e.model_id}</span></div>` : ''}
          ${e.cost != null ? `<div><div style="color:var(--text-3);margin-bottom:2px;font-size:10px;">COST</div><span style="color:var(--green)">${fmtCost(e.cost)}</span></div>` : ''}
          ${e.tokens_in != null ? `<div><div style="color:var(--text-3);margin-bottom:2px;font-size:10px;">TOKENS</div><span>↑${e.tokens_in} &nbsp; ↓${e.tokens_out || 0}</span></div>` : ''}
@@ -185,14 +188,14 @@ function renderEventDetail(e) {
       html += `<div style="font-size:14px;font-weight:600;margin-bottom:8px;">Tool Invocation: <span class="mono" style="color:var(--accent)">${e.tool_name}</span></div>`;
    }
    if (e.command_text) {
-      html += `<div style="font-size:14px;font-weight:600;margin-bottom:8px;">Command Execution</div><pre style="background:#000;color:#0f0;padding:12px;border-radius:6px;font-size:12px;margin-bottom:20px;">$ ${escHtml(e.command_text)}</pre>`;
+      html += `<div style="font-size:14px;font-weight:600;margin-bottom:8px;">Command Execution</div><div class="code-block terminal" style="margin-bottom:20px;"><pre>$ ${escHtml(e.command_text)}</pre></div>`;
    }
 
    if (e.request_text) {
       html += `
         <div style="margin-bottom:20px;">
            <h3 style="font-size:13px;color:var(--text-2);margin-bottom:6px;">Request Payload (Prompt)</h3>
-           <pre style="background:var(--bg-2);padding:16px;border-radius:6px;border:1px solid var(--border);font-size:12px;white-space:pre-wrap;max-height:400px;overflow-y:auto;">${escHtml(e.request_text)}</pre>
+           <div class="code-block"><pre style="max-height:400px;">${escHtml(e.request_text)}</pre></div>
         </div>
       `;
    }
@@ -201,7 +204,7 @@ function renderEventDetail(e) {
       html += `
         <div style="margin-bottom:20px;">
            <h3 style="font-size:13px;color:var(--text-2);margin-bottom:6px;">Raw Response Payload</h3>
-           <pre style="background:var(--bg-3);padding:16px;border-radius:6px;border:1px solid var(--border);font-size:12px;white-space:pre-wrap;max-height:400px;overflow-y:auto;">${escHtml(e.response_text)}</pre>
+           <div class="code-block"><pre style="max-height:400px;">${escHtml(e.response_text)}</pre></div>
         </div>
       `;
    }
@@ -210,7 +213,7 @@ function renderEventDetail(e) {
       html += `
         <div style="margin-bottom:20px;">
            <h3 style="font-size:13px;color:var(--purple);margin-bottom:6px;">🧠 Internal Reasoning</h3>
-           <pre style="background:rgba(168,85,247,0.05);padding:16px;border-radius:6px;border:1px solid rgba(168,85,247,0.2);color:var(--text);font-size:12px;white-space:pre-wrap;max-height:400px;overflow-y:auto;">${escHtml(e.reasoning_text)}</pre>
+           <div class="code-block" style="background:rgba(168,85,247,0.05);border-color:rgba(168,85,247,0.2)"><pre style="max-height:400px;color:var(--text)">${escHtml(e.reasoning_text)}</pre></div>
         </div>
       `;
    }
@@ -219,7 +222,7 @@ function renderEventDetail(e) {
        html += `
         <div style="margin-bottom:20px;">
            <h3 style="font-size:13px;color:var(--text-2);margin-bottom:6px;">Captured Content</h3>
-           <pre style="background:var(--bg-2);padding:16px;border-radius:6px;border:1px solid var(--border);font-size:12px;white-space:pre-wrap;max-height:400px;overflow-y:auto;">${escHtml(e.content_preview)}</pre>
+           <div class="code-block"><pre style="max-height:400px;">${escHtml(e.content_preview)}</pre></div>
         </div>
       `;
    }

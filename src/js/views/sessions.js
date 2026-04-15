@@ -17,15 +17,18 @@ function updateActionBar() {
   countEl.textContent = `${selectedTasks.size} task${selectedTasks.size > 1 ? 's' : ''} selected`;
 
   const btnInvestigate = document.getElementById('btn-investigate');
+  const btnTimeline = document.getElementById('btn-timeline');
   const btnEvaluate = document.getElementById('btn-evaluate');
   const btnCompare = document.getElementById('btn-compare');
 
   if (selectedTasks.size === 1) {
     btnInvestigate.style.display = 'block';
+    btnTimeline.style.display = 'block';
     btnEvaluate.style.display = 'block';
     btnCompare.style.display = 'none';
   } else {
     btnInvestigate.style.display = 'none';
+    btnTimeline.style.display = 'none';
     btnEvaluate.style.display = 'none';
     btnCompare.style.display = 'block';
     btnCompare.textContent = `Compare (${selectedTasks.size})`;
@@ -102,7 +105,12 @@ export async function renderSessions(container, dateRange = {}, queryParams = ne
       </select>
     </div>
 
-    <div class="panel" style="padding:0;overflow:hidden;position:relative">
+    <div class="panel" style="position:relative">
+      <div class="panel-title">
+        <span>Session Explorer</span>
+        <span class="panel-title-meta">Select sessions to open timeline, investigate, evaluate, or compare</span>
+      </div>
+      <div class="table-wrap">
       <table class="data-table">
         <thead>
           <tr>
@@ -113,21 +121,23 @@ export async function renderSessions(container, dateRange = {}, queryParams = ne
           </tr>
         </thead>
         <tbody id="sessions-tbody">
-          <tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text-3)">Loading...</td></tr>
+          <tr><td colspan="10" style="text-align:center;padding:40px;color:var(--text-3)">Loading...</td></tr>
         </tbody>
       </table>
+      </div>
     </div>
     <div class="pagination" id="pagination"></div>
 
     <!-- Floating Action Bar -->
-    <div id="session-action-bar" style="display:none;position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--bg-2);border:1px solid var(--border-2);padding:10px 16px;border-radius:var(--radius);box-shadow:0 8px 24px rgba(0,0,0,0.2);display:none;align-items:center;gap:16px;z-index:1000">
-      <div id="selected-count" style="font-size:13px;font-weight:500;color:var(--text)">0 selected</div>
-      <div style="width:1px;height:24px;background:var(--border)"></div>
+    <div id="session-action-bar" class="action-bar">
+      <div id="selected-count" class="mono" style="font-size:12px;color:var(--text)">0 selected</div>
+      <div class="action-bar-divider"></div>
       <div style="display:flex;gap:8px">
-        <button id="btn-investigate" class="action-btn" style="background:var(--accent);color:#fff;border:none;padding:6px 12px;border-radius:4px;cursor:pointer;font-size:12px;display:none;">🔍 Investigate</button>
-        <button id="btn-evaluate" class="action-btn" style="background:var(--bg-3);color:var(--text);border:1px solid var(--border);padding:6px 12px;border-radius:4px;cursor:pointer;font-size:12px;display:none;">★ Evaluate</button>
-        <button id="btn-compare" class="action-btn" style="background:var(--accent);color:#fff;border:none;padding:6px 12px;border-radius:4px;cursor:pointer;font-size:12px;display:none;">Compare</button>
-        <button id="btn-clear-sel" class="action-btn" style="background:transparent;color:var(--text-3);border:none;padding:6px 12px;cursor:pointer;font-size:12px;">✕ Cancel</button>
+        <button id="btn-investigate" class="action-btn primary" style="display:none;">Investigate</button>
+        <button id="btn-timeline" class="action-btn secondary" style="display:none;">Timeline</button>
+        <button id="btn-evaluate" class="action-btn secondary" style="display:none;">Evaluate</button>
+        <button id="btn-compare" class="action-btn primary" style="display:none;">Compare</button>
+        <button id="btn-clear-sel" class="action-btn ghost">Cancel</button>
       </div>
     </div>
   `;
@@ -142,6 +152,11 @@ export async function renderSessions(container, dateRange = {}, queryParams = ne
   document.getElementById('btn-investigate')?.addEventListener('click', () => {
     const id = Array.from(selectedTasks)[0];
     window.location.hash = `#/investigate?task=${id}`;
+  });
+
+  document.getElementById('btn-timeline')?.addEventListener('click', () => {
+    const id = Array.from(selectedTasks)[0];
+    window.location.hash = `#/timeline?task=${id}`;
   });
 
   document.getElementById('btn-evaluate')?.addEventListener('click', () => {
@@ -195,13 +210,13 @@ async function loadSessions(container, dateRange = {}, drilldown = {}) {
   Object.keys(filters).forEach(k => { if (!filters[k]) delete filters[k]; });
 
   const tbody = document.getElementById('sessions-tbody');
-  if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text-3)"><div class="spinner" style="margin:auto"></div></td></tr>`;
+  if (tbody) tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--text-3)"><div class="spinner" style="margin:auto"></div></td></tr>`;
 
   const data = await api.tasks(filters);
 
   if (!data.tasks?.length) {
     if (tbody) tbody.innerHTML = `
-      <tr><td colspan="9">
+      <tr><td colspan="10">
         <div class="empty-state">
           <div class="icon">◈</div>
           <p>No sessions match the current filters</p>

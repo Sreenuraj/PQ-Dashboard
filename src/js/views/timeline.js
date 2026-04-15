@@ -47,19 +47,20 @@ export async function renderTimeline(container, taskId) {
     </div>
 
     <!-- Task summary bar -->
-    <div class="panel" style="padding:16px 24px;margin-bottom:20px">
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:16px">
-        <div><div class="stat-label">Duration</div><div style="font-size:15px;font-weight:600">${fmtDuration(task.duration)}</div></div>
-        <div><div class="stat-label">Total Cost</div><div style="font-size:15px;font-weight:600;color:var(--green)">${fmtCost(task.total_cost)}</div></div>
-        <div><div class="stat-label">API Calls</div><div style="font-size:15px;font-weight:600">${task.api_call_count || 0}</div></div>
-        <div><div class="stat-label">Tool Calls</div><div style="font-size:15px;font-weight:600">${task.tool_call_count || 0}</div></div>
-        <div><div class="stat-label">Errors</div><div style="font-size:15px;font-weight:600;color:${task.error_count > 0 ? 'var(--red)' : 'var(--text-2)'}">${task.error_count || 0}</div></div>
-        <div><div class="stat-label">Events</div><div style="font-size:15px;font-weight:600">${events.length}</div></div>
-        <div><div class="stat-label">Model Switches</div><div style="font-size:15px;font-weight:600;color:${modelSwitchCount > 0 ? 'var(--blue)' : 'var(--text-2)'}">${modelSwitchCount}</div></div>
-        <div><div class="stat-label">Started</div><div style="font-size:13px">${fmtDateTime(task.start_ts)}</div></div>
+    <div class="panel">
+      <div class="panel-title">Timeline Summary</div>
+      <div class="summary-grid">
+        <div class="summary-item"><div class="summary-label">Duration</div><div class="summary-value">${fmtDuration(task.duration)}</div></div>
+        <div class="summary-item"><div class="summary-label">Total Cost</div><div class="summary-value" style="color:var(--green)">${fmtCost(task.total_cost)}</div></div>
+        <div class="summary-item"><div class="summary-label">API Calls</div><div class="summary-value">${task.api_call_count || 0}</div></div>
+        <div class="summary-item"><div class="summary-label">Tool Calls</div><div class="summary-value">${task.tool_call_count || 0}</div></div>
+        <div class="summary-item"><div class="summary-label">Errors</div><div class="summary-value" style="color:${task.error_count > 0 ? 'var(--red)' : 'var(--text-2)'}">${task.error_count || 0}</div></div>
+        <div class="summary-item"><div class="summary-label">Events</div><div class="summary-value">${events.length}</div></div>
+        <div class="summary-item"><div class="summary-label">Model Switches</div><div class="summary-value" style="color:${modelSwitchCount > 0 ? 'var(--blue)' : 'var(--text-2)'}">${modelSwitchCount}</div></div>
+        <div class="summary-item"><div class="summary-label">Started</div><div class="summary-value">${fmtDateTime(task.start_ts)}</div></div>
       </div>
       ${uniqueModels.length ? `
-        <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+        <div class="panel-section">
           <span style="font-size:11px;color:var(--text-3);margin-right:8px">MODELS</span>
           ${uniqueModels.map(m => `<span class="badge accent mono" style="margin-right:4px">${m}</span>`).join('')}
         </div>
@@ -74,7 +75,10 @@ export async function renderTimeline(container, taskId) {
 
     <!-- Timeline -->
     <div class="panel">
-      <div class="panel-title">Event Timeline (${events.length} events)</div>
+      <div class="panel-title">
+        <span>Event Timeline (${events.length} events)</span>
+        <span class="panel-title-meta">Click any node to inspect context</span>
+      </div>
       <div class="timeline-container" id="timeline-track-wrap">
         ${buildTimeline(events)}
       </div>
