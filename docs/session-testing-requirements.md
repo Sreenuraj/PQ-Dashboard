@@ -1,7 +1,8 @@
 # Session Behavioral Testing & Model Comparison — Requirements
 
-> **Version:** 1.0  
+> **Version:** 1.1  
 > **Created:** 2026-06-01  
+> **Updated:** 2026-06-01  
 > **Branch:** `feature/session-testing-model-comparison`  
 > **Status:** Draft  
 > **Depends on:** Core PQ Dashboard v1.0 (all phases complete)
@@ -23,17 +24,274 @@ Additionally, the existing Compare view shows side-by-side metrics but doesn't i
 
 ### 1.2 Solution
 
-Two interconnected features:
+Three interconnected features:
 
-1. **Session Behavioral Testing** — A new per-task analysis that runs 4 deterministic test patterns against the task's event trace, producing pass/fail/warn results with evidence.
+1. **Baseline Sessions** — Users can mark any successful task as a "baseline" — the gold-standard execution. The system extracts a benchmark set from it: all user prompts, the tool sequence, behavior contracts, and operational metrics. This becomes the reference point that behavioral tests and comparisons measure against.
 
-2. **Enhanced Model Comparison** — An upgraded comparison view where 2+ selected tasks are compared across both operational metrics (cost, tokens, time) and behavioral test results.
+2. **Session Behavioral Testing** — A per-task analysis that runs 6 deterministic test patterns against the task's event trace, producing pass/fail/warn results with evidence. When a baseline exists, tests compare the task's behavior against the baseline's known-good execution rather than relying solely on heuristic rules.
+
+3. **Enhanced Model Comparison** — An upgraded comparison view where 2+ selected tasks are compared across both operational metrics (cost, tokens, time) and behavioral test results. When a baseline is selected, it becomes the fixed reference column that all other tasks are measured against.
 
 ### 1.3 Design Principle
 
-All tests are **deterministic and heuristic** — no secondary LLM calls. Tests run against the event trace already stored in SQLite. Some patterns use **configurable rules** (keyword lists, allowed tool sets) that the user can customize.
+All tests are **deterministic and heuristic** — no secondary LLM calls. Tests run against the event trace already stored in SQLite. Some patterns use **configurable rules** (keyword lists, allowed tool sets) that the user can customize. When a baseline session is available, the baseline's actual behavior becomes the ground truth, replacing or augmenting heuristic rules.
 
 ---
+
+## 2. Baseline Sessions
+
+### 2.1 Concept
+
+A **Baseline Session** is any task that the user explicitly marks as a reference-quality execution. It represents "this is how the task *should* be done" — the right tools were called, in the right order, producing a good result.
+
+From the baseline, the system automatically extracts a **Benchmark Set**:
+
+| Extracted Component | What It Captures | Used By |
+|-------------------|-----------------|--------|
+| **Prompt Chain** | Every user message, in order, from task start to finish | Baselines page (copy-ready), reproduction |
+| **Expected Tools** | The distinct set of tools the baseline session used | Pattern 1 (Tool Invocation Assertion) |
+| **Tool Sequence** | The ordered list of tool calls with file paths | Pattern 3 (Multi-Step Trace Verification) |
+| **Behavior Contract** | Structural properties of the baseline's output (keywords, length, code blocks) | Pattern 2 (Behavior Contract Validation) |
+| **Scope Boundary** | The set of tools and file paths accessed | Pattern 4 (Scope Enforcement) |
+| **Operational Metrics** | Cost, tokens, duration, errors, context usage | Enhanced Comparison (reference column) |
+| **Activity Category** | The classifier's categorization of the task | Filtering and grouping |
+
+### 2.2 Marking a Baseline
+
+**From the Sessions view:**
+1. User selects a single task (checkbox)
+2. Action bar shows a new **"⚑ Set as Baseline"** button
+3. On click, a modal appears:
+   - Shows task summary (model, cost, status, prompt preview)
+   - Asks for an optional **Baseline Name** (e.g., "Add login feature — Claude reference")
+   - Asks for optional **Tags** (e.g., `coding`, `react`, `auth`)
+   - Confirm button: "Create Baseline"
+4. Task is marked as baseline in SQLite
+5. Benchmark set is extracted and cached
+
+**From the Timeline/Investigate/Eval views:**
+- A **"⚑ Set as Baseline"** button in the view header (same flow)
+
+**Constraints:**
+- Only tasks with status `completed` can be baselines (you don't want a failed/interrupted task as reference)
+- A task can be both a baseline AND a regular task — marking it doesn't remove it from normal views
+- Multiple baselines can exist — one per "type" of task
+- Baselines can be unmarked/deleted from the Baselines page
+
+### 2.3 Benchmark Set — Data Model
+
+```typescript
+interface Baseline {
+  id: string;                    // Same as the task_id
+  name: string;                  // User-given name
+  tags: string[];                // User-defined tags for filtering
+  created_at: number;            // When the baseline was created
+  task_id: string;               // Source task ID
+  model_id: string;              // Model used in baseline
+  source: string;                // IDE source
+  activity_category: string;     // From classifier
+}
+
+interface BenchmarkSet {
+  baseline_id: string;
+  
+  // Prompt Chain — every user message in order
+  prompts: Array<{
+    index: number;               // 0-based order
+    text: string;                // Full prompt text
+    ts: number;                  // Timestamp
+    response_preview: string;    // First 300 chars of agent response after this prompt
+    tools_after: string[];       // Tools called between this prompt and the next
+  }>;
+  
+  // Expected tool set
+  expected_tools: string[];      // Distinct tools used
+  
+  // Ordered tool sequence with context
+  tool_sequence: Array<{
+    index: number;
+    tool_name: string;
+    file_path: string | null;    // If the tool operated on a file
+    command: string | null;      // If it was a command execution
+  }>;
+  
+  // Auto-derived behavior contract
+  behavior_contract: {
+    has_code_block: boolean;
+    output_keywords: string[];   // Top keywords from baseline's final output
+    output_min_length: number;
+    output_max_length: number;
+    forbidden_phrases: string[]; // Default empty
+  };
+  
+  // Operational reference metrics
+  reference_metrics: {
+    cost: number;
+    tokens_in: number;
+    tokens_out: number;
+    cache_reads: number;
+    duration: number;
+    api_calls: number;
+    tool_calls: number;
+    error_count: number;
+    has_context_reset: boolean;
+  };
+}
+```
+
+### 2.4 SQLite Schema — New Tables
+
+```sql
+CREATE TABLE IF NOT EXISTS baselines (
+  id TEXT PRIMARY KEY,              -- Same as task_id
+  task_id TEXT NOT NULL,
+  name TEXT,                        -- User-given name
+  tags TEXT,                        -- JSON array of tag strings
+  model_id TEXT,
+  source TEXT,
+  activity_category TEXT,
+  created_at INTEGER,
+  
+  -- Cached benchmark set (JSON blobs for fast retrieval)
+  prompts_json TEXT,                -- JSON: Array of prompt objects
+  expected_tools_json TEXT,         -- JSON: Array of tool names
+  tool_sequence_json TEXT,          -- JSON: Array of {tool, path, command}
+  behavior_contract_json TEXT,      -- JSON: Contract rules
+  reference_metrics_json TEXT,      -- JSON: Operational metrics snapshot
+  
+  FOREIGN KEY (task_id) REFERENCES tasks(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_baselines_category ON baselines(activity_category);
+CREATE INDEX IF NOT EXISTS idx_baselines_model ON baselines(model_id);
+```
+
+### 2.5 Prompt Chain Extraction
+
+The most valuable output of a baseline is the **prompt chain** — every user message from start to finish. This lets users reproduce the exact task with a different model.
+
+**Extraction logic:**
+
+1. Walk events in chronological order (`ts ASC`)
+2. Collect every event where:
+   - `type = 'say'` AND `sub_type = 'text'` AND the event is a user message (first `text` event before an `api_req_started`)
+   - OR `sub_type = 'user_feedback'` (mid-task corrections)
+3. For each prompt, also capture:
+   - The agent's response (next `text` event after the prompt's `api_req_started`)
+   - The tools called between this prompt and the next prompt
+4. Store as an ordered array in `prompts_json`
+
+**Edge case: Single-prompt tasks**
+- Most coding tasks have just one prompt (the `first_message`)
+- Multi-turn tasks (debugging, iteration) will have multiple prompts
+- The extraction captures both scenarios
+
+### 2.6 Baselines Page (`#/baselines`)
+
+A dedicated dashboard view showing all baseline sessions.
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  BASELINES                                            [ + New ]    │
+│  Reference sessions for behavioral testing & model comparison      │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  ┌─ Add login feature — Claude reference ──────── coding ─────┐    │
+│  │                                                             │    │
+│  │  Model: anthropic/claude-sonnet-4  │  Cost: $0.23           │    │
+│  │  Duration: 4m 12s  │  Tools: 14  │  Errors: 0              │    │
+│  │  Source: VS Code Insiders  │  Created: Jun 1, 2026          │    │
+│  │  Tags: [coding] [react] [auth]                              │    │
+│  │                                                             │    │
+│  │  PROMPT CHAIN (3 prompts)                                   │    │
+│  │  ┌──────────────────────────────────────────────────────┐   │    │
+│  │  │ Prompt 1 of 3                              [Copy 📋] │   │    │
+│  │  │                                                      │   │    │
+│  │  │ Add a login page to the React app using Firebase      │   │    │
+│  │  │ authentication. Use the existing theme colors and     │   │    │
+│  │  │ add form validation with error messages.              │   │    │
+│  │  │                                                      │   │    │
+│  │  │ Agent used: readFile × 3, editedExistingFile × 2     │   │    │
+│  │  ├──────────────────────────────────────────────────────┤   │    │
+│  │  │ Prompt 2 of 3                              [Copy 📋] │   │    │
+│  │  │                                                      │   │    │
+│  │  │ The error message div is not centered. Also add a     │   │    │
+│  │  │ "forgot password" link below the form.                │   │    │
+│  │  │                                                      │   │    │
+│  │  │ Agent used: readFile × 1, editedExistingFile × 1     │   │    │
+│  │  ├──────────────────────────────────────────────────────┤   │    │
+│  │  │ Prompt 3 of 3                              [Copy 📋] │   │    │
+│  │  │                                                      │   │    │
+│  │  │ Add unit tests for the login component using Jest.    │   │    │
+│  │  │                                                      │   │    │
+│  │  │ Agent used: newFileCreated × 1, command × 1 (npm test)│   │    │
+│  │  └──────────────────────────────────────────────────────┘   │    │
+│  │                                                             │    │
+│  │  [Copy All Prompts]  [View Timeline]  [Test Against This]   │    │
+│  │  [Compare Models]  [Delete Baseline]                        │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+│                                                                     │
+│  ┌─ Fix pagination bug — GPT reference ──────── debugging ────┐    │
+│  │  ...                                                        │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Page features:**
+
+| Feature | Description |
+|---------|-------------|
+| **Prompt chain display** | Each prompt shown in a card with copy button, agent action summary between prompts |
+| **Copy All Prompts** | Copies all prompts as a numbered list to clipboard for re-use in another model |
+| **Copy individual prompt** | Copy a single prompt to clipboard |
+| **View Timeline** | Deep-link to the baseline task's timeline view |
+| **Test Against This** | Navigate to session selector with this baseline pre-selected as reference |
+| **Compare Models** | Navigate to enhanced compare with this baseline as the reference column |
+| **Delete Baseline** | Remove baseline (doesn't delete the task, just unmarks it) |
+| **Search & Filter** | Search by name/tags, filter by model, category, date |
+| **Benchmark summary** | Expandable section showing extracted tools, sequence, and auto-derived contract |
+
+### 2.7 How Baselines Feed into Testing
+
+When a user runs behavioral tests on a task, they can optionally select a baseline to test against:
+
+| Pattern | Without Baseline | With Baseline |
+|---------|-----------------|---------------|
+| **Tool Invocation (TIA)** | Heuristic keyword→tool mapping | Compare against baseline's `expected_tools` — exact tool set match |
+| **Behavior Contract (BCV)** | Auto-inferred from activity category | Compare against baseline's `behavior_contract` — same keywords, same structure |
+| **Trace Verification (MTV)** | Generic rules (read before edit) | Compare against baseline's `tool_sequence` — same order of operations |
+| **Scope Enforcement (BSE)** | Known tool registry | Compare against baseline's scope — same tools, same file paths |
+| **Error Recovery (ERC)** | Generic analysis | Compare error count and recovery strategy against baseline (should be ≤ baseline errors) |
+| **Context Efficiency (CEC)** | Generic thresholds | Compare context usage against baseline (should be ≤ baseline context %) |
+
+This dramatically improves test accuracy — instead of guessing what tools should be used, you *know* from a proven execution.
+
+### 2.8 How Baselines Feed into Comparison
+
+In the Enhanced Compare view:
+- If a baseline is selected, it becomes the **fixed leftmost column** labeled "⚑ BASELINE"
+- All other tasks are compared against it with delta indicators:
+  - Cost: `$0.31 (+35%)` in red, or `$0.18 (-22%)` in green
+  - Duration: `6m 30s (+55%)` or `2m 45s (-35%)`
+  - Behavioral scores shown as delta from baseline
+- A **"Baseline Match %"** score at the top: how closely this task replicated the baseline's behavior
+
+### 2.9 Workflow: Testing a New Model Against a Baseline
+
+```mermaid
+flowchart TD
+    A["User has a successful task<br/>(e.g., Claude built login page)"] --> B["Mark as Baseline<br/>⚑ Set as Baseline"]
+    B --> C["System extracts Benchmark Set<br/>(prompts, tools, sequence, contract)"]
+    C --> D["Baselines page shows prompts<br/>with Copy buttons"]
+    D --> E["User copies prompts and runs<br/>same task in different model<br/>(e.g., GPT-5.4)"]
+    E --> F["New task appears in Sessions"]
+    F --> G{"Choose action"}
+    G -->|"Test against baseline"| H["Session Test view<br/>with baseline comparison"] 
+    G -->|"Compare"| I["Deep Compare view<br/>baseline as reference column"]
+    H --> J["See pass/fail for each pattern<br/>measured against baseline's behavior"]
+    I --> K["Side-by-side: baseline vs new task<br/>with delta indicators"]
+```
 
 ## 2. Session Behavioral Testing
 
@@ -387,19 +645,27 @@ At the top, a summary panel with:
 ### 3.3 Selection Flow
 
 From the Sessions view:
-1. User checks 2+ task checkboxes (existing behavior)
-2. **New**: Instead of just "Compare (N)", show two buttons:
+1. User checks 1 task checkbox:
+   - **⚑ Set as Baseline** — Mark as baseline (only if task is `completed`)
+   - **Test Session** — Run behavioral tests on this task
+   - **Investigate** / **Timeline** / **Evaluate** — Existing buttons
+2. User checks 2+ task checkboxes:
    - **Quick Compare** — Opens existing comparison view (fast, metrics only)
    - **Deep Compare** — Opens enhanced comparison with behavioral tests (runs test suite, slower)
-3. For single-task selection, show **Test Session** button (runs behavioral tests on that one task)
+   - **Deep Compare vs Baseline** — Opens baseline picker, then enhanced compare with baseline as reference column
+3. From the Baselines page:
+   - **Test Against This** — Opens session picker, then runs tests on selected task against this baseline
+   - **Compare Models** — Opens session multi-picker, then deep compare with this baseline as reference
 
 ### 3.4 Standalone Session Test View
 
-A new view at `#/test?task=ID` for single-task behavioral testing:
+A new view at `#/test?task=ID` or `#/test?task=ID&baseline=BID` for single-task behavioral testing:
 - Shows the task summary (model, cost, duration, prompt)
-- Runs all 6 test patterns
+- **Baseline selector**: Dropdown to pick a baseline (or "None — use heuristic rules")
+- Runs all 6 test patterns (against baseline if selected, else heuristic)
 - Displays results as an expandable accordion per pattern
 - Each pattern shows: status badge, score, evidence table, raw event data
+- When baseline is selected, evidence shows delta from baseline ("baseline used readFile 3x, this task used 5x")
 - A "Re-run with Custom Rules" button to load/edit `test-rules.yaml` overrides inline
 - Link to "Compare with another task" → navigates to enhanced compare
 
@@ -409,9 +675,20 @@ A new view at `#/test?task=ID` for single-task behavioral testing:
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/api/tasks/:id/test` | Run all behavioral tests on a single task |
-| `GET` | `/api/tasks/:id/test/:pattern` | Run a specific test pattern (`tia`, `bcv`, `mtv`, `bse`, `erc`, `cec`) |
-| `POST` | `/api/tasks/compare` | Body: `{ task_ids: [...], include_tests: true }` — Fetch comparison data with optional behavioral tests |
+| **Baselines** | | |
+| `GET` | `/api/baselines` | List all baselines (with optional `?category=` and `?model=` filters) |
+| `GET` | `/api/baselines/:id` | Get a single baseline with full benchmark set |
+| `POST` | `/api/baselines` | Create a baseline from a task. Body: `{ task_id, name, tags }` |
+| `PUT` | `/api/baselines/:id` | Update baseline name/tags |
+| `DELETE` | `/api/baselines/:id` | Delete a baseline (doesn't delete the task) |
+| `GET` | `/api/baselines/:id/prompts` | Get just the prompt chain (lightweight, for copy) |
+| `POST` | `/api/baselines/:id/re-extract` | Re-extract benchmark set from the source task |
+| **Testing** | | |
+| `GET` | `/api/tasks/:id/test` | Run all behavioral tests. Optional `?baseline=ID` for baseline-aware testing |
+| `GET` | `/api/tasks/:id/test/:pattern` | Run a specific test pattern (`tia`, `bcv`, `mtv`, `bse`, `erc`, `cec`). Optional `?baseline=ID` |
+| **Comparison** | | |
+| `POST` | `/api/tasks/compare` | Body: `{ task_ids, baseline_id?, include_tests }` — Fetch comparison data with optional baseline reference |
+| **Config** | | |
 | `GET` | `/api/test-rules` | Get current test rules configuration |
 | `PUT` | `/api/test-rules` | Update test rules configuration |
 | `GET` | `/api/tools/registry` | Get the known tool universe (all distinct tool_names from events) |
@@ -424,6 +701,9 @@ A new view at `#/test?task=ID` for single-task behavioral testing:
 
 | File | Purpose |
 |------|---------|
+| `server/baselines/extract.js` | Benchmark set extractor — tools, sequence, contract from task events |
+| `server/baselines/prompts.js` | Prompt chain extractor — walks events to find all user messages |
+| `server/routes/baselines.js` | Express routes for baseline CRUD + prompt retrieval |
 | `server/testing/index.js` | Test runner orchestrator — runs all patterns for a task |
 | `server/testing/tia.js` | Tool Invocation Assertion implementation |
 | `server/testing/bcv.js` | Behavior Contract Validation implementation |
@@ -439,20 +719,22 @@ A new view at `#/test?task=ID` for single-task behavioral testing:
 
 | File | Changes |
 |------|---------|
-| `server/index.js` | Register new `/api/tasks/:id/test` and `/api/test-rules` routes |
+| `server/index.js` | Register new `/api/baselines`, `/api/tasks/:id/test`, and `/api/test-rules` routes |
+| `server/cache/db.js` | Add `baselines` table to schema, add baseline CRUD helpers |
 | `server/routes/tasks.js` | Add `/compare` POST endpoint |
-| `src/js/app.js` | Register new `test` and `deepcompare` routes |
-| `src/js/api.js` | Add `testTask()`, `compareDeep()`, `getTestRules()` API methods |
-| `src/js/views/sessions.js` | Add "Test Session" and "Deep Compare" buttons to action bar |
+| `src/js/app.js` | Register new `baselines`, `test`, and `deepcompare` routes |
+| `src/js/api.js` | Add `baselines()`, `createBaseline()`, `testTask()`, `compareDeep()`, `getTestRules()` API methods |
+| `src/js/views/sessions.js` | Add "⚑ Set as Baseline", "Test Session", and "Deep Compare" buttons to action bar |
 | `src/js/views/compare.js` | Enhance with behavioral test results, token breakdown, context info |
-| `src/index.html` | Add nav items for new views |
+| `src/index.html` | Add nav items for Baselines + Test under new "Testing" sidebar section |
 
 ### 5.3 Frontend Files (New)
 
 | File | Purpose |
 |------|---------|
-| `src/js/views/test.js` | Session Behavioral Test view (single task) |
-| `src/js/views/deep-compare.js` | Enhanced comparison view with behavioral tests |
+| `src/js/views/baselines.js` | Baselines page — list, prompt chains, copy, manage |
+| `src/js/views/test.js` | Session Behavioral Test view (single task, optional baseline) |
+| `src/js/views/deep-compare.js` | Enhanced comparison view with behavioral tests + baseline reference |
 
 ---
 
@@ -612,37 +894,51 @@ Where Operational Score considers: completion (30%), cost efficiency (25%), spee
 | **Compare view** (`#/compare`) | Enhanced compare replaces or extends the existing compare. Existing quick-compare can remain as a lightweight option. |
 | **Investigate view** (`#/investigate`) | Test evidence can deep-link into Investigate for raw event inspection. |
 | **Classifier** (`classifier.js`) | Activity categories feed auto-inferred behavior contracts (Pattern 2). |
-| **Sessions view** (`#/sessions`) | New action bar buttons: "Test Session" (1 selected) and "Deep Compare" (2+ selected). |
+| **Sessions view** (`#/sessions`) | New action bar buttons: "⚑ Set as Baseline" (1 selected, completed), "Test Session" (1 selected), and "Deep Compare" (2+ selected). |
+| **Timeline view** (`#/timeline`) | "⚑ Set as Baseline" button in header for quick baseline creation. |
+| **Baselines page** (`#/baselines`) | New dedicated page — shows all baselines with copy-ready prompt chains and benchmark summaries. Navigable from sidebar under a new "Testing" section. |
 
 ---
 
 ## 10. Implementation Phases
 
-### Phase 1: Core Test Engine
+### Phase 1: Baseline System
+- Add `baselines` table to SQLite schema (`server/cache/db.js`)
+- Build benchmark set extraction logic (`server/baselines/extract.js`)
+- Build prompt chain extractor (`server/baselines/prompts.js`)
+- Add baseline CRUD API endpoints (`server/routes/baselines.js`)
+- Build Baselines page (`src/js/views/baselines.js`) with prompt display + copy buttons
+- Add "⚑ Set as Baseline" button to Sessions action bar and Timeline/Investigate/Eval headers
+- Add "Baselines" nav item in sidebar under new "Testing" section
+
+### Phase 2: Core Test Engine
 - Build test runner framework (`server/testing/`)
 - Implement Pattern 1 (TIA) and Pattern 4 (BSE) — simplest, pure tool-name checking
-- Add `/api/tasks/:id/test` endpoint
+- Add baseline-aware test mode (compare against baseline's extracted tools/scope)
+- Add `/api/tasks/:id/test` endpoint with optional `?baseline=ID` param
 - Build Session Test view (`#/test`)
 - Default rules (no config file needed yet)
 
-### Phase 2: Advanced Patterns
-- Implement Pattern 2 (BCV) — needs output extraction + contract matching
-- Implement Pattern 3 (MTV) — needs sequence analysis with path matching
+### Phase 3: Advanced Patterns
+- Implement Pattern 2 (BCV) — needs output extraction + contract matching + baseline contracts
+- Implement Pattern 3 (MTV) — needs sequence analysis with path matching + baseline sequence diff
 - Implement Pattern 5 (ERC) — needs error-adjacency analysis
-- Implement Pattern 6 (CEC) — needs context_pct progression analysis
+- Implement Pattern 6 (CEC) — needs context_pct progression analysis + baseline reference
 
-### Phase 3: Enhanced Comparison
+### Phase 4: Enhanced Comparison
 - Build Deep Compare view (`#/deepcompare`)
+- Add baseline as fixed reference column with delta indicators
 - Add all operational metrics to comparison
 - Add behavioral test matrix to comparison
 - Add tool sequence visual diff
-- Add summary panel with winner badge
+- Add summary panel with winner badge and "Baseline Match %"
 
-### Phase 4: Configuration & Polish
+### Phase 5: Configuration & Polish
 - Build `test-rules.yaml` loader/editor
 - Add in-dashboard rules editor UI
 - Add custom contract builder
 - Add export comparison results (PDF/CSV)
+- Baseline management (edit name/tags, bulk delete, re-extract benchmark)
 - Performance optimization for large comparisons
 
 ---
@@ -658,3 +954,13 @@ Where Operational Score considers: completion (30%), cost efficiency (25%), spee
 4. **Comparison grouping**: Should the enhanced compare support grouping tasks by model for aggregate comparison ("all Claude tasks vs all GPT tasks"), or only individual task-to-task comparison?
 
 5. **Auto-run on parse**: Should behavioral tests run automatically when new tasks are parsed (and store results), or only on-demand when the user opens the Test/Compare view?
+
+6. **Baseline similarity matching**: Should the system suggest which baseline to compare against based on prompt similarity (fuzzy match on `first_message`)? Or should the user always manually pick a baseline?
+
+7. **Benchmark set staleness**: When the underlying task data is re-parsed (e.g., after a `POST /api/refresh`), should baselines be re-extracted automatically, or should the cached benchmark set be treated as immutable once created?
+
+8. **Baseline sharing**: Should baselines be exportable (as JSON) so users can share benchmark sets with team members or across machines?
+
+9. **Multi-baseline comparison**: Should the Compare view support having *multiple* baselines in the reference column (e.g., "show me how Claude, GPT, and Gemini each compared against this baseline AND this other baseline")?
+
+10. **Prompt chain editing**: On the Baselines page, should users be able to *edit* the extracted prompts before copying them (e.g., to generalize a prompt that was too project-specific)?
