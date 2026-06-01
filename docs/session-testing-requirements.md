@@ -853,7 +853,7 @@ Weighted average of non-skipped patterns:
 | Error Recovery | 10% | Resilience |
 | Context Efficiency | 10% | Cost optimization |
 
-Weights are configurable in `test-rules.yaml`.
+Weights are configurable via the test rules settings in SQLite (editable from the dashboard UI).
 
 ### 7.3 Combined Score (for comparison)
 
@@ -865,28 +865,160 @@ Where Operational Score considers: completion (30%), cost efficiency (25%), spee
 
 ---
 
-## 8. Non-Functional Requirements
+## 8. Test Result Storage & Benchmarks History
 
-### 8.1 Performance
+### 8.1 Persisted Test Results
+
+Test results are stored in SQLite for historical tracking. Each test run is uniquely identified by the combination of task, baseline (if any), model, and run date.
+
+**Smart re-test behavior:**
+- When a user clicks "Test" on a task, the system checks if a stored result exists for the same task + same baseline.
+- If yes → navigate directly to the stored result page (no re-computation).
+- If the user wants a different baseline (or no baseline) → run fresh tests and store as a new result.
+- Users can always force a re-run from the result page ("Re-run Tests" button).
+
+### 8.2 SQLite Schema — Test Results
+
+```sql
+CREATE TABLE IF NOT EXISTS test_results (
+  id TEXT PRIMARY KEY,                -- UUID or task_id + baseline_id + timestamp hash
+  task_id TEXT NOT NULL,
+  baseline_id TEXT,                   -- NULL if tested without baseline
+  model_id TEXT,                      -- Model used in the tested task
+  model_version TEXT,                 -- Provider-specific version if available
+  run_ts INTEGER NOT NULL,            -- When the test was executed
+  overall_score INTEGER,              -- 0-100 weighted average
+  
+  -- Per-pattern results (JSON blobs)
+  tia_status TEXT,                    -- 'pass' | 'warn' | 'fail' | 'skip'
+  tia_score INTEGER,
+  tia_evidence_json TEXT,
+  bcv_status TEXT,
+  bcv_score INTEGER,
+  bcv_evidence_json TEXT,
+  mtv_status TEXT,
+  mtv_score INTEGER,
+  mtv_evidence_json TEXT,
+  bse_status TEXT,
+  bse_score INTEGER,
+  bse_evidence_json TEXT,
+  erc_status TEXT,
+  erc_score INTEGER,
+  erc_evidence_json TEXT,
+  cec_status TEXT,
+  cec_score INTEGER,
+  cec_evidence_json TEXT,
+  
+  -- Snapshot of key operational metrics at test time
+  task_cost REAL,
+  task_duration INTEGER,
+  task_tokens_in INTEGER,
+  task_tokens_out INTEGER,
+  task_errors INTEGER,
+  task_status TEXT,
+  
+  FOREIGN KEY (task_id) REFERENCES tasks(id),
+  FOREIGN KEY (baseline_id) REFERENCES baselines(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_test_results_task ON test_results(task_id);
+CREATE INDEX IF NOT EXISTS idx_test_results_baseline ON test_results(baseline_id);
+CREATE INDEX IF NOT EXISTS idx_test_results_model ON test_results(model_id);
+CREATE INDEX IF NOT EXISTS idx_test_results_ts ON test_results(run_ts DESC);
+```
+
+### 8.3 Test Benchmarks Page (`#/benchmarks`)
+
+A dedicated page showing all historical test results — the "test history" view.
+
+```
+┌───────────────────────────────────────────────────────────────────────────┐
+│  TEST BENCHMARKS                                              [Export]   │
+│  Historical behavioral test results across sessions and models           │
+├───────────────────────────────────────────────────────────────────────────┤
+│  Filters: [Model ▾] [Baseline ▾] [Category ▾] [Date Range ▾]            │
+├──────┬──────────────┬──────────────┬────────┬──────┬──────┬──────────────┤
+│ Date │ Task         │ Model        │ Baseline│Score│ Cost │ Status       │
+├──────┼──────────────┼──────────────┼────────┼──────┼──────┼──────────────┤
+│ Jun 1│ Add login... │ claude-s-4   │ ⚑ Base │ 92% │$0.23 │ ✅✅⚠✅✅⚠   │
+│ Jun 1│ Add login... │ gpt-5.4-mini │ ⚑ Base │ 78% │$0.08 │ ✅⚠❌✅⚠✅   │
+│ Jun 1│ Add login... │ gemini-2.5   │ ⚑ Base │ 62% │$0.31 │ ❌⚠✅❌✅✅   │
+│ May 30│Fix paging...│ claude-s-4   │ — None │ 88% │$0.12 │ ✅✅✅✅⚠✅   │
+│ ...  │              │              │        │      │      │              │
+├──────┴──────────────┴──────────────┴────────┴──────┴──────┴──────────────┤
+│ Click any row to view full test result details                           │
+└───────────────────────────────────────────────────────────────────────────┘
+```
+
+**Features:**
+- Filterable by model, baseline, activity category, date range
+- Each row shows the 6 pattern statuses as compact icons (✅⚠❌)
+- Click row → opens the stored test result detail page
+- **Export** → generates an HTML report of filtered results
+- Trend chart at top: overall scores over time, grouped by model
+- Since results are stored with model version, you can track "is Claude 4 getting better at trace ordering across updates?"
+
+### 8.4 HTML Report Export
+
+Both session test results and comparison results can be exported as **self-contained HTML files**:
+
+**Test Result Report** (`pq-test-report-<task_id>-<date>.html`):
+- Task summary (model, cost, duration, status)
+- Baseline info (if tested against one)
+- All 6 pattern results with scores, status badges, and evidence
+- Operational metrics snapshot
+- Styled with inline CSS matching the dashboard theme
+
+**Comparison Report** (`pq-compare-report-<date>.html`):
+- All compared tasks in a matrix layout
+- Behavioral test results per task
+- Operational metrics comparison with delta bars
+- Baseline reference column (if used)
+- Tool sequence diff
+- Winner summary
+
+**Implementation:**
+- Server-side endpoint generates HTML string using template literals
+- No external dependencies — all CSS is inlined
+- Browser downloads via `Content-Disposition: attachment` header
+- Reports are shareable — recipients don't need PQ Dashboard installed
+
+### 8.5 API Endpoints for Results & Export
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/test-results` | List all stored test results (with filters) |
+| `GET` | `/api/test-results/:id` | Get a single stored test result |
+| `DELETE` | `/api/test-results/:id` | Delete a stored test result |
+| `GET` | `/api/test-results/:id/export` | Export a test result as HTML report |
+| `POST` | `/api/tasks/compare/export` | Body: `{ task_ids, baseline_id? }` → Export comparison as HTML report |
+
+---
+
+## 9. Non-Functional Requirements
+
+### 9.1 Performance
 - Test execution for a single task must complete in < 2 seconds
 - Comparison of 5 tasks with behavioral tests must complete in < 10 seconds
-- All test results are computed on-demand (not cached), since event data doesn't change after parsing
-- Optional: Cache test results in SQLite if repeat lookups become slow
+- Stored test results are served instantly from SQLite (no re-computation)
+- HTML report generation must complete in < 3 seconds
 
-### 8.2 Configuration
-- Default rules work out-of-the-box (no config needed for first use)
-- `test-rules.yaml` is optional — loaded from project root if present
-- Rules editable from the dashboard UI (inline YAML editor or form-based)
+### 9.2 Configuration
+- All test rules stored in **SQLite** (editable from dashboard UI)
+- Default rules seeded on first use (no config file needed)
+- Rules editable from the dashboard UI via a form-based editor
+- No external YAML file required (simpler setup)
 
-### 8.3 Design
+### 9.3 Design
 - Follow existing PQ Dashboard aesthetic (dark theme, glassmorphism, Inter font)
 - Test results use consistent color coding: green (pass), amber (warn), red (fail), grey (skip)
 - Expandable evidence sections to keep the UI clean
 - Comparison matrix scrollable horizontally for 4+ tasks
+- HTML reports styled to match dashboard theme (standalone, no external CSS)
 
 ---
 
-## 9. Relationship to Existing Features
+## 10. Relationship to Existing Features
 
 | Existing Feature | Relationship |
 |-----------------|-------------|
@@ -896,71 +1028,71 @@ Where Operational Score considers: completion (30%), cost efficiency (25%), spee
 | **Classifier** (`classifier.js`) | Activity categories feed auto-inferred behavior contracts (Pattern 2). |
 | **Sessions view** (`#/sessions`) | New action bar buttons: "⚑ Set as Baseline" (1 selected, completed), "Test Session" (1 selected), and "Deep Compare" (2+ selected). |
 | **Timeline view** (`#/timeline`) | "⚑ Set as Baseline" button in header for quick baseline creation. |
-| **Baselines page** (`#/baselines`) | New dedicated page — shows all baselines with copy-ready prompt chains and benchmark summaries. Navigable from sidebar under a new "Testing" section. |
+| **Baselines page** (`#/baselines`) | New dedicated page — shows all baselines with copy-ready prompt chains (editable before copy) and benchmark summaries. |
+| **Test Benchmarks** (`#/benchmarks`) | New dedicated page — shows all stored test results with filters, trend charts, and export. |
 
 ---
 
-## 10. Implementation Phases
+## 11. Implementation Phases
 
 ### Phase 1: Baseline System
 - Add `baselines` table to SQLite schema (`server/cache/db.js`)
 - Build benchmark set extraction logic (`server/baselines/extract.js`)
 - Build prompt chain extractor (`server/baselines/prompts.js`)
 - Add baseline CRUD API endpoints (`server/routes/baselines.js`)
-- Build Baselines page (`src/js/views/baselines.js`) with prompt display + copy buttons
+- Build Baselines page (`src/js/views/baselines.js`) with prompt display + copy buttons + inline editing
 - Add "⚑ Set as Baseline" button to Sessions action bar and Timeline/Investigate/Eval headers
 - Add "Baselines" nav item in sidebar under new "Testing" section
 
-### Phase 2: Core Test Engine
+### Phase 2: Core Test Engine + Result Storage
 - Build test runner framework (`server/testing/`)
 - Implement Pattern 1 (TIA) and Pattern 4 (BSE) — simplest, pure tool-name checking
 - Add baseline-aware test mode (compare against baseline's extracted tools/scope)
+- Add `test_results` table to SQLite schema
 - Add `/api/tasks/:id/test` endpoint with optional `?baseline=ID` param
-- Build Session Test view (`#/test`)
-- Default rules (no config file needed yet)
+- Implement smart redirect: check for existing results before re-running
+- Build Session Test view (`#/test`) with result detail page
+- Seed default test rules in SQLite on first use
 
-### Phase 3: Advanced Patterns
+### Phase 3: Advanced Patterns + Benchmarks Page
 - Implement Pattern 2 (BCV) — needs output extraction + contract matching + baseline contracts
-- Implement Pattern 3 (MTV) — needs sequence analysis with path matching + baseline sequence diff
+- Implement Pattern 3 (MTV) — needs sequence analysis with fuzzy path matching + baseline sequence diff
 - Implement Pattern 5 (ERC) — needs error-adjacency analysis
 - Implement Pattern 6 (CEC) — needs context_pct progression analysis + baseline reference
+- Build Test Benchmarks page (`#/benchmarks`) — historical test results with filters and trend charts
 
 ### Phase 4: Enhanced Comparison
 - Build Deep Compare view (`#/deepcompare`)
 - Add baseline as fixed reference column with delta indicators
+- Support multi-baseline comparison (multiple baselines as reference columns from stored data)
 - Add all operational metrics to comparison
 - Add behavioral test matrix to comparison
 - Add tool sequence visual diff
 - Add summary panel with winner badge and "Baseline Match %"
 
-### Phase 5: Configuration & Polish
-- Build `test-rules.yaml` loader/editor
-- Add in-dashboard rules editor UI
+### Phase 5: Export, Config & Polish
+- Build HTML report export for test results and comparison results
+- Add `/api/test-results/:id/export` and `/api/tasks/compare/export` endpoints
+- Build test rules editor UI (SQLite-backed, form-based)
 - Add custom contract builder
-- Add export comparison results (PDF/CSV)
-- Baseline management (edit name/tags, bulk delete, re-extract benchmark)
+- Baseline management (edit name/tags, re-extract benchmark, prompt editing)
 - Performance optimization for large comparisons
 
 ---
 
-## 11. Open Questions
+## 12. Resolved Design Decisions
 
-1. **Rule persistence**: Should test rules be stored in YAML (file) or SQLite (database)? YAML is more portable and git-friendly; SQLite is easier to edit from the dashboard.
+> These questions were raised during requirements drafting and resolved with stakeholder input.
 
-2. **Path matching for MTV**: Pattern 3 needs to match file paths across read→edit sequences. Should we do exact path match, or fuzzy match (same directory, similar filename)?
-
-3. **Historical test results**: Should we store test results in SQLite for trend analysis ("is model X getting better over time at trace ordering?"), or always compute on-demand?
-
-4. **Comparison grouping**: Should the enhanced compare support grouping tasks by model for aggregate comparison ("all Claude tasks vs all GPT tasks"), or only individual task-to-task comparison?
-
-5. **Auto-run on parse**: Should behavioral tests run automatically when new tasks are parsed (and store results), or only on-demand when the user opens the Test/Compare view?
-
-6. **Baseline similarity matching**: Should the system suggest which baseline to compare against based on prompt similarity (fuzzy match on `first_message`)? Or should the user always manually pick a baseline?
-
-7. **Benchmark set staleness**: When the underlying task data is re-parsed (e.g., after a `POST /api/refresh`), should baselines be re-extracted automatically, or should the cached benchmark set be treated as immutable once created?
-
-8. **Baseline sharing**: Should baselines be exportable (as JSON) so users can share benchmark sets with team members or across machines?
-
-9. **Multi-baseline comparison**: Should the Compare view support having *multiple* baselines in the reference column (e.g., "show me how Claude, GPT, and Gemini each compared against this baseline AND this other baseline")?
-
-10. **Prompt chain editing**: On the Baselines page, should users be able to *edit* the extracted prompts before copying them (e.g., to generalize a prompt that was too project-specific)?
+| # | Question | Decision | Impact |
+|---|----------|----------|--------|
+| 1 | **Rule persistence** — YAML file or SQLite? | **SQLite** — easier to edit from dashboard UI, no external file to manage. Default rules seeded on first use. | No `test-rules.yaml` file needed. Rules table in SQLite. Form-based editor in UI. |
+| 2 | **Path matching for MTV** — exact or fuzzy? | **Fuzzy-first with exact preferred** — try exact path match first; if no match, fall back to fuzzy (same filename in different directory, basename match). This catches refactoring scenarios where files move. | Pattern 3 implementation uses a two-pass matching algorithm. |
+| 3 | **Historical test results** — store or compute? | **Store in SQLite** — each result uniquely identified by task + baseline + model + run timestamp. New `test_results` table. New **Test Benchmarks page** (`#/benchmarks`) to browse history. | New table, new page, new API endpoints for results. |
+| 4 | **Comparison grouping** — aggregate or individual? | **Individual only** — compare specific tasks, not model aggregates. Keeps the UI focused and the data meaningful. | No aggregate comparison mode. |
+| 5 | **Auto-run vs on-demand** | **On-demand** — tests run only when user explicitly requests. But if a result already exists for the same task + same baseline, **navigate to the stored result** instead of re-running. User can force re-run from the result page. Different baseline = new run. | Smart redirect logic in test endpoint + frontend. |
+| 6 | **Baseline similarity matching** | **Manual** — user always explicitly picks which baseline to test/compare against. No auto-suggestion. | Simpler implementation, no fuzzy matching needed for baseline selection. |
+| 7 | **Benchmark set staleness** | **Immutable once created** — benchmark sets are cached at creation time and not re-extracted on data refresh. User can manually re-extract via "Re-extract Benchmark" button on Baselines page if needed. | Same as decision 5 — cached data is treated as stable snapshots. |
+| 8 | **Sharing/Export** | **Yes — HTML report export** for both test results and comparison results. Self-contained HTML files with inline CSS, shareable without PQ Dashboard. No JSON baseline export (out of scope for now). | New export endpoints, HTML template generation on server. |
+| 9 | **Multi-baseline comparison** | **Yes** — since test results are stored in SQLite with baseline IDs, the Compare view can show multiple baselines as reference columns. Query is straightforward. | Deep Compare supports multiple baseline columns. |
+| 10 | **Prompt chain editing** | **Yes** — on the Baselines page, users can edit extracted prompts inline before copying. Edits are saved to the baseline's `prompts_json`. Useful for generalizing project-specific prompts. | Baselines page gets inline text editing on prompt cards. |
