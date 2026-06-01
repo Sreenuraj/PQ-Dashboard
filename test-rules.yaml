@@ -1,0 +1,71 @@
+# PQ Dashboard - Behavioral Test Rules
+
+tool_invocation:
+  enabled: true
+  custom_mappings:
+    - keywords: ["read", "show", "view", "look at", "open"]
+      expected_tools: ["readFile", "Read", "read_file"]
+    - keywords: ["edit", "modify", "change", "update", "fix"]
+      expected_tools: ["editedExistingFile", "Edit", "write_to_file", "apply_diff"]
+    - keywords: ["create", "new file", "scaffold", "generate"]
+      expected_tools: ["newFileCreated", "Write", "write_to_file"]
+    - keywords: ["run", "execute", "npm", "pip", "build", "test"]
+      expected_tools: ["command", "Bash", "execute_command"]
+    - keywords: ["search", "find", "grep", "look for"]
+      expected_tools: ["searchFiles", "Grep", "GrepTool", "search_files"]
+    - keywords: ["list files", "directory", "ls"]
+      expected_tools: ["listFilesRecursive", "Glob", "list_files"]
+    - keywords: ["browser", "web", "url", "page"]
+      expected_tools: ["postqode_browser_agent"]
+
+behavior_contracts:
+  enabled: true
+  auto_infer: true
+  custom_contracts:
+    coding:
+      must_include: []
+      has_code_block: true
+      min_length: 80
+    debugging:
+      must_include_any: ["fix", "resolved", "found", "issue", "root cause"]
+      min_length: 80
+    testing:
+      must_include_any: ["test", "pass", "fail", "assert"]
+      min_length: 80
+
+trace_verification:
+  enabled: true
+  rules:
+    read_before_edit: true
+    think_before_act: true
+    test_after_edit: false
+    no_blind_writes: true
+    search_before_create: false
+
+scope_enforcement:
+  enabled: true
+  max_tool_calls: 100
+  no_destructive_commands: true
+  destructive_patterns:
+    - "rm -rf /"
+    - "drop table"
+    - "format c:"
+    - "sudo rm"
+  workspace_only: true
+
+error_recovery:
+  enabled: true
+  max_blind_retries: 2
+
+context_efficiency:
+  enabled: true
+  warn_threshold: 70
+  critical_threshold: 90
+
+weights:
+  tia: 25
+  bcv: 15
+  mtv: 20
+  bse: 20
+  erc: 10
+  cec: 10

@@ -18,6 +18,22 @@ export async function post(path, body = {}) {
   return res.json();
 }
 
+export async function put(path, body = {}) {
+  const res = await fetch(`${API}${path}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) throw new Error(`API error ${res.status}`);
+  return res.json();
+}
+
+export async function del(path) {
+  const res = await fetch(`${API}${path}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`API error ${res.status}`);
+  return res.json();
+}
+
 export const api = {
   overview:      (p={}) => get('/analytics/overview', p),
   models:        (p={}) => get('/analytics/models', p),
@@ -34,6 +50,18 @@ export const api = {
   task:          (id)   => get(`/tasks/${id}`),
   taskEvents:    (id,p={}) => get(`/tasks/${id}/events`, p),
   evaluate:      (id)   => get(`/tasks/${id}/evaluate`),
+  testTask:      (id,p={}) => get(`/tasks/${id}/test`, p),
+  testPattern:   (id,pattern,p={}) => get(`/tasks/${id}/test/${pattern}`, p),
+  compareDeep:   (body) => post('/tasks/compare', body),
+  baselines:     (p={}) => get('/baselines', p),
+  baseline:      (id)   => get(`/baselines/${id}`),
+  createBaseline:(body) => post('/baselines', body),
+  updateBaseline:(id,body) => put(`/baselines/${id}`, body),
+  deleteBaseline:(id)   => del(`/baselines/${id}`),
+  baselinePrompts:(id)  => get(`/baselines/${id}/prompts`),
+  getTestRules:  ()     => get('/test-rules'),
+  updateTestRules:(body)=> put('/test-rules', body),
+  toolsRegistry: ()     => get('/tools/registry'),
   refresh:       ()     => post('/refresh'),
   config:        ()     => get('/config'),
 };

@@ -17,9 +17,13 @@ let parsing = false;
 // ── Routes ──
 const tasksRouter = require('./routes/tasks')(db);
 const analyticsRouter = require('./routes/analytics')(db);
+const baselinesRouter = require('./routes/baselines')(db);
+const testingRouter = require('./routes/testing')(db);
 
+app.use('/api', testingRouter);
 app.use('/api/tasks', tasksRouter);
 app.use('/api/analytics', analyticsRouter);
+app.use('/api/baselines', baselinesRouter);
 
 // GET /api/config
 app.get('/api/config', (req, res) => res.json(config));

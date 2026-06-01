@@ -85,6 +85,67 @@ function initSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_tasks_start ON tasks(start_ts DESC);
     CREATE INDEX IF NOT EXISTS idx_tasks_source ON tasks(source);
     CREATE INDEX IF NOT EXISTS idx_task_models_model ON task_models(model_id);
+
+    CREATE TABLE IF NOT EXISTS baselines (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      name TEXT,
+      tags TEXT,
+      model_id TEXT,
+      source TEXT,
+      activity_category TEXT,
+      created_at INTEGER,
+      prompts_json TEXT,
+      expected_tools_json TEXT,
+      tool_sequence_json TEXT,
+      behavior_contract_json TEXT,
+      reference_metrics_json TEXT,
+      FOREIGN KEY (task_id) REFERENCES tasks(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_baselines_category ON baselines(activity_category);
+    CREATE INDEX IF NOT EXISTS idx_baselines_model ON baselines(model_id);
+
+    CREATE TABLE IF NOT EXISTS test_results (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      baseline_id TEXT,
+      model_id TEXT,
+      model_version TEXT,
+      run_ts INTEGER NOT NULL,
+      overall_score INTEGER,
+      tia_status TEXT,
+      tia_score INTEGER,
+      tia_evidence_json TEXT,
+      bcv_status TEXT,
+      bcv_score INTEGER,
+      bcv_evidence_json TEXT,
+      mtv_status TEXT,
+      mtv_score INTEGER,
+      mtv_evidence_json TEXT,
+      bse_status TEXT,
+      bse_score INTEGER,
+      bse_evidence_json TEXT,
+      erc_status TEXT,
+      erc_score INTEGER,
+      erc_evidence_json TEXT,
+      cec_status TEXT,
+      cec_score INTEGER,
+      cec_evidence_json TEXT,
+      task_cost REAL,
+      task_duration INTEGER,
+      task_tokens_in INTEGER,
+      task_tokens_out INTEGER,
+      task_errors INTEGER,
+      task_status TEXT,
+      FOREIGN KEY (task_id) REFERENCES tasks(id),
+      FOREIGN KEY (baseline_id) REFERENCES baselines(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_test_results_task ON test_results(task_id);
+    CREATE INDEX IF NOT EXISTS idx_test_results_baseline ON test_results(baseline_id);
+    CREATE INDEX IF NOT EXISTS idx_test_results_model ON test_results(model_id);
+    CREATE INDEX IF NOT EXISTS idx_test_results_ts ON test_results(run_ts DESC);
   `);
 
   // Schema migrations — add new columns to existing tables

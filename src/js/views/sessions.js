@@ -3,6 +3,7 @@ import { fmtCost, fmtDuration, fmtDate, fmtDateTime } from '../utils.js';
 
 let currentPage = 1;
 let selectedTasks = new Set();
+let visibleTasks = new Map();
 
 function updateActionBar() {
   const actionBar = document.getElementById('session-action-bar');
@@ -20,18 +21,29 @@ function updateActionBar() {
   const btnTimeline = document.getElementById('btn-timeline');
   const btnEvaluate = document.getElementById('btn-evaluate');
   const btnCompare = document.getElementById('btn-compare');
+  const btnBaseline = document.getElementById('btn-baseline');
+  const btnTest = document.getElementById('btn-test');
+  const btnDeepCompare = document.getElementById('btn-deep-compare');
 
   if (selectedTasks.size === 1) {
     btnInvestigate.style.display = 'block';
     btnTimeline.style.display = 'block';
     btnEvaluate.style.display = 'block';
+    btnTest.style.display = 'block';
     btnCompare.style.display = 'none';
+    btnDeepCompare.style.display = 'none';
+    const task = visibleTasks.get(Array.from(selectedTasks)[0]);
+    btnBaseline.style.display = task?.status === 'completed' ? 'block' : 'none';
   } else {
     btnInvestigate.style.display = 'none';
     btnTimeline.style.display = 'none';
     btnEvaluate.style.display = 'none';
+    btnTest.style.display = 'none';
+    btnBaseline.style.display = 'none';
     btnCompare.style.display = 'block';
+    btnDeepCompare.style.display = 'block';
     btnCompare.textContent = `Compare (${selectedTasks.size})`;
+    btnDeepCompare.textContent = `Deep Compare (${selectedTasks.size})`;
   }
 }
 
@@ -136,10 +148,14 @@ export async function renderSessions(container, dateRange = {}, queryParams = ne
         <button id="btn-investigate" class="action-btn primary" style="display:none;">Investigate</button>
         <button id="btn-timeline" class="action-btn secondary" style="display:none;">Timeline</button>
         <button id="btn-evaluate" class="action-btn secondary" style="display:none;">Evaluate</button>
+        <button id="btn-test" class="action-btn secondary" style="display:none;">Test Session</button>
+        <button id="btn-baseline" class="action-btn secondary" style="display:none;">⚑ Set as Baseline</button>
         <button id="btn-compare" class="action-btn primary" style="display:none;">Compare</button>
+        <button id="btn-deep-compare" class="action-btn primary" style="display:none;">Deep Compare</button>
         <button id="btn-clear-sel" class="action-btn ghost">Cancel</button>
       </div>
     </div>
+    <div id="baseline-modal-root"></div>
   `;
 
   // Action bar wiring
@@ -164,9 +180,24 @@ export async function renderSessions(container, dateRange = {}, queryParams = ne
     window.location.hash = `#/eval?task=${id}`;
   });
 
+  document.getElementById('btn-test')?.addEventListener('click', () => {
+    const id = Array.from(selectedTasks)[0];
+    window.location.hash = `#/test?task=${id}`;
+  });
+
+  document.getElementById('btn-baseline')?.addEventListener('click', () => {
+    const id = Array.from(selectedTasks)[0];
+    openBaselineModal(id, container);
+  });
+
   document.getElementById('btn-compare')?.addEventListener('click', () => {
     const ids = Array.from(selectedTasks).join(',');
     window.location.hash = `#/compare?tasks=${ids}`;
+  });
+
+  document.getElementById('btn-deep-compare')?.addEventListener('click', () => {
+    const ids = Array.from(selectedTasks).join(',');
+    window.location.hash = `#/deepcompare?tasks=${ids}`;
   });
 
   const drilldown = { urlStatus, urlModel, urlErrorCat, urlTool, urlHasErrors, urlHasReasoning };
@@ -213,6 +244,7 @@ async function loadSessions(container, dateRange = {}, drilldown = {}) {
   if (tbody) tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--text-3)"><div class="spinner" style="margin:auto"></div></td></tr>`;
 
   const data = await api.tasks(filters);
+  visibleTasks = new Map((data.tasks || []).map(t => [t.id, t]));
 
   if (!data.tasks?.length) {
     if (tbody) tbody.innerHTML = `
@@ -286,6 +318,64 @@ async function loadSessions(container, dateRange = {}, drilldown = {}) {
   updateActionBar();
 
   renderPagination(data.total, data.page, data.limit, container, dateRange, drilldown);
+}
+
+function openBaselineModal(taskId, container) {
+  const task = visibleTasks.get(taskId);
+  const root = document.getElementById('baseline-modal-root');
+  if (!root || !task) return;
+  root.innerHTML = `
+    <div class="modal-backdrop">
+      <div class="modal-panel">
+        <div class="modal-head">
+          <div>
+            <h2>Create Baseline</h2>
+            <p>Mark this completed task as a reference execution.</p>
+          </div>
+          <button id="baseline-close" class="page-btn">Close</button>
+        </div>
+        <div class="modal-body">
+          <div class="modal-task-summary">
+            <div class="mono">${task.id}</div>
+            <div>${task.models?.[0]?.model_id || 'Unknown model'} · ${fmtCost(task.total_cost || 0)} · ${fmtDuration(task.duration || 0)}</div>
+            <p>${escHtml(task.first_message || '')}</p>
+          </div>
+          <label class="field-label">Baseline Name</label>
+          <input id="baseline-name" class="filter-input modal-input" value="${escAttr(defaultBaselineName(task))}" />
+          <label class="field-label">Tags</label>
+          <input id="baseline-tags" class="filter-input modal-input" placeholder="coding, react, auth" value="${escAttr(task.activity_category || '')}" />
+        </div>
+        <div class="modal-actions">
+          <button id="baseline-cancel" class="action-btn ghost">Cancel</button>
+          <button id="baseline-create" class="action-btn primary">Create Baseline</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const close = () => { root.innerHTML = ''; };
+  document.getElementById('baseline-close')?.addEventListener('click', close);
+  document.getElementById('baseline-cancel')?.addEventListener('click', close);
+  document.getElementById('baseline-create')?.addEventListener('click', async () => {
+    const name = document.getElementById('baseline-name')?.value || '';
+    const tags = (document.getElementById('baseline-tags')?.value || '').split(',').map(t => t.trim()).filter(Boolean);
+    await api.createBaseline({ task_id: taskId, name, tags });
+    close();
+    window.location.hash = '#/baselines';
+  });
+}
+
+function defaultBaselineName(task) {
+  const prompt = (task.first_message || task.id).replace(/\s+/g, ' ').trim();
+  return prompt.length > 72 ? `${prompt.slice(0, 72)}...` : prompt;
+}
+
+function escHtml(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function escAttr(s) {
+  return escHtml(s).replace(/`/g, '&#96;');
 }
 
 function renderPagination(total, page, limit, container, dateRange, drilldown) {

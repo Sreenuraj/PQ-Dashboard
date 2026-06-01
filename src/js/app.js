@@ -8,6 +8,9 @@ import { renderInvestigate } from './views/investigate.js';
 import { renderCompare }  from './views/compare.js';
 import { renderEval }     from './views/eval.js';
 import { renderActivity } from './views/activity.js';
+import { renderBaselines } from './views/baselines.js';
+import { renderTest } from './views/test.js';
+import { renderDeepCompare } from './views/deep-compare.js';
 import { api }            from './api.js';
 import { getDateRange, initDatePicker } from './components/date-picker.js';
 import { applyChartTheme } from './components/charts.js';
@@ -52,6 +55,9 @@ const routes = {
   compare:     (p) => renderCompare(container, p.get('tasks')),
   eval:        (p) => renderEval(container, p.get('task')),
   activity:    (p) => renderActivity(container, getDateRange()),
+  baselines:   (p) => renderBaselines(container),
+  test:        (p) => renderTest(container, p),
+  deepcompare: (p) => renderDeepCompare(container, p),
 };
 
 function currentView() {

@@ -1,7 +1,35 @@
 const express = require('express');
 const router = express.Router();
+const { runTestSuite, getBaseline } = require('../testing');
 
 module.exports = (db) => {
+
+  // POST /api/tasks/compare — comparison payload with optional behavioral tests
+  router.post('/compare', (req, res) => {
+    const { task_ids = [], baseline_id = null, include_tests = false } = req.body || {};
+    if (!Array.isArray(task_ids) || task_ids.length === 0) {
+      return res.status(400).json({ error: 'task_ids must be a non-empty array' });
+    }
+
+    const ids = baseline_id ? [baseline_id, ...task_ids.filter(id => id !== baseline_id)] : task_ids;
+    const tasks = ids.map(id => {
+      const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id);
+      if (!task) return null;
+      task.models = db.prepare('SELECT DISTINCT model_id, provider_id, mode, ts FROM task_models WHERE task_id = ? ORDER BY ts').all(id);
+      task.environment = tryParse(task.environment);
+      const events = db.prepare('SELECT * FROM events WHERE task_id = ? ORDER BY ts ASC').all(id);
+      const tool_sequence = events
+        .filter(e => e.tool_name && e.tool_name !== 'unknown')
+        .map((e, index) => ({ index, tool_name: e.tool_name, file_path: extractTarget(e), command: e.command_text || null }));
+      const tests = include_tests ? runTestSuite(db, id, baseline_id, null, false) : null;
+      return { task, tool_sequence, tests };
+    }).filter(Boolean);
+
+    res.json({
+      baseline: baseline_id ? getBaseline(db, baseline_id) : null,
+      tasks,
+    });
+  });
 
   // GET /api/tasks — paginated list with filters
   router.get('/', (req, res) => {
@@ -164,4 +192,9 @@ module.exports = (db) => {
 
 function tryParse(str) {
   try { return str ? JSON.parse(str) : null; } catch { return null; }
+}
+
+function extractTarget(event) {
+  const text = event.content_preview || '';
+  return text.includes('→') ? text.split('→').slice(1).join('→').trim() || null : null;
 }
