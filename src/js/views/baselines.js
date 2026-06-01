@@ -56,17 +56,26 @@ export async function renderBaselines(container) {
       await renderBaselines(container);
     });
   });
+
+  document.querySelectorAll('[data-reextract-baseline]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      btn.textContent = 'Re-extracting...';
+      btn.disabled = true;
+      await api.reextractBaseline(btn.dataset.reextractBaseline);
+      await renderBaselines(container);
+    });
+  });
 }
 
 function renderBaselineCard(b) {
   const metrics = b.reference_metrics || {};
   const search = `${b.name} ${(b.tags || []).join(' ')} ${b.model_id} ${b.activity_category}`.toLowerCase();
   return `
-    <div class="panel baseline-card" data-search="${escAttr(search)}">
-      <div class="panel-title">
-        <span>${escHtml(b.name || b.id)}</span>
+    <details class="panel baseline-card" data-search="${escAttr(search)}">
+      <summary class="panel-title baseline-card-summary">
+        <span class="baseline-title">${escHtml(b.name || b.id)}</span>
         <span class="badge accent">${escHtml(b.activity_category || 'general')}</span>
-      </div>
+      </summary>
       <div class="panel-body">
         <div class="baseline-meta-grid">
           <div><span>Model</span><strong class="mono">${escHtml(b.model_id || 'Unknown')}</strong></div>
@@ -94,10 +103,11 @@ function renderBaselineCard(b) {
           <a class="action-btn secondary" href="#/timeline?task=${encodeURIComponent(b.task_id)}">View Timeline</a>
           <a class="action-btn primary" href="#/test?baseline=${encodeURIComponent(b.id)}">Test Against This</a>
           <a class="action-btn secondary" href="#/deepcompare?baseline=${encodeURIComponent(b.id)}">Compare Models</a>
+          <button class="action-btn secondary" data-reextract-baseline="${escAttr(b.id)}">Re-extract</button>
           <button class="action-btn ghost" data-delete-baseline="${escAttr(b.id)}">Delete Baseline</button>
         </div>
       </div>
-    </div>
+    </details>
   `;
 }
 

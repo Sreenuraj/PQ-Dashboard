@@ -11,7 +11,8 @@ module.exports = (db) => {
       return res.status(400).json({ error: 'task_ids must be a non-empty array' });
     }
 
-    const ids = baseline_id ? [baseline_id, ...task_ids.filter(id => id !== baseline_id)] : task_ids;
+    const inferredBaselineId = baseline_id || inferBaselineId(task_ids);
+    const ids = inferredBaselineId ? [inferredBaselineId, ...task_ids.filter(id => id !== inferredBaselineId)] : task_ids;
     const tasks = ids.map(id => {
       const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id);
       if (!task) return null;
@@ -21,15 +22,20 @@ module.exports = (db) => {
       const tool_sequence = events
         .filter(e => e.tool_name && e.tool_name !== 'unknown')
         .map((e, index) => ({ index, tool_name: e.tool_name, file_path: extractTarget(e), command: e.command_text || null }));
-      const tests = include_tests ? runTestSuite(db, id, baseline_id, null, false) : null;
-      return { task, tool_sequence, tests };
+      const tests = include_tests ? runTestSuite(db, id, inferredBaselineId, null, false) : null;
+      return { task, tool_sequence, tests, is_baseline: inferredBaselineId === id };
     }).filter(Boolean);
 
     res.json({
-      baseline: baseline_id ? getBaseline(db, baseline_id) : null,
+      baseline: inferredBaselineId ? getBaseline(db, inferredBaselineId) : null,
       tasks,
     });
   });
+
+  function inferBaselineId(taskIds) {
+    const baselines = db.prepare(`SELECT id FROM baselines WHERE id IN (${taskIds.map(() => '?').join(',')})`).all(...taskIds);
+    return baselines[0]?.id || null;
+  }
 
   // GET /api/tasks — paginated list with filters
   router.get('/', (req, res) => {

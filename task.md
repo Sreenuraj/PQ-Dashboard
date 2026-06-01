@@ -28,4 +28,14 @@
 ## Verification
 - [x] Run a production build.
 - [x] Smoke test behavioral test runner against a cached completed task.
+- [x] Verify baseline prompt extraction no longer treats assistant response text as a prompt.
+- [x] Confirm previously started dev/API server sessions were stopped.
 - [ ] Smoke test backend endpoints and UI routes in browser.
+
+## Follow-up Fixes From Manual Testing
+- [x] Add baseline-backed Deep Compare picker from the Baselines page.
+- [x] Infer the baseline when a selected compare set includes an existing baseline task.
+- [x] Visually highlight the baseline column in Deep Compare.
+- [x] Collapse baseline cards by default so multiple baselines remain scannable.
+- [x] Add Re-extract action so existing baseline benchmark data can be refreshed.
+- [x] Fix prompt chain extraction to capture only the initial user prompt plus explicit user feedback.

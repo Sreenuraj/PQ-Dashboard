@@ -1105,6 +1105,14 @@ html[data-theme="light"] .oneshot-bar-bg {
   font-size: 11px;
 }
 .baseline-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+.baseline-card > summary { list-style: none; cursor: pointer; }
+.baseline-card > summary::-webkit-details-marker { display: none; }
+.baseline-card-summary .baseline-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .benchmark-summary {
   margin-top: 8px;
   background: var(--bg-3);
@@ -1178,6 +1186,11 @@ html[data-theme="light"] .oneshot-bar-bg {
   font-size: 10px;
 }
 .deep-compare-table .score-row td { background: var(--bg-3); }
+.deep-compare-table th.deep-baseline-col,
+.deep-compare-table td.deep-baseline-col {
+  background: rgba(13,148,136,0.10);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
 .modal-backdrop {
   position: fixed;
   inset: 0;

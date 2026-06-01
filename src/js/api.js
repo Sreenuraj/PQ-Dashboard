@@ -59,6 +59,7 @@ export const api = {
   updateBaseline:(id,body) => put(`/baselines/${id}`, body),
   deleteBaseline:(id)   => del(`/baselines/${id}`),
   baselinePrompts:(id)  => get(`/baselines/${id}/prompts`),
+  reextractBaseline:(id)=> post(`/baselines/${id}/re-extract`),
   getTestRules:  ()     => get('/test-rules'),
   updateTestRules:(body)=> put('/test-rules', body),
   toolsRegistry: ()     => get('/tools/registry'),
