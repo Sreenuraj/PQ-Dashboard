@@ -199,6 +199,14 @@ function parseUIMessages(filePath, apiHistoryPath, maxFileSize) {
       event.content_preview = toolData.preview;
     }
 
+    // ── postqode_browser_agent (browser automation tools) ──
+    if (subType === 'postqode_browser_agent' && msg.text) {
+      toolCallCount++;
+      const toolData = extractBrowserToolData(msg.text);
+      event.tool_name = toolData.tool;
+      event.content_preview = toolData.preview;
+    }
+
     // ── command ──
     if (subType === 'command' && msg.text) {
       event.command_text = msg.text.substring(0, 200);
@@ -306,6 +314,18 @@ function extractToolData(text) {
     return {
       tool: obj.tool || obj.server_name || 'unknown',
       preview: `${obj.tool || ''} → ${obj.path || obj.command || ''}`.substring(0, 200),
+    };
+  } catch {
+    return { tool: 'unknown', preview: text.substring(0, 200) };
+  }
+}
+
+function extractBrowserToolData(text) {
+  try {
+    const obj = JSON.parse(text);
+    return {
+      tool: obj.toolName || obj.serverName || obj.type || 'unknown',
+      preview: `${obj.toolName || obj.type || ''} → ${obj.arguments || ''}`.substring(0, 200),
     };
   } catch {
     return { tool: 'unknown', preview: text.substring(0, 200) };
