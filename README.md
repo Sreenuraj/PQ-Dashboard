@@ -44,7 +44,7 @@ Alternatively, you can run them manually in two terminals:
 PQ Dashboard features a powerful standalone behavioral testing workflow that allows you to manage baselines, customize execution boundaries, track agent reliability, and score completions:
 
 1. **Standalone Editable Baselines:** Instead of simple static session snapshots, you can create standalone editable baselines from any session (regardless of completion status).
-2. **Baseline Editor (`#/baseline-editor`):** A dual-list curator interface to manage expected and excluded tools, required and excluded contract keywords, descriptions, tags, and toggle essential steps.
+2. **Baseline Editor (`#/baseline-editor`):** A dual-list curator interface to manage expected and excluded tools, required and excluded contract keywords, descriptions, tags, and toggle essential steps. Allows adding custom entries, moving them dynamically between lists, and deleting unnecessary entries entirely.
 3. **Enrichment & Merging (`#/baseline-enrich`):** Contrast any session trace against a baseline to discover new tools/keywords, and selectively merge them back into the baseline while maintaining a list of contributing sessions.
 4. **Contextual Tool Sequences & Essential Steps:** Tool calls carry auto-derived descriptions (identifying file contexts). Instead of strict ordering, the MTV pattern validates coverage of **Essential Steps** and checks for baseline excluded tools/keywords.
 5. **Session Health & Interruption Tracking:** Automatically tracks user interruptions (`resume_task` events) and context resets, applying automated tiered behavioral penalties (-5%, -15%, -25%).
