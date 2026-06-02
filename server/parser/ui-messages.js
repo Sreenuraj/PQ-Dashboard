@@ -74,7 +74,7 @@ function parseUIMessages(filePath, apiHistoryPath, maxFileSize) {
     }
 
     const msgSubType = msg.say || msg.ask;
-    if (msgSubType !== 'resume_task' && msg.ts > lastTs) {
+    if (!msgSubType.startsWith('resume_') && msg.ts > lastTs) {
       lastTs = msg.ts;
     }
 
