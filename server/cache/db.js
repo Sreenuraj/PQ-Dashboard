@@ -286,7 +286,7 @@ function markParsed(db, taskId, source, fileHash) {
 }
 
 function deriveStatus(events, summary) {
-  const hasCompletion = events.some(e => e.sub_type === 'completion_result' && e.type === 'ask');
+  const hasCompletion = events.some(e => e.sub_type === 'completion_result' && (e.type === 'ask' || e.type === 'say'));
   if (hasCompletion) return 'completed';
   const hasResume = events.some(e => e.sub_type === 'resume_task');
   if (hasResume) return 'interrupted';
