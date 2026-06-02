@@ -31,7 +31,8 @@ function updateActionBar() {
     btnEvaluate.style.display = 'block';
     btnTest.style.display = 'block';
     btnCompare.style.display = 'none';
-    btnDeepCompare.style.display = 'none';
+    btnDeepCompare.style.display = 'block';
+    btnDeepCompare.textContent = 'Deep Compare';
     const task = visibleTasks.get(Array.from(selectedTasks)[0]);
     btnBaseline.style.display = task ? 'block' : 'none';
   } else {

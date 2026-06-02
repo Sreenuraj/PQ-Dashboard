@@ -37,8 +37,8 @@ module.exports = (db) => {
       }
     }
 
-    // Filter out resolved baseline from other tasks to avoid duplication
-    const otherTaskIds = task_ids.filter(id => id !== resolvedBaselineTaskId && id !== resolvedBaselineUUID && id !== inferredBaselineId);
+    // Filter out resolved baseline UUID or inferred baseline ID to avoid duplicates if they were passed in task_ids
+    const otherTaskIds = task_ids.filter(id => id !== resolvedBaselineUUID && id !== inferredBaselineId);
 
     const tasks = otherTaskIds.map(id => {
       const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id);
@@ -54,20 +54,41 @@ module.exports = (db) => {
     }).filter(Boolean);
 
     // Prepend baseline column if resolved
-    if (resolvedBaselineTaskId) {
+    if (baselineRow) {
+      const refMetrics = tryParse(baselineRow.reference_metrics_json, {});
+      const prompts = tryParse(baselineRow.prompts_json, []);
+      const baselineTask = {
+        id: baselineRow.id, // Use baseline UUID as the task ID
+        name: baselineRow.name,
+        source: baselineRow.source,
+        start_ts: baselineRow.created_at,
+        end_ts: baselineRow.created_at,
+        duration: refMetrics.duration || 0,
+        total_cost: refMetrics.cost || 0,
+        total_tokens_in: refMetrics.tokens_in || 0,
+        total_tokens_out: refMetrics.tokens_out || 0,
+        total_cache_reads: refMetrics.cache_reads || 0,
+        error_count: refMetrics.error_count || 0,
+        tool_call_count: refMetrics.tool_calls || 0,
+        api_call_count: refMetrics.api_calls || 0,
+        status: 'completed',
+        activity_category: baselineRow.activity_category || 'general',
+        first_message: prompts[0]?.text || '',
+        models: [{ model_id: baselineRow.model_id }],
+        is_baseline_reference: true
+      };
+      const tool_sequence = tryParse(baselineRow.tool_sequence_json, []);
+      const tests = include_tests ? runTestSuite(db, resolvedBaselineTaskId, resolvedBaselineUUID || inferredBaselineId, null, false) : null;
+      tasks.unshift({ task: baselineTask, tool_sequence, tests, is_baseline: true });
+    } else if (resolvedBaselineTaskId) {
       const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(resolvedBaselineTaskId);
       if (task) {
         task.models = db.prepare('SELECT DISTINCT model_id, provider_id, mode, ts FROM task_models WHERE task_id = ? ORDER BY ts').all(resolvedBaselineTaskId);
         task.environment = tryParse(task.environment);
-        let tool_sequence;
-        if (baselineRow) {
-          tool_sequence = tryParse(baselineRow.tool_sequence_json, []);
-        } else {
-          const events = db.prepare('SELECT * FROM events WHERE task_id = ? ORDER BY ts ASC').all(resolvedBaselineTaskId);
-          tool_sequence = events
-            .filter(e => e.tool_name && e.tool_name !== 'unknown')
-            .map((e, index) => ({ index, tool_name: e.tool_name, file_path: extractTarget(e), command: e.command_text || null }));
-        }
+        const events = db.prepare('SELECT * FROM events WHERE task_id = ? ORDER BY ts ASC').all(resolvedBaselineTaskId);
+        const tool_sequence = events
+          .filter(e => e.tool_name && e.tool_name !== 'unknown')
+          .map((e, index) => ({ index, tool_name: e.tool_name, file_path: extractTarget(e), command: e.command_text || null }));
         const tests = include_tests ? runTestSuite(db, resolvedBaselineTaskId, resolvedBaselineUUID || inferredBaselineId, null, false) : null;
         tasks.unshift({ task, tool_sequence, tests, is_baseline: true });
       }

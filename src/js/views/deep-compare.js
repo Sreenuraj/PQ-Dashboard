@@ -387,6 +387,9 @@ function formatMarkdown(text) {
 }
 
 function labelFor(task) {
+  if (task.is_baseline_reference) {
+    return task.name || task.models?.[0]?.model_id?.split('/').pop() || 'Baseline Reference';
+  }
   return task.models?.[0]?.model_id?.split('/').pop() || task.id.slice(0, 8);
 }
 
