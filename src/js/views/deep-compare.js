@@ -420,7 +420,7 @@ function showFullCompletionModal(modelName, message) {
           <h2 style="margin:0">Completion Summary</h2>
           <p style="margin:4px 0 0;font-size:11px;color:var(--text-3)">Model: ${escHtml(modelName)}</p>
         </div>
-        <button class="page-btn modal-close-btn">Close</button>
+        <button class="modal-close-btn" style="background:none; border:none; color:var(--text-3); font-size:24px; cursor:pointer; padding:4px 8px; line-height:1; transition:color 0.2s" onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--text-3)'">&times;</button>
       </div>
       <div class="modal-body" style="max-height:60vh;overflow-y:auto;line-height:1.6;font-size:13px;white-space:normal">
         ${formatMarkdown(message)}
@@ -491,7 +491,7 @@ function showFullRowDetailsModal(title, htmlContent) {
           <h2 style="margin:0">${escHtml(title)}</h2>
           <p style="margin:4px 0 0;font-size:11px;color:var(--text-3)">Detailed comparison against baseline reference</p>
         </div>
-        <button class="page-btn modal-close-btn">Close</button>
+        <button class="modal-close-btn" style="background:none; border:none; color:var(--text-3); font-size:24px; cursor:pointer; padding:4px 8px; line-height:1; transition:color 0.2s" onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--text-3)'">&times;</button>
       </div>
       <div class="modal-body" style="max-height:60vh;overflow-y:auto;line-height:1.6;font-size:13px;white-space:normal">
         ${htmlContent}
@@ -512,7 +512,7 @@ function showFullRowDetailsModal(title, htmlContent) {
 
 function formatEvidence(evidenceList) {
   if (!evidenceList || evidenceList.length === 0) return '<div style="color:var(--text-3)">No evidence details available</div>';
-  return `<div style="display:flex; flex-direction:column; gap:6px; font-size:11px">
+  return `<div style="display:grid; grid-template-columns: 16px auto 1fr; gap: 6px 12px; font-size:11px; align-items: start">
     ${evidenceList.map(e => {
       let colorClass = 'var(--text-2)';
       let symbol = 'ℹ';
@@ -526,11 +526,11 @@ function formatEvidence(evidenceList) {
         colorClass = 'var(--green)';
         symbol = '✓';
       }
-      return `<div style="display:flex; gap:6px; line-height:1.4">
-        <span style="color:${colorClass}; font-weight:bold">${symbol}</span>
-        <span style="color:var(--text-3); font-weight:500; min-width:120px">${escHtml(e.label)}:</span>
-        <span style="color:${colorClass}; font-family:var(--font-mono); word-break:break-all">${escHtml(e.value)}</span>
-      </div>`;
+      return `
+        <span style="color:${colorClass}; font-weight:bold; text-align:center">${symbol}</span>
+        <span style="color:var(--text-3); font-weight:500; white-space:nowrap">${escHtml(e.label)}:</span>
+        <span style="color:${colorClass}; font-family:var(--font-mono); word-break:break-all; white-space:pre-wrap">${escHtml(e.value)}</span>
+      `;
     }).join('')}
   </div>`;
 }
