@@ -17,8 +17,12 @@ export async function renderCompare(container, taskIdsString) {
 
   try {
     const dataObjects = await Promise.all(ids.map(async id => {
-        const [t, ev] = await Promise.all([api.task(id), api.evaluate(id).catch(() => null)]);
-        return { task: t, eval: ev };
+        const [t, ev, events] = await Promise.all([
+          api.task(id),
+          api.evaluate(id).catch(() => null),
+          api.taskEvents(id).catch(() => [])
+        ]);
+        return { task: t, eval: ev, events: events };
     }));
     
     // Calculate max values for bar charts
@@ -111,11 +115,11 @@ export async function renderCompare(container, taskIdsString) {
 
       <div class="tip-banner" style="font-size: 11px; color: var(--accent); margin-bottom: 12px; display: flex; align-items: center; gap: 6px;">
         <span>💡</span>
-        <span><strong>Tip:</strong> Click on any score metric (e.g. Tool Efficacy) to view evaluation evidence, or click "Read full completion message" to view the agent summary.</span>
+        <span><strong>Tip:</strong> Click on score metrics (e.g. Tool Efficacy) to view evaluation traces, or click on operational metrics (Cache, Tools, Errors) to open detailed diagnostic sequence logs.</span>
       </div>
 
       <div class="compare-columns-container" style="display:flex;gap:20px;overflow-x:auto;padding-bottom:20px;">
-        ${dataObjects.map(d => renderTaskColumn(d.task, d.eval, maxCost, maxDuration)).join('')}
+        ${dataObjects.map((d, colIdx) => renderTaskColumn(d.task, d.eval, maxCost, maxDuration, colIdx)).join('')}
       </div>
     `;
 
@@ -136,6 +140,30 @@ export async function renderCompare(container, taskIdsString) {
       });
     });
 
+    container.querySelectorAll('.interactive-op').forEach(el => {
+      el.addEventListener('click', () => {
+        const type = el.getAttribute('data-type');
+        const idx = parseInt(el.getAttribute('data-idx'));
+        const dataObj = dataObjects[idx];
+        if (!dataObj) return;
+
+        if (type === 'tools') {
+          showToolsModal(dataObj.task.id, dataObj.events);
+        } else if (type === 'cache') {
+          showCacheModal(dataObj.task.id, dataObj.task, dataObj.events);
+        } else if (type === 'errors') {
+          showErrorsModal(dataObj.task.id, dataObj.events);
+        }
+      });
+      // Add hover effect
+      el.addEventListener('mouseenter', () => {
+        el.style.background = 'var(--bg-4)';
+      });
+      el.addEventListener('mouseleave', () => {
+        el.style.background = 'none';
+      });
+    });
+
     container.querySelector('#print-compare-btn')?.addEventListener('click', () => {
       window.print();
     });
@@ -145,7 +173,7 @@ export async function renderCompare(container, taskIdsString) {
   }
 }
 
-function renderTaskColumn(t, ev, maxCost, maxDuration) {
+function renderTaskColumn(t, ev, maxCost, maxDuration, colIdx) {
   const costPct = Math.min(100, ((t.total_cost || 0) / maxCost) * 100);
   const durPct = Math.min(100, ((t.duration || 0) / maxDuration) * 100);
   
@@ -260,7 +288,7 @@ function renderTaskColumn(t, ev, maxCost, maxDuration) {
 
          ${evalHtml}
 
-         <!-- Stat Bars -->
+         <!-- Stat Bars & Operational Metrics -->
          <div style="background:var(--bg-2); padding:12px; border-radius:6px; border:1px solid var(--border); display:flex; flex-direction:column; gap:10px">
            <div>
              <div style="display:flex; justify-content:space-between; font-size:11px; margin-bottom:4px; color:var(--text-2)">
@@ -282,14 +310,36 @@ function renderTaskColumn(t, ev, maxCost, maxDuration) {
              </div>
            </div>
            
-           <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--text-2); padding-top:4px">
+           <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--text-2); padding:4px 0">
              <span>Tokens</span>
              <span style="font-weight:600" class="mono">${fmtNum(t.total_tokens_in || 0)} In / ${fmtNum(t.total_tokens_out || 0)} Out</span>
            </div>
 
-           <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--text-2)">
+           <!-- Interactive Cache Details -->
+           <div class="interactive-op" data-type="cache" data-idx="${colIdx}" style="display:flex; justify-content:space-between; font-size:11px; color:var(--text-2); cursor:pointer; padding:6px 4px; border-radius:4px; transition: background 0.15s">
+             <span>Cache Accesses</span>
+             <span style="font-weight:600; display:flex; align-items:center; gap:4px" class="mono">
+               ${fmtNum(t.total_cache_reads || 0)} R / ${fmtNum(t.total_cache_writes || 0)} W 
+               <span style="font-size:10px; color:var(--text-3)">🔍</span>
+             </span>
+           </div>
+
+           <!-- Interactive Tool Details -->
+           <div class="interactive-op" data-type="tools" data-idx="${colIdx}" style="display:flex; justify-content:space-between; font-size:11px; color:var(--text-2); cursor:pointer; padding:6px 4px; border-radius:4px; transition: background 0.15s">
+             <span>Tools Invoked</span>
+             <span style="font-weight:600; display:flex; align-items:center; gap:4px" class="mono">
+               ${t.tool_call_count || 0} calls 
+               <span style="font-size:10px; color:var(--text-3)">🔍</span>
+             </span>
+           </div>
+
+           <!-- Interactive Errors Encountered -->
+           <div class="interactive-op" data-type="errors" data-idx="${colIdx}" style="display:flex; justify-content:space-between; font-size:11px; color:var(--text-2); cursor:pointer; padding:6px 4px; border-radius:4px; transition: background 0.15s">
              <span>Errors Encountered</span>
-             <span style="font-weight:600; color:${t.error_count > 0 ? 'var(--red)' : 'var(--text-2)'}">${t.error_count || 0}</span>
+             <span style="font-weight:600; display:flex; align-items:center; gap:4px; color:${t.error_count > 0 ? 'var(--red)' : 'var(--text-2)'}" class="mono">
+               ${t.error_count || 0} 
+               <span style="font-size:10px; color:var(--text-3)">🔍</span>
+             </span>
            </div>
          </div>
 
@@ -404,4 +454,151 @@ function showFullCompletionModal(modelName, message) {
       modal.style.display = 'none';
     });
   });
+}
+
+function showDetailedPopup(title, contentHtml) {
+  let modal = document.getElementById('simple-compare-detail-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'simple-compare-detail-modal';
+    modal.className = 'modal-backdrop';
+    document.body.appendChild(modal);
+  }
+  modal.innerHTML = `
+    <div class="modal-panel" style="width:min(680px, 95%)">
+      <div class="modal-head">
+        <div>
+          <h2 style="margin:0">${escHtml(title)}</h2>
+        </div>
+        <button class="modal-close-btn" style="background:none; border:none; color:var(--text-3); font-size:24px; cursor:pointer; padding:4px 8px; line-height:1; transition:color 0.2s" onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--text-3)'">&times;</button>
+      </div>
+      <div class="modal-body" style="max-height:60vh;overflow-y:auto;line-height:1.6;font-size:13px;white-space:normal;color:var(--text)">
+        ${contentHtml}
+      </div>
+      <div class="modal-actions">
+        <button class="action-btn primary modal-close-btn">Close</button>
+      </div>
+    </div>
+  `;
+  modal.style.display = 'flex';
+  modal.querySelectorAll('.modal-close-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      modal.style.display = 'none';
+    });
+  });
+}
+
+function showToolsModal(taskId, events) {
+  const toolSequence = events.filter(e => e.tool_name && e.tool_name !== 'unknown');
+  
+  let html = '';
+  if (toolSequence.length === 0) {
+    html = `<div style="color:var(--text-3); text-align:center; padding:20px;">No tools were invoked in this session.</div>`;
+  } else {
+    html = `
+      <div class="table-wrap" style="max-height: 50vh; overflow-y: auto;">
+        <table class="data-table" style="font-size:11px">
+          <thead>
+            <tr>
+              <th style="width:50px">Step</th>
+              <th style="width:150px">Tool Name</th>
+              <th>Target / Arguments</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${toolSequence.map((e, idx) => {
+              const target = e.content_preview && e.content_preview.includes('→') ? e.content_preview.split('→').slice(1).join('→').trim() : null;
+              return `
+                <tr>
+                  <td class="mono" style="font-weight:bold">#${idx + 1}</td>
+                  <td class="mono" style="color:var(--accent)">${escHtml(e.tool_name)}</td>
+                  <td class="mono" style="color:var(--text-2); word-break:break-all; white-space:pre-wrap">${escHtml(target || e.command_text || '-')}</td>
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  showDetailedPopup(`Tool Sequence — ${taskId}`, html);
+}
+
+function showErrorsModal(taskId, events) {
+  const errors = events.filter(e => e.error_category || e.type === 'error' || e.error_message);
+
+  let html = '';
+  if (errors.length === 0) {
+    html = `<div style="color:var(--text-3); text-align:center; padding:20px;">No errors were encountered in this session.</div>`;
+  } else {
+    html = `
+      <div style="display:flex; flex-direction:column; gap:12px; max-height: 50vh; overflow-y: auto; padding-right: 4px;">
+        ${errors.map((e, idx) => `
+          <div style="background:var(--bg-3); border:1px solid var(--border); border-radius:6px; padding:10px; font-size:12px">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px">
+              <span class="badge red" style="text-transform:uppercase">${escHtml(e.error_category || 'error')}</span>
+              <span style="font-size:10px; color:var(--text-3); font-family:var(--font-mono)">${new Date(e.ts).toLocaleTimeString()}</span>
+            </div>
+            <div class="mono" style="color:var(--red); word-break:break-all; white-space:pre-wrap; background:var(--bg-4); padding:8px; border-radius:4px; border:1px solid var(--border-2)">
+              ${escHtml(e.error_message || 'Unknown execution error')}
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
+
+  showDetailedPopup(`Errors Encountered — ${taskId}`, html);
+}
+
+function showCacheModal(taskId, task, events) {
+  const apiCalls = events.filter(e => e.sub_type === 'api_req_started');
+  
+  let html = `
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px">
+      <div style="background:var(--bg-3); padding:10px; border-radius:6px; text-align:center; border:1px solid var(--border)">
+        <span style="display:block; color:var(--text-3); font-size:10px; text-transform:uppercase">Total Cache Reads</span>
+        <strong style="font-size:18px; color:var(--text)">${fmtNum(task.total_cache_reads || 0)}</strong>
+      </div>
+      <div style="background:var(--bg-3); padding:10px; border-radius:6px; text-align:center; border:1px solid var(--border)">
+        <span style="display:block; color:var(--text-3); font-size:10px; text-transform:uppercase">Total Cache Writes</span>
+        <strong style="font-size:18px; color:var(--text)">${fmtNum(task.total_cache_writes || 0)}</strong>
+      </div>
+    </div>
+  `;
+
+  if (apiCalls.length === 0) {
+    html += `<div style="color:var(--text-3); text-align:center; padding:10px;">No API cache metrics reported.</div>`;
+  } else {
+    html += `
+      <h3 style="font-size:11px; text-transform:uppercase; color:var(--text-3); margin-bottom:8px; letter-spacing:0.5px">API Call Cache Breakdown</h3>
+      <div class="table-wrap" style="max-height: 40vh; overflow-y: auto;">
+        <table class="data-table" style="font-size:11px">
+          <thead>
+            <tr>
+              <th style="width:40px">Call</th>
+              <th>Model</th>
+              <th style="width:80px; text-align:right">Reads</th>
+              <th style="width:80px; text-align:right">Writes</th>
+              <th style="width:80px; text-align:right">Cost</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${apiCalls.map((e, idx) => `
+              <tr>
+                <td class="mono" style="font-weight:bold">#${idx + 1}</td>
+                <td class="mono" style="color:var(--text-2)">${escHtml(e.model_id ? e.model_id.split('/').pop() : 'Unknown')}</td>
+                <td class="mono" style="text-align:right; color:var(--green)">${fmtNum(e.cache_reads || 0)}</td>
+                <td class="mono" style="text-align:right; color:var(--accent)">${fmtNum(e.cache_writes || 0)}</td>
+                <td class="mono" style="text-align:right">${fmtCost(e.cost || 0)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  showDetailedPopup(`Cache Access Details — ${taskId}`, html);
 }
