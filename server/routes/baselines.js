@@ -67,7 +67,11 @@ module.exports = (db) => {
   });
 
   router.delete('/:id', (req, res) => {
-    db.prepare('DELETE FROM baselines WHERE id = ?').run(req.params.id);
+    const deleteTx = db.transaction((id) => {
+      db.prepare('DELETE FROM test_results WHERE baseline_id = ?').run(id);
+      db.prepare('DELETE FROM baselines WHERE id = ?').run(id);
+    });
+    deleteTx(req.params.id);
     res.json({ ok: true });
   });
 
