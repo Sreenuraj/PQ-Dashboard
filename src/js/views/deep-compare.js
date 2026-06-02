@@ -96,11 +96,15 @@ export async function renderDeepCompare(container, params = new URLSearchParams(
         gap: 6px;
       }
       @media print {
-        body {
-          background: white !important;
-          color: black !important;
+        * {
+          -webkit-print-color-adjust: exact !important;
+          print-color-adjust: exact !important;
         }
-        .sidebar, .navbar, .view-header, .filters-bar, .tip-banner, #print-deep-compare-btn, .modal-backdrop, .modal-close-btn, .page-btn, .action-btn {
+        body, #app, #main, .view-container {
+          background: var(--bg) !important;
+          color: var(--text) !important;
+        }
+        #sidebar, .navbar, .view-header, .filters-bar, .tip-banner, #print-deep-compare-btn, .modal-backdrop, .modal-close-btn, .page-btn, .action-btn, #date-range-wrapper {
           display: none !important;
         }
         .view-container, #app-root {
@@ -110,10 +114,10 @@ export async function renderDeepCompare(container, params = new URLSearchParams(
           max-width: 100% !important;
         }
         .panel {
-          border: 1px solid #ddd !important;
+          border: 1px solid var(--border) !important;
           box-shadow: none !important;
-          background: #fff !important;
-          color: #000 !important;
+          background: var(--bg-2) !important;
+          color: var(--text) !important;
           break-inside: avoid !important;
         }
         .deep-compare-table {
@@ -121,8 +125,8 @@ export async function renderDeepCompare(container, params = new URLSearchParams(
           border-collapse: collapse !important;
         }
         .deep-compare-table th, .deep-compare-table td {
-          border: 1px solid #ddd !important;
-          color: #000 !important;
+          border: 1px solid var(--border) !important;
+          color: var(--text) !important;
           background: none !important;
         }
         .print-header {
@@ -138,8 +142,8 @@ export async function renderDeepCompare(container, params = new URLSearchParams(
     </style>
 
     <div class="print-header">
-      <h1 style="margin:0; font-size:24px; color:#000">Deep Compare Sessions Report</h1>
-      <p style="margin:4px 0 20px; font-size:12px; color:#666">Generated on ${new Date().toLocaleString()}</p>
+      <h1 style="margin:0; font-size:24px; color:var(--text)">Deep Compare Sessions Report</h1>
+      <p style="margin:4px 0 20px; font-size:12px; color:var(--text-3)">Generated on ${new Date().toLocaleString()}</p>
     </div>
 
     <div class="view-header">

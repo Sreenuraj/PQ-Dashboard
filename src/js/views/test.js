@@ -187,13 +187,13 @@ function ftCategoryLabel(cat) {
 
 async function renderPicker(container, baselineId) {
   const [tasks, baselines] = await Promise.all([
-    api.tasks({ limit: 50, status: 'completed' }),
+    api.tasks({ limit: 50 }),
     api.baselines().catch(() => ({ baselines: [] })),
   ]);
   container.innerHTML = `
     <div class="view-header">
       <h1 class="view-title">Test Session</h1>
-      <p class="view-subtitle">Choose a completed session to run behavioral tests.</p>
+      <p class="view-subtitle">Choose a session to run behavioral tests.</p>
     </div>
     <div class="filters-bar">
       <select id="picker-baseline" class="filter-select">
@@ -204,7 +204,7 @@ async function renderPicker(container, baselineId) {
     <div class="panel">
       <div class="table-wrap">
         <table class="data-table">
-          <thead><tr><th>Session</th><th>Model</th><th>Started</th><th>Cost</th><th></th></tr></thead>
+          <thead><tr><th>Session</th><th>Model</th><th>Started</th><th>Cost</th><th>Status</th><th></th></tr></thead>
           <tbody>
             ${(tasks.tasks || []).map(t => `
               <tr>
@@ -212,6 +212,7 @@ async function renderPicker(container, baselineId) {
                 <td>${escHtml(t.models?.[0]?.model_id || 'Unknown')}</td>
                 <td>${fmtDateTime(t.start_ts)}</td>
                 <td>${fmtCost(t.total_cost || 0)}</td>
+                <td><span class="badge ${t.status === 'completed' ? 'green' : t.status === 'interrupted' ? 'yellow' : 'red'}">${escHtml(t.status)}</span></td>
                 <td><a class="action-btn primary" href="#/test?task=${encodeURIComponent(t.id)}${baselineId ? `&baseline=${encodeURIComponent(baselineId)}` : ''}">Test</a></td>
               </tr>
             `).join('')}

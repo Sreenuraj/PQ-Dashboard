@@ -50,11 +50,15 @@ export async function renderCompare(container, taskIdsString) {
           text-decoration: underline;
         }
         @media print {
-          body {
-            background: white !important;
-            color: black !important;
+          * {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
           }
-          .sidebar, .navbar, .view-header, .tip-banner, #print-compare-btn, .modal-backdrop, .modal-close-btn, .view-completion-btn {
+          body, #app, #main, .view-container {
+            background: var(--bg) !important;
+            color: var(--text) !important;
+          }
+          #sidebar, .navbar, .view-header, .tip-banner, #print-compare-btn, .modal-backdrop, .modal-close-btn, .view-completion-btn, #date-range-wrapper {
             display: none !important;
           }
           .view-container, #app-root {
@@ -70,10 +74,10 @@ export async function renderCompare(container, taskIdsString) {
             gap: 20px !important;
           }
           .compare-column-card {
-            border: 1px solid #ddd !important;
+            border: 1px solid var(--border) !important;
             box-shadow: none !important;
-            background: #fff !important;
-            color: #000 !important;
+            background: var(--bg-2) !important;
+            color: var(--text) !important;
             break-inside: avoid !important;
             flex: 1 1 300px !important;
           }
@@ -90,8 +94,8 @@ export async function renderCompare(container, taskIdsString) {
       </style>
 
       <div class="print-header">
-        <h1 style="margin:0; font-size:24px; color:#000">Compare Sessions Report</h1>
-        <p style="margin:4px 0 20px; font-size:12px; color:#666">Generated on ${new Date().toLocaleString()}</p>
+        <h1 style="margin:0; font-size:24px; color:var(--text)">Compare Sessions Report</h1>
+        <p style="margin:4px 0 20px; font-size:12px; color:var(--text-3)">Generated on ${new Date().toLocaleString()}</p>
       </div>
 
       <div class="view-header" style="margin-bottom:20px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px">
