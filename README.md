@@ -76,7 +76,11 @@ The test runner evaluates six deterministic patterns natively from log traces wi
 - `#/baseline-editor?id=<id>` — Edit baseline tools, keywords, tags, metadata, and essential steps.
 - `#/baseline-enrich?id=<id>` — Compare a session trace against a baseline and merge diffs.
 - `#/test?task=<id>` — Run behavioral tests for a task (automatically resolves the baseline reference if previously tested).
-- `#/deepcompare?tasks=<id1>,<id2>&baseline=<baseline_id>` — Compare tasks side-by-side. Features an **Overall Performance Index** breakdown, a Markdown completion synopsis details modal, and an on-the-fly **Baseline Switcher** dropdown that re-calculates all scores dynamically.
+- `#/deepcompare?tasks=<id1>,<id2>&baseline=<baseline_id>` — Compare tasks side-by-side. Key features include:
+  - **Ranked Performance Index Bar Graphs:** Displays a horizontal progress bar chart in the summary panel ranking compared sessions by Overall Index.
+  - **Clean Comparative Layout:** The baseline reference column is filtered out of the comparison table so you can focus strictly on the results of the tested session(s).
+  - **Interactive Detail Modals:** Click on any row (e.g. Cost, TIA, MTV, BSE) to trigger an overlay popup displaying a detailed side-by-side comparison of each session's actual metrics and evidence logs against the baseline reference (or best-in-class heuristic values).
+  - **Baseline Switcher Dropdown:** Dynamically re-evaluates all scores and metric differences on the fly.
 
 ## Architecture
 - **Backend (`server/`):** Express.js + `better-sqlite3`. Contains the config loader, filesystem scanner, event extraction logic (`ui_messages.json` parsing), task cache deduplication, and REST API routes (including advanced on-the-fly sequence mapping and Sankey node generators).
