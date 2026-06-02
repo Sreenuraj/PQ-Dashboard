@@ -246,7 +246,7 @@ function renderTaskColumn(t, ev, maxCost, maxDuration) {
   return `
     <div class="panel compare-column-card" style="flex:1; min-width:320px; max-width:420px; display:flex; flex-direction:column; gap:16px">
        <div class="panel-title" style="display:flex; justify-content:space-between; align-items:center; padding-bottom:8px; border-bottom:1px solid var(--border)">
-         <span class="mono" style="font-size:11px; color:var(--text-2); font-weight:bold">${t.id.substring(0,8)}</span>
+         <span class="mono" style="font-size:11px; color:var(--text-2); font-weight:bold">${t.id}</span>
          ${statusBadge(t.status)}
        </div>
        <div class="panel-body" style="display:flex; flex-direction:column; gap:16px; flex:1">

@@ -68,8 +68,15 @@ function parseUIMessages(filePath, apiHistoryPath, maxFileSize) {
 
   for (const msg of messages) {
     if (!msg.ts) continue;
-    if (firstTs === null) firstTs = msg.ts;
-    if (msg.ts > lastTs) lastTs = msg.ts;
+    if (firstTs === null) {
+      firstTs = msg.ts;
+      lastTs = msg.ts;
+    }
+
+    const msgSubType = msg.say || msg.ask;
+    if (msgSubType !== 'resume_task' && msg.ts > lastTs) {
+      lastTs = msg.ts;
+    }
 
     const modelId = msg.modelInfo?.modelId || null;
     const providerId = msg.modelInfo?.providerId || null;
