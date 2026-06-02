@@ -118,8 +118,9 @@ export async function renderBaselineEditor(container, id) {
               <div style="font-size:11px;color:var(--text-3);margin-bottom:4px">EXPECTED TOOLS</div>
               <div class="dual-list" id="expected-tools-list">
                 ${state.expected_tools.map((t, idx) => `
-                  <div class="dual-list-item" data-tool-idx="${idx}" data-list="expected">
+                  <div class="dual-list-item" data-tool-idx="${idx}" data-list="expected" style="display:flex;justify-content:space-between;align-items:center;width:100%">
                     <span>${escHtml(t)}</span>
+                    <span class="delete-btn" data-delete-tool="${idx}" data-list="expected" style="color:var(--red);cursor:pointer;font-weight:bold;padding:0 4px;font-size:14px;transition:opacity 0.2s" onmouseover="this.style.opacity=0.7" onmouseout="this.style.opacity=1">×</span>
                   </div>
                 `).join('')}
               </div>
@@ -132,8 +133,9 @@ export async function renderBaselineEditor(container, id) {
               <div style="font-size:11px;color:var(--text-3);margin-bottom:4px">EXCLUDED TOOLS</div>
               <div class="dual-list" id="excluded-tools-list">
                 ${state.excluded_tools.map((t, idx) => `
-                  <div class="dual-list-item" data-tool-idx="${idx}" data-list="excluded">
+                  <div class="dual-list-item" data-tool-idx="${idx}" data-list="excluded" style="display:flex;justify-content:space-between;align-items:center;width:100%">
                     <span>${escHtml(t)}</span>
+                    <span class="delete-btn" data-delete-tool="${idx}" data-list="excluded" style="color:var(--red);cursor:pointer;font-weight:bold;padding:0 4px;font-size:14px;transition:opacity 0.2s" onmouseover="this.style.opacity=0.7" onmouseout="this.style.opacity=1">×</span>
                   </div>
                 `).join('')}
               </div>
@@ -157,8 +159,9 @@ export async function renderBaselineEditor(container, id) {
               <div style="font-size:11px;color:var(--text-3);margin-bottom:4px">REQUIRED KEYWORDS</div>
               <div class="dual-list" id="required-keywords-list">
                 ${state.behavior_contract.output_keywords.map((k, idx) => `
-                  <div class="dual-list-item" data-kw-idx="${idx}" data-list="required">
+                  <div class="dual-list-item" data-kw-idx="${idx}" data-list="required" style="display:flex;justify-content:space-between;align-items:center;width:100%">
                     <span>${escHtml(k)}</span>
+                    <span class="delete-btn" data-delete-kw="${idx}" data-list="required" style="color:var(--red);cursor:pointer;font-weight:bold;padding:0 4px;font-size:14px;transition:opacity 0.2s" onmouseover="this.style.opacity=0.7" onmouseout="this.style.opacity=1">×</span>
                   </div>
                 `).join('')}
               </div>
@@ -171,8 +174,9 @@ export async function renderBaselineEditor(container, id) {
               <div style="font-size:11px;color:var(--text-3);margin-bottom:4px">EXCLUDED KEYWORDS</div>
               <div class="dual-list" id="excluded-keywords-list">
                 ${state.behavior_contract.excluded_keywords.map((k, idx) => `
-                  <div class="dual-list-item" data-kw-idx="${idx}" data-list="excluded">
+                  <div class="dual-list-item" data-kw-idx="${idx}" data-list="excluded" style="display:flex;justify-content:space-between;align-items:center;width:100%">
                     <span>${escHtml(k)}</span>
+                    <span class="delete-btn" data-delete-kw="${idx}" data-list="excluded" style="color:var(--red);cursor:pointer;font-weight:bold;padding:0 4px;font-size:14px;transition:opacity 0.2s" onmouseover="this.style.opacity=0.7" onmouseout="this.style.opacity=1">×</span>
                   </div>
                 `).join('')}
               </div>
@@ -249,6 +253,36 @@ export async function renderBaselineEditor(container, id) {
       el.addEventListener('click', () => {
         const idx = parseInt(el.dataset.removeTag);
         state.tags.splice(idx, 1);
+        render();
+      });
+    });
+
+    // Tool deletion
+    document.querySelectorAll('[data-delete-tool]').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const idx = parseInt(el.dataset.deleteTool);
+        const list = el.dataset.list;
+        if (list === 'expected') {
+          state.expected_tools.splice(idx, 1);
+        } else {
+          state.excluded_tools.splice(idx, 1);
+        }
+        render();
+      });
+    });
+
+    // Keyword deletion
+    document.querySelectorAll('[data-delete-kw]').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const idx = parseInt(el.dataset.deleteKw);
+        const list = el.dataset.list;
+        if (list === 'required') {
+          state.behavior_contract.output_keywords.splice(idx, 1);
+        } else {
+          state.behavior_contract.excluded_keywords.splice(idx, 1);
+        }
         render();
       });
     });
