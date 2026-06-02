@@ -210,6 +210,11 @@ function parseUIMessages(filePath, apiHistoryPath, maxFileSize) {
       event.error_category = 'interruption';
     }
 
+    // ── completion_result ──
+    if (subType === 'completion_result' && msg.text) {
+      event.content_preview = msg.text;
+    }
+
     events.push(event);
   }
 

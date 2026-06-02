@@ -1,12 +1,16 @@
 const { toolEvents, normalizeStatus, evidence } = require('./shared');
 
 function runERC(task, events, rules, baseline) {
+  const { extractFailedTools } = require('../baselines/failed-tools');
+  const failedTools = extractFailedTools(events);
   const errors = events.filter(e => e.error_category || e.sub_type === 'error');
-  if (!errors.length) return result('skip', 0, [evidence('info', 'Errors', 'No errors in trace')], 'No recovery needed.');
+
+  if (!errors.length && !failedTools.length) return result('skip', 0, [evidence('info', 'Errors', 'No errors or failed tools in trace')], 'No recovery needed.');
 
   let blindRetries = 0;
   let adaptive = 0;
   const ev = [];
+
   for (const err of errors) {
     const before = [...toolEvents(events.filter(e => (e.ts || 0) < (err.ts || 0)))].pop();
     const after = toolEvents(events.filter(e => (e.ts || 0) > (err.ts || 0)))[0];
@@ -24,14 +28,20 @@ function runERC(task, events, rules, baseline) {
     }
   }
 
+  for (const f of failedTools) {
+    ev.push(evidence('violation', `Failed tool (${f.error_category})`, `${f.tool_name} x${f.count}: ${f.error_message}`, 'warning'));
+  }
+
   const baselineErrors = baseline?.reference_metrics?.error_count;
   if (baselineErrors != null && errors.length > baselineErrors) {
     ev.push(evidence('violation', 'Baseline error delta', `${errors.length} vs ${baselineErrors}`, 'warning'));
   }
 
   const allowedBlind = rules.error_recovery?.max_blind_retries || 2;
-  const score = Math.max(0, 100 - blindRetries * 25 - Math.max(0, errors.length - adaptive - blindRetries) * 15 - Math.max(0, blindRetries - allowedBlind) * 20);
-  return result(normalizeStatus(score), score, ev, 'Analyzed actions before and after error events.');
+  const failedToolPenalty = failedTools.reduce((acc, f) => acc + f.count * 15, 0);
+  const baseScore = Math.max(0, 100 - blindRetries * 25 - Math.max(0, errors.length - adaptive - blindRetries) * 15 - Math.max(0, blindRetries - allowedBlind) * 20);
+  const score = Math.max(0, baseScore - failedToolPenalty);
+  return result(normalizeStatus(score), score, ev, 'Analyzed actions before and after error/failure events.');
 }
 
 function result(status, score, ev, details) {

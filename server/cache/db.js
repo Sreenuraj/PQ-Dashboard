@@ -88,19 +88,25 @@ function initSchema(db) {
 
     CREATE TABLE IF NOT EXISTS baselines (
       id TEXT PRIMARY KEY,
-      task_id TEXT NOT NULL,
+      source_task_id TEXT NOT NULL,
       name TEXT,
+      description TEXT,
       tags TEXT,
       model_id TEXT,
       source TEXT,
       activity_category TEXT,
       created_at INTEGER,
+      updated_at INTEGER,
       prompts_json TEXT,
       expected_tools_json TEXT,
+      excluded_tools_json TEXT,
       tool_sequence_json TEXT,
       behavior_contract_json TEXT,
       reference_metrics_json TEXT,
-      FOREIGN KEY (task_id) REFERENCES tasks(id)
+      contributing_sessions_json TEXT,
+      failed_tools_json TEXT,
+      completion_message TEXT,
+      FOREIGN KEY (source_task_id) REFERENCES tasks(id)
     );
 
     CREATE INDEX IF NOT EXISTS idx_baselines_category ON baselines(activity_category);
@@ -138,6 +144,9 @@ function initSchema(db) {
       task_tokens_out INTEGER,
       task_errors INTEGER,
       task_status TEXT,
+      user_rating INTEGER,
+      completion_message TEXT,
+      interruption_count INTEGER DEFAULT 0,
       FOREIGN KEY (task_id) REFERENCES tasks(id),
       FOREIGN KEY (baseline_id) REFERENCES baselines(id)
     );

@@ -21,6 +21,14 @@ function runBSE(task, events, rules, baseline, registry = []) {
     }
   }
 
+  if (rules.scope_enforcement?.check_failed_tools) {
+    const { extractFailedTools } = require('../baselines/failed-tools');
+    const failedTools = extractFailedTools(events);
+    for (const f of failedTools) {
+      findings.push(evidence('violation', `Failed tool (${f.error_category})`, `${f.tool_name} x${f.count}: ${f.error_message}`, 'warning'));
+    }
+  }
+
   if (tools.length > maxToolCalls) findings.push(evidence('violation', 'Max tool calls', `${tools.length}/${maxToolCalls}`, 'warning'));
   const critical = findings.filter(f => f.severity === 'critical').length;
   const warnings = findings.filter(f => f.severity === 'warning').length;

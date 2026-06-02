@@ -12,8 +12,35 @@ module.exports = (db) => {
     }
 
     const inferredBaselineId = baseline_id || inferBaselineId(task_ids);
-    const ids = inferredBaselineId ? [inferredBaselineId, ...task_ids.filter(id => id !== inferredBaselineId)] : task_ids;
-    const tasks = ids.map(id => {
+
+    let resolvedBaselineTaskId = null;
+    let resolvedBaselineUUID = null;
+    let baselineRow = null;
+
+    if (inferredBaselineId) {
+      // Check if it is a baseline UUID
+      baselineRow = db.prepare('SELECT * FROM baselines WHERE id = ?').get(inferredBaselineId);
+      if (baselineRow) {
+        resolvedBaselineTaskId = baselineRow.source_task_id;
+        resolvedBaselineUUID = baselineRow.id;
+      } else {
+        // Fallback: check if it is a task ID that has a baseline
+        const bl = db.prepare('SELECT * FROM baselines WHERE source_task_id = ?').get(inferredBaselineId);
+        if (bl) {
+          baselineRow = bl;
+          resolvedBaselineTaskId = bl.source_task_id;
+          resolvedBaselineUUID = bl.id;
+        } else {
+          // If no baseline row exists at all, inferredBaselineId is a task ID
+          resolvedBaselineTaskId = inferredBaselineId;
+        }
+      }
+    }
+
+    // Filter out resolved baseline from other tasks to avoid duplication
+    const otherTaskIds = task_ids.filter(id => id !== resolvedBaselineTaskId && id !== resolvedBaselineUUID && id !== inferredBaselineId);
+
+    const tasks = otherTaskIds.map(id => {
       const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id);
       if (!task) return null;
       task.models = db.prepare('SELECT DISTINCT model_id, provider_id, mode, ts FROM task_models WHERE task_id = ? ORDER BY ts').all(id);
@@ -22,19 +49,53 @@ module.exports = (db) => {
       const tool_sequence = events
         .filter(e => e.tool_name && e.tool_name !== 'unknown')
         .map((e, index) => ({ index, tool_name: e.tool_name, file_path: extractTarget(e), command: e.command_text || null }));
-      const tests = include_tests ? runTestSuite(db, id, inferredBaselineId, null, false) : null;
-      return { task, tool_sequence, tests, is_baseline: inferredBaselineId === id };
+      const tests = include_tests ? runTestSuite(db, id, resolvedBaselineUUID || inferredBaselineId, null, false) : null;
+      return { task, tool_sequence, tests, is_baseline: false };
     }).filter(Boolean);
 
+    // Prepend baseline column if resolved
+    if (resolvedBaselineTaskId) {
+      const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(resolvedBaselineTaskId);
+      if (task) {
+        task.models = db.prepare('SELECT DISTINCT model_id, provider_id, mode, ts FROM task_models WHERE task_id = ? ORDER BY ts').all(resolvedBaselineTaskId);
+        task.environment = tryParse(task.environment);
+        let tool_sequence;
+        if (baselineRow) {
+          tool_sequence = tryParse(baselineRow.tool_sequence_json, []);
+        } else {
+          const events = db.prepare('SELECT * FROM events WHERE task_id = ? ORDER BY ts ASC').all(resolvedBaselineTaskId);
+          tool_sequence = events
+            .filter(e => e.tool_name && e.tool_name !== 'unknown')
+            .map((e, index) => ({ index, tool_name: e.tool_name, file_path: extractTarget(e), command: e.command_text || null }));
+        }
+        const tests = include_tests ? runTestSuite(db, resolvedBaselineTaskId, resolvedBaselineUUID || inferredBaselineId, null, false) : null;
+        tasks.unshift({ task, tool_sequence, tests, is_baseline: true });
+      }
+    }
+
     res.json({
-      baseline: inferredBaselineId ? getBaseline(db, inferredBaselineId) : null,
+      baseline: resolvedBaselineUUID ? getBaseline(db, resolvedBaselineUUID) : (inferredBaselineId ? getBaseline(db, inferredBaselineId) : null),
       tasks,
     });
   });
 
   function inferBaselineId(taskIds) {
-    const baselines = db.prepare(`SELECT id FROM baselines WHERE id IN (${taskIds.map(() => '?').join(',')})`).all(...taskIds);
-    return baselines[0]?.id || null;
+    if (!taskIds || taskIds.length === 0) return null;
+    const placeholders = taskIds.map(() => '?').join(',');
+
+    // 1. Check if any of the taskIds is directly a baseline UUID
+    let row = db.prepare(`SELECT id FROM baselines WHERE id IN (${placeholders})`).get(...taskIds);
+    if (row) return row.id;
+
+    // 2. Check if any of the taskIds is the source task of a baseline
+    row = db.prepare(`SELECT id FROM baselines WHERE source_task_id IN (${placeholders})`).get(...taskIds);
+    if (row) return row.id;
+
+    // 3. Check if any of the taskIds has been tested against a baseline (from test_results)
+    row = db.prepare(`SELECT baseline_id FROM test_results WHERE task_id IN (${placeholders}) AND baseline_id IS NOT NULL ORDER BY run_ts DESC LIMIT 1`).get(...taskIds);
+    if (row) return row.baseline_id;
+
+    return null;
   }
 
   // GET /api/tasks — paginated list with filters

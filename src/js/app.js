@@ -9,6 +9,8 @@ import { renderCompare }  from './views/compare.js';
 import { renderEval }     from './views/eval.js';
 import { renderActivity } from './views/activity.js';
 import { renderBaselines } from './views/baselines.js';
+import { renderBaselineEditor } from './views/baseline-editor.js';
+import { renderBaselineEnrich } from './views/baseline-enrich.js';
 import { renderTest } from './views/test.js';
 import { renderDeepCompare } from './views/deep-compare.js';
 import { api }            from './api.js';
@@ -56,6 +58,8 @@ const routes = {
   eval:        (p) => renderEval(container, p.get('task')),
   activity:    (p) => renderActivity(container, getDateRange()),
   baselines:   (p) => renderBaselines(container),
+  'baseline-editor': (p) => renderBaselineEditor(container, p.get('id')),
+  'baseline-enrich': (p) => renderBaselineEnrich(container, p.get('id')),
   test:        (p) => renderTest(container, p),
   deepcompare: (p) => renderDeepCompare(container, p),
 };

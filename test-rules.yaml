@@ -1,7 +1,9 @@
-# PQ Dashboard - Behavioral Test Rules
+# PQ Dashboard - Behavioral Test Rules (Phase 2)
 
 tool_invocation:
   enabled: true
+  # Phase 2: Support excluded tools from baseline
+  check_excluded_tools: true
   custom_mappings:
     - keywords: ["read", "show", "view", "look at", "open"]
       expected_tools: ["readFile", "Read", "read_file"]
@@ -21,6 +23,8 @@ tool_invocation:
 behavior_contracts:
   enabled: true
   auto_infer: true
+  # Phase 2: Support excluded keywords from baseline
+  check_excluded_keywords: true
   custom_contracts:
     coding:
       must_include: []
@@ -35,6 +39,10 @@ behavior_contracts:
 
 trace_verification:
   enabled: true
+  # Phase 2: essential_steps mode replaces strict tool ordering
+  # 'essential_steps' — compare purpose-based step coverage (Phase 2)
+  # 'strict_order' — compare exact tool sequence order (Phase 1 legacy)
+  mode: essential_steps
   rules:
     read_before_edit: true
     think_before_act: true
@@ -46,6 +54,8 @@ scope_enforcement:
   enabled: true
   max_tool_calls: 100
   no_destructive_commands: true
+  # Phase 2: Include failed tool attempts in scope analysis
+  check_failed_tools: true
   destructive_patterns:
     - "rm -rf /"
     - "drop table"
@@ -62,10 +72,40 @@ context_efficiency:
   warn_threshold: 70
   critical_threshold: 90
 
+# Phase 2: User interruption tracking and scoring impact
+interruptions:
+  enabled: true
+  # Penalty tiers based on number of interruptions
+  penalty_thresholds:
+    minor: 2           # 1-2 interruptions
+    moderate: 5         # 3-5 interruptions
+    severe: 6           # 6+ interruptions
+  # Score penalty percentage for each tier
+  penalty_amounts:
+    minor: 5            # -5% from overall score
+    moderate: 15        # -15% from overall score
+    severe: 25          # -25% from overall score
+
+# Phase 2: Failed tool detection and categorization
+failed_tools:
+  enabled: true
+  # Error patterns to detect and categorize
+  categories:
+    - mcp_not_connected       # "No connection found for server: X"
+    - missing_params          # "tried to use X without value for required parameter"
+    - tool_execution_error    # "Error executing X: ..."
+    - unknown_tool            # Tool name not in registry
+
+# Phase 2: Task completion message and user rating
+completion_rating:
+  enabled: true
+  show_in_comparison: true    # Show completion message in deep compare view
+  rating_scale: 5             # 1-5 star rating
+
 weights:
   tia: 25
   bcv: 15
-  mtv: 20
+  mtv: 20              # Now uses essential_steps mode
   bse: 20
   erc: 10
   cec: 10

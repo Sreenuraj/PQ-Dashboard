@@ -39,50 +39,44 @@ Alternatively, you can run them manually in two terminals:
 - Terminal 1: `npm start` (Runs the backend on port 3456 & initial task parse)
 - Terminal 2: `npm run dev` (Runs the Vite frontend on port 5173)
 
-## Session Testing & Baselines
+## Session Testing & Baselines (Phase 2)
 
-PQ Dashboard now supports a baseline-first behavioral testing workflow:
+PQ Dashboard features a powerful standalone behavioral testing workflow that allows you to manage baselines, customize execution boundaries, track agent reliability, and score completions:
 
-1. Open **Sessions** and select one completed task.
-2. Click **Set as Baseline** to create a reference execution.
-3. Review extracted prompts, tools, sequence, and contract data in **Baselines**.
-4. Run **Test Session** against another task, optionally selecting the baseline.
-5. Use **Deep Compare** to compare operational metrics and behavioral scores across tasks.
+1. **Standalone Editable Baselines:** Instead of simple static session snapshots, you can create standalone editable baselines from any session (regardless of completion status).
+2. **Baseline Editor (`#/baseline-editor`):** A dual-list curator interface to manage expected and excluded tools, required and excluded contract keywords, descriptions, tags, and toggle essential steps.
+3. **Enrichment & Merging (`#/baseline-enrich`):** Contrast any session trace against a baseline to discover new tools/keywords, and selectively merge them back into the baseline while maintaining a list of contributing sessions.
+4. **Contextual Tool Sequences & Essential Steps:** Tool calls carry auto-derived descriptions (identifying file contexts). Instead of strict ordering, the MTV pattern validates coverage of **Essential Steps** and checks for baseline excluded tools/keywords.
+5. **Session Health & Interruption Tracking:** Automatically tracks user interruptions (`resume_task` events) and context resets, applying automated tiered behavioral penalties (-5%, -15%, -25%).
+6. **Failed Tool Extraction:** Intelligently extracts tool execution failures (such as MCP timeouts, missing parameters, execution errors) from log traces, surfacing warnings and impacting error recovery scores.
+7. **Completion Message & Star Ratings:** Completion message text is parsed and rendered in formatted Markdown. You can rate task execution quality directly on the test page with a 1-5 Star Rating scale.
+8. **Overall Performance Index:** Evaluates task success using a weighted index ($60\%$ Behavioral score, $40\%$ Operational efficiency based on cost, duration, tool calls, and error counts relative to baseline references).
 
 ### What a baseline captures
 
 When a task is marked as a baseline, the dashboard stores a benchmark set in SQLite:
-
-- Prompt chain: user prompts in order, plus tools used after each prompt.
-- Expected tools: distinct tools used by the baseline task.
-- Tool sequence: ordered tool calls with extracted file paths or commands when available.
-- Behavior contract: output structure, length bounds, code-block presence, and keywords derived from the baseline response.
-- Operational metrics: cost, tokens, duration, API calls, tool calls, errors, and context reset status.
-
-With a baseline selected, behavioral tests compare against this extracted benchmark data. Without a baseline, tests use deterministic fallback rules from `test-rules.yaml`.
+- **Prompt chain:** User prompts in order, plus tools used after each prompt.
+- **Expected & Excluded tools:** Direct list of tools the agent should or should not use.
+- **Essential Steps sequence:** Ordered tool calls with file paths, custom descriptions, and essential toggles.
+- **Behavior contract:** Output structure, length bounds, code-block presence, required keywords, and excluded keywords.
+- **Reference metrics:** Cost, tokens, duration, API calls, tool calls, errors, and context reset status.
 
 ### Behavioral test patterns
 
-The test runner is deterministic and does not call another LLM. It currently evaluates:
+The test runner evaluates six deterministic patterns natively from log traces without expensive secondary LLM judge calls:
+- **Tool Invocation Assertion (TIA):** Checks if expected tools were called, and fails if excluded tools were used (applying a 20% score penalty per infraction).
+- **Behavior Contract Validation (BCV):** Checks if required keywords are present and verifies that excluded keywords are absent from the final response.
+- **Multi-Step Trace Verification (MTV):** Validates coverage of configured baseline **Essential Steps**, and checks tool usage efficiency against reference benchmarks.
+- **Boundary/Scope Enforcement (BSE):** Monitors command safety (detecting destructive commands like `rm -rf /` or `drop table`), limits max tool footprint, and extracts failed tool execution attempts.
+- **Error Recovery Coherence (ERC):** Analyzes agent adaptation after errors, penalizing failed tool attempts and blind retry loops.
+- **Context Efficiency Compliance (CEC):** Monitors context usage relative to token limits.
 
-- **Tool Invocation Assertion:** Did the task use the expected tools?
-- **Behavior Contract Validation:** Did the final output match structural expectations?
-- **Multi-Step Trace Verification:** Did tool calls follow a sensible order?
-- **Boundary/Scope Enforcement:** Were tools and commands within the known safe scope?
-- **Error Recovery Coherence:** Did the agent adapt after errors?
-- **Context Efficiency Compliance:** Did context usage stay reasonable?
-
-### New dashboard views
-
-- `#/baselines` — Manage baseline sessions, copy prompt chains, and inspect benchmark summaries.
-- `#/test?task=<id>` — Run behavioral tests for one task.
-- `#/test?task=<id>&baseline=<baseline_id>` — Run behavioral tests against a baseline.
-- `#/deepcompare?tasks=<id1>,<id2>` — Compare multiple tasks with behavioral and operational metrics.
-- `#/deepcompare?tasks=<id>&baseline=<baseline_id>` — Compare tasks with a fixed baseline reference.
-
-### Test rules fallback
-
-`test-rules.yaml` is only the fallback/configuration layer for tests that run without a baseline. Baseline-backed testing uses the baseline’s extracted benchmark set as the primary source of truth.
+### Dynamic Baseline Switching & Deep Compare
+- `#/baselines` — Manage baselines list, edit tags, copy prompt chains, and access editor/enrichment views.
+- `#/baseline-editor?id=<id>` — Edit baseline tools, keywords, tags, metadata, and essential steps.
+- `#/baseline-enrich?id=<id>` — Compare a session trace against a baseline and merge diffs.
+- `#/test?task=<id>` — Run behavioral tests for a task (automatically resolves the baseline reference if previously tested).
+- `#/deepcompare?tasks=<id1>,<id2>&baseline=<baseline_id>` — Compare tasks side-by-side. Features an **Overall Performance Index** breakdown, a Markdown completion synopsis details modal, and an on-the-fly **Baseline Switcher** dropdown that re-calculates all scores dynamically.
 
 ## Architecture
 - **Backend (`server/`):** Express.js + `better-sqlite3`. Contains the config loader, filesystem scanner, event extraction logic (`ui_messages.json` parsing), task cache deduplication, and REST API routes (including advanced on-the-fly sequence mapping and Sankey node generators).

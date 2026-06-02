@@ -36,6 +36,10 @@ function runBCV(task, events, rules, baseline) {
     const found = forbidden.filter(k => output.toLowerCase().includes(String(k).toLowerCase()));
     checks.push(check(found.length === 0, 'forbidden', found.length ? `Found: ${found.join(', ')}` : 'None found'));
   }
+  if (contract.excluded_keywords?.length) {
+    const found = contract.excluded_keywords.filter(k => output.toLowerCase().includes(String(k).toLowerCase()));
+    checks.push(check(found.length === 0, 'excluded_keywords', found.length ? `Found excluded: ${found.join(', ')}` : 'None found'));
+  }
 
   if (!checks.length) return result('skip', 0, [evidence('info', 'Contract', 'No applicable checks')], 'Contract had no applicable rules.');
   const passed = checks.filter(c => c.ok).length;

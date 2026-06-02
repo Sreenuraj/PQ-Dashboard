@@ -57,12 +57,27 @@ export async function renderBaselines(container) {
     });
   });
 
-  document.querySelectorAll('[data-reextract-baseline]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      btn.textContent = 'Re-extracting...';
-      btn.disabled = true;
-      await api.reextractBaseline(btn.dataset.reextractBaseline);
-      await renderBaselines(container);
+  document.querySelectorAll('.inline-add-tag-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const tag = prompt('Enter a new tag:');
+      if (tag) {
+        const trimmed = tag.trim();
+        if (trimmed) {
+          const containerEl = btn.closest('.tags-container');
+          const baselineId = containerEl.dataset.baselineId;
+          const baseline = baselines.find(x => x.id === baselineId);
+          if (baseline) {
+            const updatedTags = [...(baseline.tags || [])];
+            if (!updatedTags.includes(trimmed)) {
+              updatedTags.push(trimmed);
+              await api.updateBaseline(baselineId, { tags: updatedTags });
+              await renderBaselines(container);
+            }
+          }
+        }
+      }
     });
   });
 }
@@ -72,8 +87,10 @@ function renderBaselineCard(b) {
   const search = `${b.name} ${(b.tags || []).join(' ')} ${b.model_id} ${b.activity_category}`.toLowerCase();
   return `
     <details class="panel baseline-card" data-search="${escAttr(search)}">
-      <summary class="panel-title baseline-card-summary">
-        <span class="baseline-title">${escHtml(b.name || b.id)}</span>
+      <summary class="panel-title baseline-card-summary" style="display:flex;align-items:center;gap:8px;width:100%">
+        <span class="baseline-title" style="flex:1">${escHtml(b.name || b.id)}</span>
+        <span style="font-size:11px;color:var(--text-3);margin-right:8px">${fmtDateTime(b.created_at)}</span>
+        <span class="badge grey mono">${escHtml(b.model_id || 'unknown')}</span>
         <span class="badge accent">${escHtml(b.activity_category || 'general')}</span>
       </summary>
       <div class="panel-body">
@@ -85,14 +102,17 @@ function renderBaselineCard(b) {
           <div><span>Errors</span><strong>${metrics.error_count || 0}</strong></div>
           <div><span>Created</span><strong>${fmtDateTime(b.created_at)}</strong></div>
         </div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;margin:12px 0">
-          ${(b.tags || []).map(t => `<span class="badge grey">${escHtml(t)}</span>`).join('') || '<span class="badge grey">No tags</span>'}
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin:12px 0" class="tags-container" data-baseline-id="${escAttr(b.id)}">
+          ${(b.tags || []).map(t => `<span class="badge grey">${escHtml(t)}</span>`).join('')}
+          <button class="badge grey inline-add-tag-btn" style="cursor:pointer;border:1px dashed var(--border-2);background:transparent">+ Add Tag</button>
         </div>
         <details style="margin-bottom:12px">
           <summary class="details-summary">Benchmark summary</summary>
           <div class="benchmark-summary">
             <div><strong>Expected tools:</strong> ${(b.expected_tools || []).map(escHtml).join(', ') || '-'}</div>
+            <div><strong>Excluded tools:</strong> ${(b.excluded_tools || []).map(escHtml).join(', ') || '-'}</div>
             <div><strong>Contract keywords:</strong> ${(b.behavior_contract?.output_keywords || []).map(escHtml).join(', ') || '-'}</div>
+            <div><strong>Excluded keywords:</strong> ${(b.behavior_contract?.excluded_keywords || []).map(escHtml).join(', ') || '-'}</div>
           </div>
         </details>
         <div class="prompt-chain">
@@ -100,10 +120,9 @@ function renderBaselineCard(b) {
         </div>
         <div class="baseline-actions">
           <button class="action-btn secondary" data-copy-all>Copy All Prompts</button>
-          <a class="action-btn secondary" href="#/timeline?task=${encodeURIComponent(b.task_id)}">View Timeline</a>
+          <a class="action-btn secondary" href="#/baseline-editor?id=${encodeURIComponent(b.id)}">Edit Baseline</a>
           <a class="action-btn primary" href="#/test?baseline=${encodeURIComponent(b.id)}">Test Against This</a>
-          <a class="action-btn secondary" href="#/deepcompare?baseline=${encodeURIComponent(b.id)}">Compare Models</a>
-          <button class="action-btn secondary" data-reextract-baseline="${escAttr(b.id)}">Re-extract</button>
+          <a class="action-btn secondary" href="#/baseline-enrich?id=${encodeURIComponent(b.id)}">Enrich from Session</a>
           <button class="action-btn ghost" data-delete-baseline="${escAttr(b.id)}">Delete Baseline</button>
         </div>
       </div>

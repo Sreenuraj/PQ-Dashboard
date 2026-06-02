@@ -37,5 +37,17 @@ module.exports = (db) => {
     }
   });
 
+  router.put('/test-results/:id/rate', (req, res) => {
+    const { rating } = req.body || {};
+    if (rating === undefined || rating < 1 || rating > 5) {
+      return res.status(400).json({ error: 'Rating must be an integer between 1 and 5' });
+    }
+    const result = db.prepare('UPDATE test_results SET user_rating = ? WHERE id = ?').run(rating, req.params.id);
+    if (result.changes === 0) {
+      return res.status(404).json({ error: 'Test result not found' });
+    }
+    res.json({ ok: true, rating });
+  });
+
   return router;
 };

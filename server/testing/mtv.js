@@ -5,7 +5,7 @@ function runMTV(task, events, rules, baseline) {
   if (tools.length < 2) return result('skip', 0, [evidence('info', 'Tool calls', `${tools.length} tool call(s)`)], 'Trace has fewer than two tool calls.');
 
   if (baseline?.tool_sequence?.length) {
-    return baselineSequence(tools, baseline.tool_sequence);
+    return baselineSequence(tools, baseline, events);
   }
 
   const checks = [];
@@ -39,20 +39,73 @@ function runMTV(task, events, rules, baseline) {
   return result(normalizeStatus(score), score, applicable.map(c => evidence(c.ok ? 'info' : 'violation', c.label, c.value, c.ok ? 'info' : c.severity)), 'Verified tool ordering against deterministic sequence rules.');
 }
 
-function baselineSequence(tools, sequence) {
-  const expected = sequence.map(s => s.tool_name);
-  const actual = tools.map(t => t.tool_name);
-  let matches = 0;
-  for (let i = 0; i < Math.min(expected.length, actual.length); i++) {
-    if (expected[i] === actual[i]) matches++;
+function baselineSequence(tools, baseline, events) {
+  const sequence = baseline.tool_sequence || [];
+  const essentialSteps = sequence.filter(s => s.is_essential);
+  const actualToolsSet = new Set(tools.map(t => t.tool_name));
+  
+  // 1. Essential step coverage
+  const findings = [];
+  let coveredCount = 0;
+  
+  for (const step of essentialSteps) {
+    const match = tools.find(t => t.tool_name === step.tool_name && isTargetMatch(t.file_path, step.file_path));
+    if (match) {
+      coveredCount++;
+      findings.push(evidence('info', `Step covered: "${step.description || step.tool_name}"`, `${match.tool_name} -> ${match.file_path || 'none'}`));
+    } else {
+      findings.push(evidence('violation', `Missing step: "${step.description || step.tool_name}"`, `${step.tool_name} -> ${step.file_path || 'none'}`, 'critical'));
+    }
   }
-  const lengthPenalty = Math.abs(expected.length - actual.length);
-  const score = Math.max(0, Math.round((matches / Math.max(expected.length, 1)) * 100 - lengthPenalty * 3));
-  return result(normalizeStatus(score), score, [
-    evidence('expected', 'Baseline sequence', expected.join(' -> ')),
-    evidence('actual', 'Actual sequence', actual.join(' -> ')),
-    evidence(score >= 80 ? 'info' : 'violation', 'Aligned positions', `${matches}/${expected.length}`),
-  ], 'Compared ordered tool sequence against the baseline.');
+  
+  // 2. Excluded tool check
+  const excluded = baseline.excluded_tools || [];
+  const excludedUsed = excluded.filter(t => actualToolsSet.has(t));
+  for (const t of excludedUsed) {
+    findings.push(evidence('violation', 'Excluded tool used', t, 'critical'));
+  }
+  
+  // 3. Efficiency check
+  const baselineLength = sequence.length;
+  const actualLength = tools.length;
+  if (baselineLength > 0 && actualLength > baselineLength * 1.5) {
+    findings.push(evidence('violation', 'Efficiency warning', `Used ${actualLength} tool calls compared to baseline ${baselineLength}`, 'warning'));
+  } else {
+    findings.push(evidence('info', 'Efficiency check', `Used ${actualLength} tool calls (baseline: ${baselineLength})`));
+  }
+  
+  // Compute score
+  const coveragePct = essentialSteps.length > 0 ? (coveredCount / essentialSteps.length) : 1;
+  let score = Math.round(coveragePct * 100);
+  if (excludedUsed.length > 0) {
+    score -= excludedUsed.length * 20;
+  }
+  if (baselineLength > 0 && actualLength > baselineLength * 1.5) {
+    const excess = (actualLength - baselineLength) / baselineLength;
+    score -= Math.min(20, Math.round(excess * 10));
+  }
+  score = Math.max(0, Math.min(100, score));
+  
+  let status = 'pass';
+  if (essentialSteps.length > 0 && coveredCount === 0) {
+    status = 'fail';
+  } else if (excludedUsed.length > 0 || (essentialSteps.length > 0 && (coveredCount / essentialSteps.length) < 0.6)) {
+    status = 'fail';
+  } else if (coveredCount < essentialSteps.length || actualLength > baselineLength * 1.5) {
+    status = 'warn';
+  } else {
+    status = normalizeStatus(score);
+  }
+  
+  return result(status, score, findings, 'Compared session tool sequence and essential steps against baseline.');
+}
+
+function isTargetMatch(pathA, pathB) {
+  if (!pathA && !pathB) return true;
+  if (!pathA || !pathB) return false;
+  const cleanA = pathA.replace(/^[./\\]+/, '').toLowerCase();
+  const cleanB = pathB.replace(/^[./\\]+/, '').toLowerCase();
+  return cleanA === cleanB || cleanA.endsWith(cleanB) || cleanB.endsWith(cleanA);
 }
 
 function result(status, score, ev, details) {

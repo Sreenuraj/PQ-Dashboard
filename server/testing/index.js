@@ -30,15 +30,38 @@ function runTestSuite(db, taskId, baselineId = null, pattern = null, persist = t
     cec: runCEC,
   };
 
+  const { countInterruptions, getCompletionMessage } = require('./shared');
+  const { extractFailedTools } = require('../baselines/failed-tools');
+  const interruptionCount = countInterruptions(events, task);
+  const completionMessage = getCompletionMessage(events);
+  const failedTools = extractFailedTools(events);
+
   const patterns = pattern ? [pattern] : Object.keys(runners);
   const results = patterns.map(key => runners[key](task, events, rules, baseline, registry));
-  const overallScore = weightedScore(results, rules.weights || {});
+  const baseScore = weightedScore(results, rules.weights || {});
+
+  let penalty = 0;
+  if (interruptionCount >= 6) penalty = 25;
+  else if (interruptionCount >= 3) penalty = 15;
+  else if (interruptionCount >= 1) penalty = 5;
+
+  const overallScore = Math.max(0, baseScore - penalty);
+
+  const ratingRow = db.prepare('SELECT user_rating FROM test_results WHERE task_id = ? AND user_rating IS NOT NULL ORDER BY run_ts DESC LIMIT 1').get(taskId);
+  const userRating = ratingRow ? ratingRow.user_rating : null;
+
   const suite = {
     id: makeResultId(taskId, baselineId, Date.now()),
     task_id: taskId,
     baseline_id: baselineId,
     run_ts: Date.now(),
     overall_score: overallScore,
+    base_score: baseScore,
+    interruption_count: interruptionCount,
+    interruption_penalty: penalty,
+    completion_message: completionMessage,
+    user_rating: userRating,
+    failed_tools: failedTools,
     results,
     task,
     baseline,
@@ -69,9 +92,12 @@ function getBaseline(db, id) {
     tags: parse(row.tags, []),
     prompts: parse(row.prompts_json, []),
     expected_tools: parse(row.expected_tools_json, []),
+    excluded_tools: parse(row.excluded_tools_json, []),
     tool_sequence: parse(row.tool_sequence_json, []),
     behavior_contract: parse(row.behavior_contract_json, {}),
     reference_metrics: parse(row.reference_metrics_json, {}),
+    contributing_sessions: parse(row.contributing_sessions_json, []),
+    failed_tools: parse(row.failed_tools_json, []),
   };
 }
 
@@ -91,8 +117,9 @@ function saveResult(db, suite) {
       bse_status, bse_score, bse_evidence_json,
       erc_status, erc_score, erc_evidence_json,
       cec_status, cec_score, cec_evidence_json,
-      task_cost, task_duration, task_tokens_in, task_tokens_out, task_errors, task_status
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      task_cost, task_duration, task_tokens_in, task_tokens_out, task_errors, task_status,
+      user_rating, completion_message, interruption_count
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
     suite.id, suite.task_id, suite.baseline_id, getPrimaryModel(task), null, suite.run_ts, suite.overall_score,
     get('tia').status, get('tia').score, JSON.stringify(get('tia').evidence || []),
@@ -101,7 +128,8 @@ function saveResult(db, suite) {
     get('bse').status, get('bse').score, JSON.stringify(get('bse').evidence || []),
     get('erc').status, get('erc').score, JSON.stringify(get('erc').evidence || []),
     get('cec').status, get('cec').score, JSON.stringify(get('cec').evidence || []),
-    task.total_cost || 0, task.duration || 0, task.total_tokens_in || 0, task.total_tokens_out || 0, task.error_count || 0, task.status
+    task.total_cost || 0, task.duration || 0, task.total_tokens_in || 0, task.total_tokens_out || 0, task.error_count || 0, task.status,
+    suite.user_rating, suite.completion_message, suite.interruption_count
   );
 }
 

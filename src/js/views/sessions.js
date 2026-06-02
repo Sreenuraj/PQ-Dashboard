@@ -33,7 +33,7 @@ function updateActionBar() {
     btnCompare.style.display = 'none';
     btnDeepCompare.style.display = 'none';
     const task = visibleTasks.get(Array.from(selectedTasks)[0]);
-    btnBaseline.style.display = task?.status === 'completed' ? 'block' : 'none';
+    btnBaseline.style.display = task ? 'block' : 'none';
   } else {
     btnInvestigate.style.display = 'none';
     btnTimeline.style.display = 'none';
@@ -342,6 +342,8 @@ function openBaselineModal(taskId, container) {
           </div>
           <label class="field-label">Baseline Name</label>
           <input id="baseline-name" class="filter-input modal-input" value="${escAttr(defaultBaselineName(task))}" />
+          <label class="field-label">Description</label>
+          <textarea id="baseline-description" class="filter-input modal-input" style="height:60px;resize:vertical" placeholder="Describe the reference behavior..."></textarea>
           <label class="field-label">Tags</label>
           <input id="baseline-tags" class="filter-input modal-input" placeholder="coding, react, auth" value="${escAttr(task.activity_category || '')}" />
         </div>
@@ -358,8 +360,9 @@ function openBaselineModal(taskId, container) {
   document.getElementById('baseline-cancel')?.addEventListener('click', close);
   document.getElementById('baseline-create')?.addEventListener('click', async () => {
     const name = document.getElementById('baseline-name')?.value || '';
+    const description = document.getElementById('baseline-description')?.value || '';
     const tags = (document.getElementById('baseline-tags')?.value || '').split(',').map(t => t.trim()).filter(Boolean);
-    await api.createBaseline({ task_id: taskId, name, tags });
+    await api.createBaseline({ task_id: taskId, name, description, tags });
     close();
     window.location.hash = '#/baselines';
   });

@@ -54,6 +54,12 @@ export function initDatePicker(containerId) {
 
   if (!wrapper || !btn) return;
 
+  const view = window.location.hash.replace('#/', '').split('?')[0] || 'overview';
+  if (view === 'baselines' || view === 'baseline-editor' || view === 'baseline-enrich') {
+    wrapper.style.display = 'none';
+    return;
+  }
+
   // Move wrapper into the new view's top-bar
   const container = document.getElementById(containerId);
   if (container) {

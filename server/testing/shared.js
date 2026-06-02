@@ -47,6 +47,25 @@ function getPrimaryModel(task) {
   return task.models?.[0]?.model_id || task.model_id || null;
 }
 
+function countInterruptions(events, task) {
+  let count = 0;
+  // resume_task events = user hit stop and resumed
+  count += events.filter(e => e.sub_type === 'resume_task').length;
+  // Context resets
+  if (task.has_context_reset) count++;
+  return count;
+}
+
+function getCompletionMessage(events) {
+  // Find the completion_result event with type 'say' — contains the agent's summary
+  const completion = [...events].reverse().find(
+    e => e.sub_type === 'completion_result' && e.type === 'say'
+  );
+  if (!completion) return null;
+  // The text content is stored in content_preview or response_text
+  return completion.content_preview || completion.response_text || null;
+}
+
 module.exports = {
   READ_TOOLS,
   EDIT_TOOLS,
@@ -60,4 +79,7 @@ module.exports = {
   evidence,
   getFinalOutput,
   getPrimaryModel,
+  countInterruptions,
+  getCompletionMessage,
 };
+

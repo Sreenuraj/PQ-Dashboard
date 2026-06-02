@@ -1,41 +1,67 @@
-# Session Behavioral Testing Implementation Tracker
+# Phase 2 — Session Behavioral Testing Implementation Tracker
 
-## Backend Foundation
-- [x] Add SQLite tables for baselines and persisted behavioral test results.
-- [x] Add default `test-rules.yaml` configuration.
-- [x] Implement baseline prompt chain and benchmark extraction.
-- [x] Implement baseline CRUD API routes.
-- [x] Implement deterministic behavioral test runner with all six patterns.
-- [x] Implement test rules and tool registry API endpoints.
-- [x] Implement deep comparison API with optional baseline reference and test results.
-- [x] Register new backend routes in the Express server.
+## Standalone Editable Baselines
+- [x] Schema migration: add `description`, `updated_at`, `contributing_sessions_json`, `excluded_tools_json`, `failed_tools_json`, `completion_message` to baselines table.
+- [x] Schema migration: add `user_rating`, `completion_message` to test_results table.
+- [x] Update baseline creation flow: generate UUID-based IDs, accept `description`, support any session status (not just completed).
+- [x] Build Baseline Editor view (`src/js/views/baseline-editor.js`) with dual-list tool/keyword management.
+- [x] Implement `PUT /api/baselines/:id` for editing expected_tools, excluded_tools, keywords, excluded keywords, descriptions, tags.
+- [x] Build Enrich from Session flow (`src/js/views/baseline-enrich.js`) with diff/merge UI.
+- [x] Implement `POST /api/baselines/:id/enrich` and `PUT /api/baselines/:id/merge` endpoints.
+- [x] Add `contributing_sessions` tracking to baselines.
 
-## Frontend Foundation
-- [x] Add API client methods for baselines, tests, rules, registry, and deep compare.
-- [x] Add routes for Baselines, Session Test, and Deep Compare views.
-- [x] Add sidebar navigation for the Testing section.
+## Contextual Tool Sequences
+- [x] Build auto-description engine (`server/baselines/tool-descriptions.js`) — derive labels from tool name + file path context.
+- [x] Add `description` and `is_essential` fields to tool_sequence items in extraction.
+- [x] Expose tool descriptions in Baseline Editor for user editing.
+- [x] Rewrite MTV pattern to use essential-steps mode instead of strict ordering.
 
-## Session Workflows
-- [x] Add session action buttons for Set as Baseline, Test Session, and Deep Compare.
-- [x] Add baseline creation modal from selected completed sessions.
-- [x] Add baseline deletion and prompt copy workflows.
+## Failed Tool Detection
+- [x] Build failed tool extractor (`server/baselines/failed-tools.js`) — parse error messages for MCP, missing params, execution errors.
+- [x] Integrate failed tools into baseline extraction pipeline.
+- [x] Show failed tools in Session Test view.
+- [x] Show failed tools in enrichment diff view.
+- [x] Include failed tool data in BSE pattern scoring.
 
-## New Views
-- [x] Build Baselines page with benchmark summaries and prompt chains.
-- [x] Build Session Behavioral Test view with baseline selector and pattern evidence.
-- [x] Build Enhanced Deep Compare view with behavioral matrix, operational metrics, and tool sequences.
+## Baselines Page Fixes
+- [x] Fix Compare Models button navigation.
+- [x] Replace "View Timeline" button with "Edit Baseline" (links to editor).
+- [x] Update baseline card heading: add date + model badge.
+- [x] Add inline tag management on baseline cards.
+- [x] Remove "All Time" date filter dropdown.
+- [x] Replace "Re-extract" with "Enrich from Session" button.
+
+## Session Test Improvements
+- [x] Add user interruption counting (resume_task, context resets).
+- [x] Display interruption count in Session Health section.
+- [x] Implement interruption penalty on overall behavioral score.
+- [x] Update TIA pattern to check excluded tools from baseline.
+- [x] Update BCV pattern to check excluded keywords from baseline.
+- [x] Add Tool Failures section to test result display.
+
+## Task Completion & Rating
+- [x] Capture `completion_result` text in parser (`ui-messages.js`) — store as content_preview.
+- [x] Extract and store completion message in baselines.
+- [x] Show completion message in Session Test view.
+- [x] Add completion message row to Deep Compare table.
+- [x] Build star rating UI (1–5) in Session Test view.
+- [x] Implement `PUT /api/test-results/:id/rate` endpoint.
+- [x] Show rating in Deep Compare and Benchmarks views.
+
+## Frontend Updates
+- [x] Add API client methods: `updateBaseline`, `enrichBaseline`, `mergeEnrichment`, `rateTestResult`.
+- [x] Register new routes: baseline editor, enrich view.
+- [x] Update CSS: dual-list editor, diff view, star rating, health indicators.
+
+## Updated Test Rules
+- [x] Update `test-rules.yaml` with Phase 2 sections.
+- [x] Update `server/testing/rules.js` to load new config sections.
 
 ## Verification
-- [x] Run a production build.
-- [x] Smoke test behavioral test runner against a cached completed task.
-- [x] Verify baseline prompt extraction no longer treats assistant response text as a prompt.
-- [x] Confirm previously started dev/API server sessions were stopped.
-- [ ] Smoke test backend endpoints and UI routes in browser.
-
-## Follow-up Fixes From Manual Testing
-- [x] Add baseline-backed Deep Compare picker from the Baselines page.
-- [x] Infer the baseline when a selected compare set includes an existing baseline task.
-- [x] Visually highlight the baseline column in Deep Compare.
-- [x] Collapse baseline cards by default so multiple baselines remain scannable.
-- [x] Add Re-extract action so existing baseline benchmark data can be refreshed.
-- [x] Fix prompt chain extraction to capture only the initial user prompt plus explicit user feedback.
+- [x] Run production build successfully.
+- [x] Smoke test all new API endpoints.
+- [x] Verify baseline creation → editing → enrichment flow end-to-end.
+- [x] Verify session test with edited baseline (excluded tools/keywords cause failures).
+- [x] Verify Compare Models works from Baselines page.
+- [x] Verify interruption count and penalty display.
+- [x] Verify completion message and rating in test + compare views.
