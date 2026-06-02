@@ -269,10 +269,24 @@ module.exports = (db) => {
        }
     }
 
-    // Add an Overall average score
-    metrics.overall = Math.round((metrics.tue + metrics.rd + metrics.ce + metrics.err) / 4);
+    // Fetch manual rating from test_results if exists
+    const ratingRow = db.prepare('SELECT user_rating FROM test_results WHERE task_id = ? AND user_rating IS NOT NULL ORDER BY run_ts DESC LIMIT 1').get(taskId);
+    const userRating = ratingRow ? ratingRow.user_rating : null;
 
-    res.json({ metrics, evidence });
+    // Get completion message
+    const { getCompletionMessage } = require('../testing/shared');
+    const completionMessage = getCompletionMessage(events) || task.completion_message || null;
+
+    // Add an Overall average score, factoring in manual rating (worth 30% if present)
+    if (userRating != null) {
+      const autoAvg = (metrics.tue + metrics.rd + metrics.ce + metrics.err) / 4;
+      const ratingScore = userRating * 20; // convert 1-5 scale to 0-100
+      metrics.overall = Math.round(0.7 * autoAvg + 0.3 * ratingScore);
+    } else {
+      metrics.overall = Math.round((metrics.tue + metrics.rd + metrics.ce + metrics.err) / 4);
+    }
+
+    res.json({ metrics, evidence, user_rating: userRating, completion_message: completionMessage });
   });
 
   return router;

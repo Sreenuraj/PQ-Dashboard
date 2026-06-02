@@ -95,7 +95,52 @@ export async function renderDeepCompare(container, params = new URLSearchParams(
         align-items: center;
         gap: 6px;
       }
+      @media print {
+        body {
+          background: white !important;
+          color: black !important;
+        }
+        .sidebar, .navbar, .view-header, .filters-bar, .tip-banner, #print-deep-compare-btn, .modal-backdrop, .modal-close-btn, .page-btn, .action-btn {
+          display: none !important;
+        }
+        .view-container, #app-root {
+          margin: 0 !important;
+          padding: 0 !important;
+          width: 100% !important;
+          max-width: 100% !important;
+        }
+        .panel {
+          border: 1px solid #ddd !important;
+          box-shadow: none !important;
+          background: #fff !important;
+          color: #000 !important;
+          break-inside: avoid !important;
+        }
+        .deep-compare-table {
+          width: 100% !important;
+          border-collapse: collapse !important;
+        }
+        .deep-compare-table th, .deep-compare-table td {
+          border: 1px solid #ddd !important;
+          color: #000 !important;
+          background: none !important;
+        }
+        .print-header {
+          display: block !important;
+          margin-bottom: 20px !important;
+        }
+      }
+      @media screen {
+        .print-header {
+          display: none !important;
+        }
+      }
     </style>
+
+    <div class="print-header">
+      <h1 style="margin:0; font-size:24px; color:#000">Deep Compare Sessions Report</h1>
+      <p style="margin:4px 0 20px; font-size:12px; color:#666">Generated on ${new Date().toLocaleString()}</p>
+    </div>
 
     <div class="view-header">
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:space-between;width:100%">
@@ -105,12 +150,15 @@ export async function renderDeepCompare(container, params = new URLSearchParams(
           <span class="badge grey">${comparedRows.length} task${comparedRows.length === 1 ? '' : 's'}</span>
           ${data.baseline ? `<span class="badge accent">Baseline: ${escHtml(data.baseline.name || data.baseline.id)}</span>` : ''}
         </div>
-        <div class="filters-bar" style="margin:0;border:none;background:transparent;padding:0">
-          <label style="font-size:12px;color:var(--text-3);margin-right:6px">Baseline:</label>
+        <div class="filters-bar" style="margin:0;border:none;background:transparent;padding:0; display:flex; align-items:center; gap:12px">
+          <label style="font-size:12px;color:var(--text-3)">Baseline:</label>
           <select id="compare-baseline-select" class="filter-select" style="min-width:200px">
             <option value="">No baseline - heuristic rules</option>
             ${baselines.map(b => `<option value="${escAttr(b.id)}" ${b.id === (baselineId || data.baseline?.id) ? 'selected' : ''}>${escHtml(b.name || b.id)}</option>`).join('')}
           </select>
+          <button class="action-btn primary" id="print-deep-compare-btn" style="display:flex; align-items:center; gap:6px; font-size:12px; padding:6px 12px">
+            <span style="font-size:13px">🖨️</span> Print Report
+          </button>
         </div>
       </div>
       <p class="view-subtitle" style="margin-top:6px">Operational efficiency and behavioral validation compared side-by-side.</p>
@@ -204,6 +252,11 @@ export async function renderDeepCompare(container, params = new URLSearchParams(
   document.getElementById('compare-baseline-select')?.addEventListener('change', e => {
     const next = e.target.value;
     window.location.hash = `#/deepcompare?tasks=${encodeURIComponent(ids.join(','))}${next ? `&baseline=${encodeURIComponent(next)}` : ''}`;
+  });
+
+  // Wire print button
+  container.querySelector('#print-deep-compare-btn')?.addEventListener('click', () => {
+    window.print();
   });
 
   // Modal opening & interactive row click listener
