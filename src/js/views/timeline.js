@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { fmtCost, fmtDuration, fmtDateTime, fmtMs } from '../utils.js';
+import { fmtCost, fmtDuration, fmtDateTime, fmtMs, agentColor } from '../utils.js';
 
 // Major event types — these count toward the "2 before + 2 after" context window
 const MAJOR_TYPES = new Set([
@@ -73,6 +73,9 @@ export async function renderTimeline(container, taskId) {
       ${renderLegend()}
     </div>
 
+    <!-- Phase 4: Agent timeline strip (above the event track) -->
+    ${buildAgentBand(task)}
+
     <!-- Timeline -->
     <div class="panel">
       <div class="panel-title">
@@ -89,6 +92,67 @@ export async function renderTimeline(container, taskId) {
   `;
 
   wireTimelineClicks(events);
+}
+
+/**
+ * Phase 4: render a 6px-tall agent band that shows each agent phase as a
+ * colored segment whose width is proportional to that phase's wall-clock
+ * duration. Hover/click each segment to see phase details. The band is
+ * wrapped in a tiny panel above the event track so it's discoverable but
+ * doesn't compete visually with the events themselves.
+ *
+ * Why time-scaled (not event-scaled):
+ *   The event track below is auto-sized per-node; trying to align per-event
+ *   segments with the band would require rendering two parallel flex layouts
+ *   and break whenever a node has a badge or large gap. A time-scaled band
+ *   is a more honest visualization: it shows how wall-clock time was spent
+ *   across agents, regardless of event density.
+ */
+function buildAgentBand(task) {
+  const sequence = task.agent_sequence || [];
+  if (!sequence.length) return '';
+  const firstTs = sequence[0].ts_first || task.start_ts || 0;
+  const lastTs  = sequence[sequence.length - 1].ts_last || task.end_ts || 0;
+  const total   = Math.max(1, lastTs - firstTs);
+
+  const segments = sequence.map((p) => {
+    const dur = Math.max(0, (p.ts_last || p.ts_first || 0) - (p.ts_first || 0));
+    const flex = dur > 0 ? dur : 1; // never let flex be 0 (would collapse to nothing)
+    const color = agentColor(p.agent);
+    const label = `${p.agent} · ${fmtDuration(dur)} · ${p.event_count || 0} ev`;
+    return `<div title="${escHtml(label)}"
+      style="flex:${flex} 0 0;height:6px;background:${color};cursor:default"
+      onmouseenter="this.style.outline='2px solid rgba(255,255,255,0.4)';this.style.outlineOffset='-2px'"
+      onmouseleave="this.style.outline='none'"></div>`;
+  }).join('');
+
+  return `
+    <div class="panel" style="margin-bottom:10px">
+      <div class="panel-title" style="padding:6px 12px">
+        <span>Agent Timeline</span>
+        <span class="panel-title-meta">${task.is_multi_agent ? `<span class="badge accent">Multi-agent (${task.agent_count})</span>` : `<span class="badge grey">Single agent</span>`}</span>
+      </div>
+      <div style="padding:6px 12px 12px">
+        <div style="display:flex;width:100%;height:6px;border-radius:3px;overflow:hidden;background:var(--bg-3);border:1px solid var(--border)" aria-label="agent phase timeline">
+          ${segments}
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap">
+          ${sequence.map(p => {
+            const c = agentColor(p.agent);
+            const dur = Math.max(0, (p.ts_last || p.ts_first || 0) - (p.ts_first || 0));
+            const pct = Math.round((dur / total) * 100);
+            return `
+              <span style="display:inline-flex;align-items:center;gap:5px;font-size:10.5px;color:var(--text-2)">
+                <span style="width:9px;height:9px;border-radius:2px;background:${c}"></span>
+                <span class="mono" style="color:${c};font-weight:600">${escHtml(p.agent)}</span>
+                <span style="color:var(--text-3)">${fmtDuration(dur)} · ${pct}%</span>
+              </span>
+            `;
+          }).join('')}
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function buildTimeline(events) {

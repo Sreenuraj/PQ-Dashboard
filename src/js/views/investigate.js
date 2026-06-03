@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { fmtDateTime, fmtDuration, fmtCost, fmtMs } from '../utils.js';
+import { fmtDateTime, fmtDuration, fmtCost, fmtMs, agentColor, fmtAgentChain } from '../utils.js';
 
 let allEvents = [];
 
@@ -41,6 +41,17 @@ export async function renderInvestigate(container, taskId) {
         <div class="summary-item"><span class="summary-label">Errors</span><span class="summary-value" style="color:${task.error_count > 0 ? 'var(--red)' : 'var(--text)'}">${task.error_count || 0}</span></div>
         <div class="summary-item"><span class="summary-label">API Calls</span><span class="summary-value">${task.api_call_count || 0}</span></div>
         <div class="summary-item"><span class="summary-label">Tools Used</span><span class="summary-value mono">${uniqueTools.length ? uniqueTools.join(', ') : '0'}</span></div>
+      </div>
+    </div>
+
+    <!-- Phase 4: Agent panel (one of the most-asked questions on this page: "which agent did what") -->
+    <div class="panel">
+      <div class="panel-title">
+        <span>Agent Context</span>
+        <span class="panel-title-meta">${task.is_multi_agent ? `<span class="badge accent">Multi-agent (${task.agent_count})</span>` : (task.primary_agent ? `<span class="badge grey">Single agent</span>` : '<span class="badge grey">Unknown</span>')}</span>
+      </div>
+      <div class="panel-body">
+        ${renderAgentPanel(task)}
       </div>
     </div>
 
@@ -125,12 +136,47 @@ function handleSearch(query) {
     document.getElementById('search-matches').textContent = `${matchCount} matches`;
 }
 
+/**
+ * Phase 4: render the agent panel body. Shows the agent chain as chips with
+ * per-phase event counts and durations. Empty when no agent_sequence is set.
+ */
+function renderAgentPanel(task) {
+  const sequence = task.agent_sequence || [];
+  if (!sequence.length) {
+    return '<div style="font-size:12px;color:var(--text-3)">No agent context captured for this task.</div>';
+  }
+  const totalDuration = task.duration || 0;
+  return `
+    <div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:12px">
+      ${sequence.map(s => {
+        const color = agentColor(s.agent);
+        const pct = totalDuration > 0 ? Math.round(((s.ts_last || s.ts_first || 0) - (s.ts_first || 0)) / totalDuration * 100) : 0;
+        return `
+          <div style="display:flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid ${color}55;border-radius:6px;background:${color}11">
+            <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color}"></span>
+            <span class="mono" style="font-size:12px;font-weight:600;color:${color}">${escHtml(s.agent)}</span>
+            <span style="font-size:10px;color:var(--text-3)">${s.event_count || 0} events</span>
+            <span style="font-size:10px;color:var(--text-3)">${fmtDuration((s.ts_last || 0) - (s.ts_first || 0))}</span>
+            <span style="font-size:10px;color:var(--text-3)">${pct}%</span>
+          </div>
+        `;
+      }).join('')}
+    </div>
+    <div style="font-size:11px;color:var(--text-3)">Chain: <span style="color:var(--text-2)">${escHtml(fmtAgentChain(sequence, { max: 10 }))}</span></div>
+  `;
+}
+
 function renderListItem(e, i) {
-    const bg = e.error_category ? 'var(--red-dim)' : 'transparent';
-    const border = e.error_category ? 'var(--red)' : 'transparent';
-    
+    // Phase 4: color the left border by the event's mode (agent) so the event
+    // stream visually groups by agent phase. Errors get a stronger red overlay.
+    const modeColor = e.mode ? agentColor(e.mode) : null;
+    const errorBorder = e.error_category ? 'var(--red)' : 'transparent';
+    const leftBorderColor = modeColor || errorBorder;
+    const borderWidth = modeColor ? '3px' : '3px';
+    const bg = e.error_category ? 'var(--red-dim)' : (modeColor ? `${modeColor}0a` : 'transparent');
+
     return `
-      <div class="inv-list-item" data-idx="${i}" style="padding:12px 14px;border-bottom:1px solid var(--border);border-left:3px solid ${border};cursor:pointer;background:${bg};transition:background 0.2s;">
+      <div class="inv-list-item" data-idx="${i}" style="padding:12px 14px;border-bottom:1px solid var(--border);border-left:${borderWidth} solid ${leftBorderColor};cursor:pointer;background:${bg};transition:background 0.2s;">
          <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
             <span class="badge ${eventBadgeColor(e)}" style="padding:1px 6px;font-size:10px">${e.sub_type || 'unknown'}</span>
             <span style="font-size:10px;color:var(--text-3)">${fmtDateTime(e.ts).split(' ')[1]}</span>
@@ -139,6 +185,7 @@ function renderListItem(e, i) {
             ${getTitle(e)}
          </div>
          ${e.error_message ? `<div style="font-size:10px;color:var(--red);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">⚠ ${escHtml(e.error_message)}</div>` : ''}
+         ${e.mode && modeColor ? `<div style="font-size:9px;color:${modeColor};margin-top:3px">● ${escHtml(e.mode)}</div>` : ''}
       </div>
     `;
 }
