@@ -1,4 +1,5 @@
 import { api } from '../api.js';
+import { agentChainChips, agentColor } from '../utils.js';
 
 export async function renderBaselineEditor(container, id) {
   if (!id) {
@@ -14,6 +15,13 @@ export async function renderBaselineEditor(container, id) {
   } catch (e) {
     container.innerHTML = `<div class="empty-state"><div class="icon">⚠</div><p>Error loading baseline: ${e.message}</p></div>`;
     return;
+  }
+
+  // Phase 4: also fetch the source task so we can show the source agent
+  // (informational only — the baseline itself is agent-agnostic at edit time).
+  let sourceTask = null;
+  if (baseline.source_task_id) {
+    try { sourceTask = await api.task(baseline.source_task_id); } catch {}
   }
 
   // Local state for edits
@@ -112,6 +120,7 @@ export async function renderBaselineEditor(container, id) {
             <div class="mono" style="font-size:11px;color:var(--text-3)">
               Source Session: <span style="color:var(--text)">${escHtml(baseline.source_task_id)}</span>
             </div>
+            ${sourceTask ? renderSourceAgentField(sourceTask) : ''}
           </div>
         </div>
       </div>
@@ -529,8 +538,37 @@ export async function renderBaselineEditor(container, id) {
   render();
 }
 
-function escHtml(s) {
-  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+/**
+ * Phase 4: render an informational "Source Agent" field. Read-only by
+ * design — the agent that produced the baseline is intrinsic to the
+ * source task and shouldn't be re-authored here. Reviewers can still
+ * see the chain at a glance to know which agent this baseline describes.
+ */
+function renderSourceAgentField(sourceTask) {
+  const sequence = sourceTask.agent_sequence || [];
+  if (sequence.length === 0) return '';
+  const primary = sourceTask.primary_agent;
+  const isMulti = sourceTask.is_multi_agent;
+  return `
+    <div style="margin-top:12px;padding:10px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+        <span style="font-size:10px;color:var(--text-3);text-transform:uppercase;letter-spacing:0.4px">Source Agent</span>
+        ${isMulti ? `<span class="badge accent" style="font-size:9px">Multi-agent (${sourceTask.agent_count})</span>` : ''}
+        ${primary ? `<span class="badge" style="background:${agentColor(primary)}22;color:${agentColor(primary)};border:1px solid ${agentColor(primary)}55;font-size:9px">primary: ${escHtml(primary)}</span>` : ''}
+      </div>
+      <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px">
+        ${agentChainChips(sequence, { max: 5, clickable: false })}
+      </div>
+      <div style="font-size:10px;color:var(--text-3);margin-top:6px;font-style:italic">
+        The agent that produced the source session. This is read-only —
+        baselines are agent-agnostic so a baseline built on <code>plan</code> can still
+        validate runs driven by <code>agent</code>.
+      </div>
+    </div>
+  `;
+}
+
+function escHtml(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 }
 
 function escAttr(s) {

@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { fmtCost } from '../utils.js';
+import { fmtCost, agentColor } from '../utils.js';
 
 /**
  * Activity Intelligence — CodeBurn-inspired view
@@ -75,10 +75,11 @@ export async function renderActivity(container, dateRange = {}) {
   container.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading activity intelligence...</p></div>`;
 
   const params = buildParams(dateRange);
-  const [activity, shellCmds, dailyData] = await Promise.all([
+  const [activity, shellCmds, dailyData, agentActivityMatrix] = await Promise.all([
     api.activity(params),
     api.shellCommands(params),
     api.activityDaily(params),
+    api.agentMatrix({ ...params, dimension: 'activity' }).catch(() => ({ rows: [], cols: [], values: [] })),
   ]);
 
   // Aggregate totals
@@ -193,6 +194,17 @@ export async function renderActivity(container, dateRange = {}) {
       </div>
     </div>
 
+    <!-- Phase 4: Activity × Agent matrix (which agents drive which activity categories) -->
+    <div class="panel" style="margin-top:16px">
+      <div class="panel-title" style="border-color:#7B9EF5">
+        <span style="color:#7B9EF5">Activity × Agent Matrix</span>
+        <span class="panel-title-meta">Click a cell to filter sessions by activity AND agent</span>
+      </div>
+      <div class="panel-body">
+        ${renderActivityAgentMatrix(agentActivityMatrix)}
+      </div>
+    </div>
+
     <div class="grid-2" style="margin-top:16px">
       <!-- Shell Commands (left) -->
       <div class="panel">
@@ -242,6 +254,51 @@ export async function renderActivity(container, dateRange = {}) {
             </div>`;
           }).join('') || '<div class="text-dim" style="padding:12px">No edit data — one-shot rates require edit→command→edit patterns</div>'}
       </div>
+    </div>
+  `;
+}
+
+/**
+ * Phase 4: render a sparse Activity×Agent heatmap. Rows=agents, cols=activity
+ * categories. Each cell shows task_count and is clickable.
+ */
+function renderActivityAgentMatrix(matrix) {
+  if (!matrix || !matrix.rows?.length || !matrix.cols?.length) {
+    return '<div class="empty-state"><p>No activity-agent data yet</p></div>';
+  }
+  const max = Math.max(1, ...matrix.values.flat());
+  const colWidth = 90;
+  const rowHeight = 24;
+  const labelColWidth = 130;
+
+  const header = matrix.cols.map(c => `
+    <div style="background:var(--bg-2);padding:4px 6px;width:${colWidth}px;text-align:center;font-size:10px;font-weight:600;color:${CATEGORY_COLORS[c] || 'var(--text-2)'};border-bottom:1px solid var(--border);border-right:1px solid var(--border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${c}">${CATEGORY_LABELS[c] || c}</div>
+  `).join('');
+
+  const rows = matrix.rows.map((agent, rIdx) => {
+    const color = agentColor(agent);
+    const cells = matrix.cols.map((c, cIdx) => {
+      const v = matrix.values[rIdx][cIdx];
+      if (!v) return `<div style="width:${colWidth}px;height:${rowHeight}px;background:transparent;border-right:1px solid var(--border);border-bottom:1px solid var(--border)"></div>`;
+      const intensity = v / max;
+      const bg = `${color}${Math.round((0.15 + intensity * 0.55) * 255).toString(16).padStart(2,'0')}`;
+      return `<div title="${agent} on ${CATEGORY_LABELS[c] || c}: ${v} sessions" onclick="event.stopPropagation();window.location.hash='#/sessions?agent=${encodeURIComponent(agent)}'" style="cursor:pointer;width:${colWidth}px;height:${rowHeight}px;background:${bg};border-right:1px solid var(--border);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;color:${intensity > 0.5 ? 'var(--text)' : 'var(--text-2)'}">${v}</div>`;
+    }).join('');
+    return `
+      <div style="display:flex">
+        <div style="background:var(--bg-2);padding:4px 8px;width:${labelColWidth}px;font-size:11px;color:${color};font-weight:600;border-right:1px solid var(--border);border-bottom:1px solid var(--border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${agent}">${agent}</div>
+        ${cells}
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div style="overflow:auto;max-height:320px;border:1px solid var(--border);border-radius:6px">
+      <div style="display:flex;background:var(--bg-2)">
+        <div style="width:${labelColWidth}px;border-right:1px solid var(--border);border-bottom:1px solid var(--border)"></div>
+        ${header}
+      </div>
+      ${rows}
     </div>
   `;
 }

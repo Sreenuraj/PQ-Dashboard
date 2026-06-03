@@ -1,4 +1,5 @@
 import { api } from '../api.js';
+import { fmtCost, agentColor } from '../utils.js';
 import { renderErrorTrendChart, renderDoughnutChart } from '../components/charts.js';
 
 const API_ERROR_CATEGORIES = [
@@ -13,7 +14,11 @@ export async function renderErrors(container, dateRange = {}) {
   const params = {};
   if (dateRange.from) params.from = dateRange.from;
   if (dateRange.to)   params.to   = dateRange.to;
-  const data = await api.errors(params);
+  // Phase 4: also pull the per-agent breakdown so we can render a "By Agent" tab
+  const [data, agentsData] = await Promise.all([
+    api.errors(params),
+    api.agents(params).catch(() => ({ agents: [] })),
+  ]);
   const total = data.byCategory?.reduce((s, r) => s + r.count, 0) || 0;
 
   // Current filter state
@@ -127,6 +132,36 @@ export async function renderErrors(container, dateRange = {}) {
                   <td><strong>${r.count}</strong></td>
                 </tr>
               `).join('') || '<tr><td colspan="3" style="text-align:center;color:var(--text-3)">No data</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Phase 4: By Agent tab (error rate + total errors per agent) -->
+      <div class="panel">
+        <div class="panel-title">
+          <span>Errors by Agent</span>
+          <span class="panel-title-meta">Click to view error sessions for that agent</span>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead><tr><th>Agent</th><th>Sessions</th><th>Total Errors</th><th>Affected</th><th>Error Rate</th><th>Cost</th></tr></thead>
+            <tbody>
+              ${(agentsData.agents || []).map(a => {
+                const errCount = a.total_errors || 0;
+                const rate = a.task_count > 0 ? ((errCount / a.task_count) * 100).toFixed(1) : '0.0';
+                const color = agentColor(a.agent);
+                return `
+                  <tr class="hover-row" onclick="window.location.hash='#/sessions?agent=${encodeURIComponent(a.agent)}&hasErrors=true'">
+                    <td><span class="badge" style="background:${color}22;color:${color};border:1px solid ${color}55;font-size:10px">${a.agent}</span></td>
+                    <td><strong>${a.task_count}</strong></td>
+                    <td style="color:${errCount > 0 ? 'var(--red)' : 'var(--text-3)'};font-weight:${errCount > 0 ? '600' : '400'}">${errCount}</td>
+                    <td>${a.affected_task_count || 0}</td>
+                    <td>${rate}%</td>
+                    <td style="color:var(--green)">${fmtCost(a.total_cost || 0)}</td>
+                  </tr>
+                `;
+              }).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--text-3)">No agent data</td></tr>'}
             </tbody>
           </table>
         </div>

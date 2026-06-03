@@ -1,10 +1,18 @@
 import { api } from '../api.js';
-import { fmtCost, fmtDuration, fmtDateTime } from '../utils.js';
+import { fmtCost, fmtDuration, fmtDateTime, agentChainChips, agentColor } from '../utils.js';
 
 export async function renderBaselines(container) {
   container.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading baselines...</p></div>`;
   const data = await api.baselines();
   const baselines = data.baselines || [];
+
+  // Phase 4: fetch the source task for each baseline so we can show the source
+  // agent chain. We do this in parallel; failures degrade gracefully.
+  const sourceTaskMap = {};
+  await Promise.all(baselines.map(async b => {
+    if (!b.source_task_id) return;
+    try { sourceTaskMap[b.source_task_id] = await api.task(b.source_task_id); } catch {}
+  }));
 
   container.innerHTML = `
     <div class="top-bar">
@@ -19,7 +27,7 @@ export async function renderBaselines(container) {
     </div>
 
     <div id="baseline-list">
-      ${baselines.length ? baselines.map(renderBaselineCard).join('') : emptyState()}
+      ${baselines.length ? baselines.map(b => renderBaselineCard(b, sourceTaskMap[b.source_task_id])).join('') : emptyState()}
     </div>
   `;
 
@@ -82,9 +90,17 @@ export async function renderBaselines(container) {
   });
 }
 
-function renderBaselineCard(b) {
+function renderBaselineCard(b, sourceTask) {
   const metrics = b.reference_metrics || {};
   const search = `${b.name} ${(b.tags || []).join(' ')} ${b.model_id} ${b.activity_category}`.toLowerCase();
+  // Phase 4: show the source agent (chain) so reviewers know which agent this
+  // baseline was anchored to. Falls back gracefully if the source task is gone.
+  const sequence = sourceTask?.agent_sequence || [];
+  const primaryAgent = sourceTask?.primary_agent;
+  const sourceAgentChips = sequence.length
+    ? `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-bottom:8px"><span style="font-size:10px;color:var(--text-3);margin-right:4px;text-transform:uppercase;letter-spacing:0.4px">Source agent:</span>${agentChainChips(sequence, { max: 4, clickable: false })}</div>`
+    : (primaryAgent ? `<div style="display:flex;align-items:center;gap:4px;margin-bottom:8px"><span style="font-size:10px;color:var(--text-3);margin-right:4px;text-transform:uppercase;letter-spacing:0.4px">Source agent:</span><span class="badge" style="background:${agentColor(primaryAgent)}22;color:${agentColor(primaryAgent)};border:1px solid ${agentColor(primaryAgent)}55;font-size:10px">${escHtml(primaryAgent)}</span></div>` : '');
+
   return `
     <details class="panel baseline-card" data-search="${escAttr(search)}">
       <summary class="panel-title baseline-card-summary" style="display:flex;align-items:center;gap:8px;width:100%">
@@ -94,6 +110,7 @@ function renderBaselineCard(b) {
         <span class="badge accent">${escHtml(b.activity_category || 'general')}</span>
       </summary>
       <div class="panel-body">
+        ${sourceAgentChips}
         <div class="baseline-meta-grid">
           <div><span>Model</span><strong class="mono">${escHtml(b.model_id || 'Unknown')}</strong></div>
           <div><span>Cost</span><strong>${fmtCost(metrics.cost || 0)}</strong></div>
