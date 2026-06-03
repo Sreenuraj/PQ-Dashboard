@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { fmtCost, fmtDuration, fmtDateTime } from '../utils.js';
+import { fmtCost, fmtDuration, fmtDateTime, agentChainChips } from '../utils.js';
 
 export async function renderTest(container, params = new URLSearchParams()) {
   const taskId = params.get('task');
@@ -36,6 +36,12 @@ export async function renderTest(container, params = new URLSearchParams()) {
           <div><span>Tools</span><strong>${task.tool_call_count || 0}</strong></div>
           <div><span>Errors</span><strong>${task.error_count || 0}</strong></div>
         </div>
+        ${(task.agent_sequence && task.agent_sequence.length) ? `
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">
+          <span style="font-size:10px;color:var(--text-3);text-transform:uppercase;letter-spacing:0.4px">Active Agent Chain</span>
+          ${agentChainChips(task.agent_sequence, { max: 6, clickable: false })}
+        </div>
+        ` : ''}
         <div class="filters-bar" style="margin-top:14px;margin-bottom:0">
           <select id="baseline-select" class="filter-select">
             <option value="">No baseline - heuristic rules</option>

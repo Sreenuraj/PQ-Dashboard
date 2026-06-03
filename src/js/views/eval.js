@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { fmtDateTime, fmtDuration, fmtCost } from '../utils.js';
+import { fmtDateTime, fmtDuration, fmtCost, agentChainChips, agentColor } from '../utils.js';
 
 export async function renderEval(container, taskId) {
   if (!taskId) {
@@ -52,6 +52,12 @@ export async function renderEval(container, taskId) {
            <div><span style="color:var(--text-3)">Duration:</span> <strong>${fmtDuration(task.duration)}</strong></div>
            <div><span style="color:var(--text-3)">Date:</span> <strong>${fmtDateTime(task.start_ts)}</strong></div>
         </div>
+        ${(task.agent_sequence && task.agent_sequence.length) ? `
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+          <span style="font-size:10px;color:var(--text-3);text-transform:uppercase;letter-spacing:0.4px">Active Agent Chain</span>
+          ${agentChainChips(task.agent_sequence, { max: 6, clickable: false })}
+        </div>
+        ` : ''}
       </div>
 
       <div style="display:flex;gap:20px;">
