@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { fmtCost, fmtDuration, fmtDate, fmtDateTime } from '../utils.js';
+import { fmtCost, fmtDuration, fmtDate, fmtDateTime, agentChainChips, agentColor } from '../utils.js';
 
 let currentPage = 1;
 let selectedTasks = new Set();
@@ -62,6 +62,9 @@ export async function renderSessions(container, dateRange = {}, queryParams = ne
   const urlTool        = queryParams.get('tool_name');
   const urlHasErrors   = queryParams.get('hasErrors');
   const urlHasReasoning= queryParams.get('hasReasoning');
+  // Phase 4: agent drilldown — supports ?agent=web_agent or ?agent=web_agent,mobile_agent
+  const urlAgent       = queryParams.get('agent');
+  const urlMultiAgent  = queryParams.get('multi_agent');
 
   const activeFilters = [
     urlStatus       && { label: `Status: ${urlStatus}`,         key: 'status' },
@@ -71,6 +74,9 @@ export async function renderSessions(container, dateRange = {}, queryParams = ne
     urlHasErrors === 'true'  && { label: 'Has Errors',          key: 'hasErrors' },
     urlHasReasoning === 'true'  && { label: '🧠 With Reasoning', key: 'hasReasoning' },
     urlHasReasoning === 'false' && { label: 'No Reasoning',      key: 'hasReasoning' },
+    // Phase 4: agent drilldown chips
+    ...(urlAgent ? urlAgent.split(',').map(a => ({ label: `Agent: ${a}`, key: 'agent' })) : []),
+    (urlMultiAgent === '1' || urlMultiAgent === 'true')  && { label: 'Multi-agent', key: 'multi_agent' },
   ].filter(Boolean);
 
   const hasUrlFilters  = activeFilters.length > 0;
@@ -78,6 +84,13 @@ export async function renderSessions(container, dateRange = {}, queryParams = ne
   // Reset page and selection on fresh render
   currentPage = 1;
   selectedTasks.clear();
+
+  // Phase 4: fetch the agent list once for the f-agent dropdown
+  let agentList = [];
+  try {
+    const ag = await api.agents({ from: dateRange.from, to: dateRange.to });
+    agentList = (ag.agents || []).map(a => a.agent);
+  } catch { /* tolerate */ }
 
   container.innerHTML = `
     <div class="top-bar">
@@ -116,6 +129,14 @@ export async function renderSessions(container, dateRange = {}, queryParams = ne
         <option value="true"  ${urlHasReasoning==='true'?'selected':''}>🧠 With Reasoning</option>
         <option value="false" ${urlHasReasoning==='false'?'selected':''}>No Reasoning</option>
       </select>
+      <select id="f-agent" class="filter-select" title="Filter by agent">
+        <option value="">All Agents</option>
+        ${agentList.map(a => `<option value="${escAttr(a)}" ${urlAgent === a ? 'selected' : ''}>${escHtml(a)}</option>`).join('')}
+      </select>
+      <label class="filter-toggle" title="Only show sessions that switched between multiple agents">
+        <input type="checkbox" id="f-multi-agent" ${(urlMultiAgent === '1' || urlMultiAgent === 'true') ? 'checked' : ''} style="margin-right:4px" />
+        <span style="font-size:12px;color:var(--text-2)">Multi-agent only</span>
+      </label>
     </div>
 
     <div class="panel" style="position:relative">
@@ -129,12 +150,14 @@ export async function renderSessions(container, dateRange = {}, queryParams = ne
           <tr>
             <th style="width:30px"></th>
             <th>Session</th><th>Started</th><th>Duration</th>
-            <th>Model(s)</th><th>Cost</th><th>Errors</th>
+            <th>Model(s)</th>
+            <th>Agent(s)</th>
+            <th>Cost</th><th>Errors</th>
             <th>Reasoning</th><th>Status</th><th>Source</th>
           </tr>
         </thead>
         <tbody id="sessions-tbody">
-          <tr><td colspan="10" style="text-align:center;padding:40px;color:var(--text-3)">Loading...</td></tr>
+          <tr><td colspan="11" style="text-align:center;padding:40px;color:var(--text-3)">Loading...</td></tr>
         </tbody>
       </table>
       </div>
@@ -209,19 +232,24 @@ export async function renderSessions(container, dateRange = {}, queryParams = ne
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => { currentPage = 1; loadSessions(container, dateRange, drilldown); }, 350);
   });
-  ['f-status', 'f-source', 'f-errors', 'f-reasoning'].forEach(id => {
+  ['f-status', 'f-source', 'f-errors', 'f-reasoning', 'f-agent'].forEach(id => {
     document.getElementById(id)?.addEventListener('change', () => {
       currentPage = 1; loadSessions(container, dateRange, drilldown);
     });
+  });
+  document.getElementById('f-multi-agent')?.addEventListener('change', () => {
+    currentPage = 1; loadSessions(container, dateRange, drilldown);
   });
 
   await loadSessions(container, dateRange, drilldown);
 }
 
 async function loadSessions(container, dateRange = {}, drilldown = {}) {
-  const { urlStatus, urlModel, urlErrorCat, urlTool, urlHasErrors, urlHasReasoning } = drilldown;
+  const { urlStatus, urlModel, urlErrorCat, urlTool, urlHasErrors, urlHasReasoning, urlAgent, urlMultiAgent } = drilldown;
 
   const hasReasoning = document.getElementById('f-reasoning')?.value;
+  const fAgent = document.getElementById('f-agent')?.value;
+  const fMultiAgent = document.getElementById('f-multi-agent')?.checked;
 
   const filters = {
     page:           currentPage,
@@ -234,6 +262,8 @@ async function loadSessions(container, dateRange = {}, drilldown = {}) {
     model:          urlModel        || undefined,
     error_category: urlErrorCat     || undefined,
     tool_name:      urlTool         || undefined,
+    agent:          urlAgent || fAgent || undefined,
+    multi_agent:    urlMultiAgent || (fMultiAgent ? '1' : undefined),
     from:           dateRange?.from || undefined,
     to:             dateRange?.to   || undefined,
   };
@@ -249,7 +279,7 @@ async function loadSessions(container, dateRange = {}, drilldown = {}) {
 
   if (!data.tasks?.length) {
     if (tbody) tbody.innerHTML = `
-      <tr><td colspan="10">
+      <tr><td colspan="11">
         <div class="empty-state">
           <div class="icon">◈</div>
           <p>No sessions match the current filters</p>
@@ -260,7 +290,12 @@ async function loadSessions(container, dateRange = {}, drilldown = {}) {
   }
 
   if (tbody) {
-    tbody.innerHTML = data.tasks.map(t => `
+    tbody.innerHTML = data.tasks.map(t => {
+      const sequence = t.agent_sequence || [];
+      const agentCell = sequence.length
+        ? `<div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">${agentChainChips(sequence, { max: 3, clickable: false })}</div>`
+        : '<span style="color:var(--text-3);font-size:11px">—</span>';
+      return `
       <tr data-id="${t.id}" class="session-row" style="cursor:pointer">
         <td style="padding-left:14px" onclick="event.stopPropagation()">
           <input type="checkbox" class="session-checkbox" data-id="${t.id}" ${selectedTasks.has(t.id) ? 'checked' : ''} style="cursor:pointer" />
@@ -279,6 +314,7 @@ async function loadSessions(container, dateRange = {}, drilldown = {}) {
           ).join('')}
           ${(t.models||[]).length > 2 ? `<div style="font-size:10px;color:var(--text-3)">+${t.models.length-2} more</div>` : ''}
         </td>
+        <td>${agentCell}</td>
         <td style="font-size:13px;font-weight:600;color:var(--green)">${fmtCost(t.total_cost)}</td>
         <td>
           ${t.error_count > 0
@@ -289,7 +325,7 @@ async function loadSessions(container, dateRange = {}, drilldown = {}) {
         <td>${statusBadge(t.status)}</td>
         <td style="font-size:11px;color:var(--text-3)">${t.source || '—'}</td>
       </tr>
-    `).join('');
+    `;}).join('');
   }
 
   // Row click -> toggle checkbox OR go to timeline? Let's just go to timeline for backward compat
@@ -325,6 +361,12 @@ function openBaselineModal(taskId, container) {
   const task = visibleTasks.get(taskId);
   const root = document.getElementById('baseline-modal-root');
   if (!root || !task) return;
+  // Phase 4: show the agent chain in the baseline summary so reviewers know
+  // which agent(s) the baseline's behaviour is anchored to.
+  const sequence = task.agent_sequence || [];
+  const agentRow = sequence.length
+    ? `<div style="display:flex;align-items:center;gap:6px;margin-top:6px"><span style="font-size:11px;color:var(--text-3)">Agent chain:</span>${agentChainChips(sequence, { max: 6, clickable: false })}</div>`
+    : '';
   root.innerHTML = `
     <div class="modal-backdrop">
       <div class="modal-panel">
@@ -339,6 +381,7 @@ function openBaselineModal(taskId, container) {
           <div class="modal-task-summary">
             <div class="mono">${task.id}</div>
             <div>${task.models?.[0]?.model_id || 'Unknown model'} · ${fmtCost(task.total_cost || 0)} · ${fmtDuration(task.duration || 0)}</div>
+            ${agentRow}
             <p>${escHtml(task.first_message || '')}</p>
           </div>
           <label class="field-label">Baseline Name</label>

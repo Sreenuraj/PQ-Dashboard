@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { fmtDateTime, fmtDuration, fmtCost } from '../utils.js';
+import { fmtDateTime, fmtDuration, fmtCost, agentChainChips } from '../utils.js';
 
 export async function renderCompare(container, taskIdsString) {
   if (!taskIdsString) {
@@ -284,6 +284,16 @@ function renderTaskColumn(t, ev, maxCost, maxDuration, colIdx) {
            <div style="font-size:10px; color:var(--text-3); margin-bottom:4px; text-transform:uppercase; letter-spacing:0.5px">PRIMARY MODEL</div>
            <div style="font-size:13px; font-weight:600" class="mono">${t.models?.[0]?.model_id || 'Unknown'}</div>
            <div style="font-size:10px; color:var(--text-3); margin-top:6px">${fmtDateTime(t.start_ts)}</div>
+         </div>
+
+         <!-- Phase 4: Agent chain (so reviewers see which agent(s) drove this session) -->
+         <div style="background:var(--bg-2); padding:12px; border-radius:6px; border:1px solid var(--border)">
+           <div style="font-size:10px; color:var(--text-3); margin-bottom:6px; text-transform:uppercase; letter-spacing:0.5px">AGENT CHAIN</div>
+           <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px">
+             ${(t.agent_sequence && t.agent_sequence.length)
+               ? agentChainChips(t.agent_sequence, { max: 6, clickable: false })
+               : '<span style="font-size:11px;color:var(--text-3)">—</span>'}
+           </div>
          </div>
 
          ${evalHtml}

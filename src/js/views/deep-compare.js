@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { fmtCost, fmtDuration } from '../utils.js';
+import { fmtCost, fmtDuration, agentChainChips } from '../utils.js';
 
 export async function renderDeepCompare(container, params = new URLSearchParams()) {
   const ids = (params.get('tasks') || '').split(',').filter(Boolean);
@@ -188,7 +188,18 @@ export async function renderDeepCompare(container, params = new URLSearchParams(
         <thead>
           <tr>
             <th>Metric</th>
-            ${comparedRows.map(r => `<th>${escHtml(labelFor(r.task))}</th>`).join('')}
+            ${comparedRows.map(r => {
+              // Phase 4: each column header also shows the agent chain so the
+              // reader can see at a glance which agent drove each session.
+              const sequence = r.task.agent_sequence || [];
+              const chips = sequence.length
+                ? `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-top:6px;justify-content:center">${agentChainChips(sequence, { max: 4, clickable: false })}</div>`
+                : '';
+              return `<th>
+                <div>${escHtml(labelFor(r.task))}</div>
+                ${chips}
+              </th>`;
+            }).join('')}
           </tr>
         </thead>
         <tbody>
