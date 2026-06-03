@@ -1,44 +1,63 @@
 const express = require('express');
 const router = express.Router();
+const { metricDefs } = require('../analytics/metrics');
 
 module.exports = (db) => {
 
   // GET /api/analytics/overview
+  // Phase 4: optional ?agent= filter scopes all numbers to sessions involving
+  // the given agent(s) (OR-composed).
   router.get('/overview', (req, res) => {
-    const { from, to } = req.query;
+    const { from, to, agent } = req.query;
     const { where, params } = buildDateFilter(from, to);
+    const agentFilter = buildAgentTaskFilter(agent, params);
 
     const totals = db.prepare(`
-      SELECT 
-        COUNT(*) as total_tasks,
-        SUM(total_cost) as total_cost,
-        SUM(total_tokens_in) as total_tokens_in,
-        SUM(total_tokens_out) as total_tokens_out,
-        SUM(total_cache_reads) as total_cache_reads,
-        SUM(error_count) as total_errors,
-        SUM(tool_call_count) as total_tool_calls,
-        SUM(api_call_count) as total_api_calls,
-        AVG(duration) as avg_duration,
-        MIN(start_ts) as earliest_task,
-        MAX(start_ts) as latest_task,
-        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
-        SUM(CASE WHEN status = 'interrupted' THEN 1 ELSE 0 END) as interrupted,
-        SUM(CASE WHEN has_reasoning = 1 THEN 1 ELSE 0 END) as with_reasoning
-      FROM tasks ${where}
-    `).get(...params);
+      SELECT
+        COUNT(DISTINCT t.id) as total_tasks,
+        SUM(t.total_cost) as total_cost,
+        SUM(t.total_tokens_in) as total_tokens_in,
+        SUM(t.total_tokens_out) as total_tokens_out,
+        SUM(t.total_cache_reads) as total_cache_reads,
+        SUM(t.error_count) as total_errors,
+        SUM(t.tool_call_count) as total_tool_calls,
+        SUM(t.api_call_count) as total_api_calls,
+        AVG(t.duration) as avg_duration,
+        MIN(t.start_ts) as earliest_task,
+        MAX(t.start_ts) as latest_task,
+        SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END) as completed,
+        SUM(CASE WHEN t.status = 'interrupted' THEN 1 ELSE 0 END) as interrupted,
+        SUM(CASE WHEN t.has_reasoning = 1 THEN 1 ELSE 0 END) as with_reasoning
+      FROM tasks t
+      ${agentFilter.join}
+      ${where}
+    `).get(...agentFilter.params, ...params);
 
-    const sources = db.prepare(`SELECT source, COUNT(*) as cnt FROM tasks ${where} GROUP BY source`).all(...params);
+    const sources = db.prepare(`SELECT t.source, COUNT(DISTINCT t.id) as cnt FROM tasks t ${agentFilter.join} ${where} GROUP BY t.source`).all(...agentFilter.params, ...params);
 
     res.json({ ...totals, sources });
   });
 
   // GET /api/analytics/models
+  // Phase 4: extended with avg_tue/avg_rd/avg_ce/avg_err from session_metrics
+  // (cheap rollups; session_metrics is pre-computed by the parser).
   router.get('/models', (req, res) => {
-    const { from, to } = req.query;
+    const { from, to, agent } = req.query;
     const { where, params } = buildDateFilter(from, to, 't.');
 
+    // Phase 4: optional agent filter (OR-composed: agent=web_agent,mobile_agent)
+    let agentClause = '';
+    if (agent) {
+      const agents = String(agent).split(',').map(s => s.trim()).filter(Boolean);
+      if (agents.length) {
+        // Only consider rows where THIS model_usage entry was on the given agent(s)
+        agentClause = ` AND tm.mode IN (${agents.map(() => '?').join(',')})`;
+        params.push(...agents);
+      }
+    }
+
     const models = db.prepare(`
-      SELECT 
+      SELECT
         tm.model_id,
         MAX(tm.provider_id) as provider_id,
         MAX(tm.mode) as mode,
@@ -54,15 +73,197 @@ module.exports = (db) => {
         AVG(t.duration) as avg_duration,
         SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END) as completed,
         SUM(CASE WHEN t.has_reasoning = 1 THEN 1 ELSE 0 END) as with_reasoning,
-        CASE WHEN tm.model_id LIKE '%:free' THEN 1 ELSE 0 END as is_free
+        CASE WHEN tm.model_id LIKE '%:free' THEN 1 ELSE 0 END as is_free,
+        -- Phase 4: heuristic metric rollups from session_metrics
+        AVG(sm.tue)  as avg_tue,
+        AVG(sm.rd)   as avg_rd,
+        AVG(sm.ce)   as avg_ce,
+        AVG(sm.err)  as avg_err,
+        COUNT(sm.tue) as scored_sessions
       FROM task_models tm
       INNER JOIN tasks t ON t.id = tm.task_id
-      ${where}
+      LEFT JOIN session_metrics sm ON sm.task_id = t.id
+      ${where}${agentClause}
       GROUP BY tm.model_id
       ORDER BY task_count DESC
     `).all(...params);
 
     res.json(models);
+  });
+
+  // ── Phase 4: agent-aware analytics ─────────────────────────────────────
+
+  // GET /api/analytics/agents — per-agent breakdown
+  // Powers the Overview "Top Agents" card, the Errors "By Agent" tab,
+  // the Activity "By Agent" matrix, and the Models heatmap row labels.
+  router.get('/agents', (req, res) => {
+    const { from, to } = req.query;
+    const { where, params } = buildDateFilter(from, to, 't.');
+
+    const agents = db.prepare(`
+      SELECT
+        e.mode AS agent,
+        COUNT(DISTINCT e.task_id) AS task_count,
+        COUNT(*)                  AS event_count,
+        SUM(COALESCE(e.cost, 0))  AS total_cost,
+        SUM(COALESCE(e.tokens_in, 0))  AS total_tokens_in,
+        SUM(COALESCE(e.tokens_out, 0)) AS total_tokens_out,
+        COUNT(DISTINCT CASE WHEN e.error_category IS NOT NULL THEN e.task_id END) AS affected_task_count,
+        SUM(CASE WHEN e.error_category IS NOT NULL THEN 1 ELSE 0 END)              AS total_errors,
+        AVG(t.duration)          AS avg_duration,
+        MAX(t.duration)          AS max_duration,
+        SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END) AS completed
+      FROM events e
+      INNER JOIN tasks t ON t.id = e.task_id
+      WHERE e.mode IS NOT NULL AND e.mode != ''
+      ${where ? 'AND ' + where.slice(6) : ''}
+      GROUP BY e.mode
+      ORDER BY task_count DESC
+    `).all(...params);
+
+    // Sub-breakdowns: top 5 models per agent, activity mix per agent,
+    // longest 5 sessions per agent.
+    const agentNames = agents.map(a => a.agent);
+    const topModelsPerAgent = {};
+    const activityByAgent = {};
+    const longestSessionsPerAgent = {};
+
+    if (agentNames.length) {
+      const placeholders = agentNames.map(() => '?').join(',');
+      const topModelsRows = db.prepare(`
+        SELECT
+          e.mode AS agent,
+          e.model_id,
+          COUNT(DISTINCT e.task_id) AS task_count,
+          AVG(t.total_cost)         AS avg_cost,
+          SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END) AS completed
+        FROM events e
+        INNER JOIN tasks t ON t.id = e.task_id
+        WHERE e.mode IN (${placeholders}) AND e.model_id IS NOT NULL
+        ${where ? 'AND ' + where.slice(6) : ''}
+        GROUP BY e.mode, e.model_id
+        ORDER BY e.mode, task_count DESC
+      `).all(...agentNames, ...params);
+
+      for (const r of topModelsRows) {
+        if (!topModelsPerAgent[r.agent]) topModelsPerAgent[r.agent] = [];
+        if (topModelsPerAgent[r.agent].length < 5) {
+          topModelsPerAgent[r.agent].push({
+            model_id: r.model_id,
+            task_count: r.task_count,
+            avg_cost: r.avg_cost,
+            completion_rate: r.task_count > 0 ? Math.round((r.completed / r.task_count) * 100) : 0,
+          });
+        }
+      }
+
+      const activityRows = db.prepare(`
+        SELECT
+          e.mode AS agent,
+          COALESCE(t.activity_category, 'general') AS category,
+          COUNT(DISTINCT e.task_id) AS task_count
+        FROM events e
+        INNER JOIN tasks t ON t.id = e.task_id
+        WHERE e.mode IN (${placeholders})
+        ${where ? 'AND ' + where.slice(6) : ''}
+        GROUP BY e.mode, category
+      `).all(...agentNames, ...params);
+      for (const r of activityRows) {
+        if (!activityByAgent[r.agent]) activityByAgent[r.agent] = {};
+        activityByAgent[r.agent][r.category] = r.task_count;
+      }
+
+      // Longest 5 sessions per agent (single round-trip via window function)
+      const longestRows = db.prepare(`
+        SELECT agent, task_id, duration, total_cost, status, primary_agent
+        FROM (
+          SELECT
+            e.mode AS agent,
+            t.id   AS task_id,
+            t.duration,
+            t.total_cost,
+            t.status,
+            t.primary_agent,
+            ROW_NUMBER() OVER (PARTITION BY e.mode ORDER BY t.duration DESC) AS rn
+          FROM events e
+          INNER JOIN tasks t ON t.id = e.task_id
+          WHERE e.mode IN (${placeholders})
+          ${where ? 'AND ' + where.slice(6) : ''}
+        )
+        WHERE rn <= 5
+        ORDER BY agent, duration DESC
+      `).all(...agentNames, ...params);
+      for (const r of longestRows) {
+        if (!longestSessionsPerAgent[r.agent]) longestSessionsPerAgent[r.agent] = [];
+        longestSessionsPerAgent[r.agent].push({
+          id: r.task_id,
+          duration: r.duration,
+          total_cost: r.total_cost,
+          status: r.status,
+          primary_agent: r.primary_agent,
+        });
+      }
+    }
+
+    res.json({
+      agents,
+      top_models_per_agent: topModelsPerAgent,
+      activity_by_agent: activityByAgent,
+      longest_sessions_per_agent: longestSessionsPerAgent,
+    });
+  });
+
+  // GET /api/analytics/agent-matrix?dimension=model|activity|status
+  // Sparse pivot: rows = agents, cols = dimension values, values = task_count.
+  router.get('/agent-matrix', (req, res) => {
+    const { from, to, dimension = 'model' } = req.query;
+    const { where, params } = buildDateFilter(from, to, 't.');
+
+    let rows, cols, values, colExpr;
+    if (dimension === 'model') {
+      colExpr = `e.model_id`;
+    } else if (dimension === 'activity') {
+      colExpr = `COALESCE(t.activity_category, 'general')`;
+    } else if (dimension === 'status') {
+      colExpr = `t.status`;
+    } else {
+      return res.status(400).json({ error: `Unknown dimension: ${dimension}` });
+    }
+
+    const sql = `
+      SELECT
+        e.mode AS agent,
+        ${colExpr} AS col_value,
+        COUNT(DISTINCT e.task_id) AS task_count
+      FROM events e
+      INNER JOIN tasks t ON t.id = e.task_id
+      WHERE e.mode IS NOT NULL AND e.mode != ''
+      ${where ? 'AND ' + where.slice(6) : ''}
+      GROUP BY e.mode, col_value
+    `;
+    const raw = db.prepare(sql).all(...params);
+
+    // Build the (row, col) -> count map and the ordered row/col lists
+    const rowSet = new Set();
+    const colSet = new Set();
+    const cell = new Map();
+    for (const r of raw) {
+      if (!r.agent || !r.col_value) continue;
+      rowSet.add(r.agent);
+      colSet.add(r.col_value);
+      const key = `${r.agent}::${r.col_value}`;
+      cell.set(key, (cell.get(key) || 0) + r.task_count);
+    }
+    rows = [...rowSet].sort();
+    cols = [...colSet].sort();
+    values = rows.map(a => cols.map(c => cell.get(`${a}::${c}`) || 0));
+
+    res.json({ rows, cols, values, metric: 'task_count', dimension });
+  });
+
+  // GET /api/analytics/metric-defs — UI tooltips source of truth
+  router.get('/metric-defs', (req, res) => {
+    res.json(metricDefs());
   });
 
   // GET /api/analytics/errors
@@ -276,22 +477,25 @@ module.exports = (db) => {
   });
 
   // GET /api/analytics/reasoning
+  // Phase 4: optional ?agent= filter
   router.get('/reasoning', (req, res) => {
-    const { from, to } = req.query;
+    const { from, to, agent } = req.query;
     const { where, params } = buildDateFilter(from, to);
-    
+    const agentFilter = buildAgentTaskFilter(agent, params);
+
     const stats = db.prepare(`
-      SELECT 
+      SELECT
         has_reasoning,
-        COUNT(*) as task_count,
-        SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) as completed,
-        AVG(duration) as avg_duration,
-        AVG(total_cost) as avg_cost,
-        AVG(error_count) as avg_errors
-      FROM tasks
+        COUNT(DISTINCT t.id) as task_count,
+        SUM(CASE WHEN t.status='completed' THEN 1 ELSE 0 END) as completed,
+        AVG(t.duration) as avg_duration,
+        AVG(t.total_cost) as avg_cost,
+        AVG(t.error_count) as avg_errors
+      FROM tasks t
+      ${agentFilter.join}
       ${where}
       GROUP BY has_reasoning
-    `).all(...params);
+    `).all(...agentFilter.params, ...params);
     res.json(stats);
   });
 
@@ -384,28 +588,32 @@ module.exports = (db) => {
   // ── CodeBurn-inspired Activity Intelligence endpoints ──
 
   // GET /api/analytics/activity — Activity category breakdown with one-shot rates
+  // Phase 4: optional ?agent= filter
   router.get('/activity', (req, res) => {
-    const { from, to } = req.query;
+    const { from, to, agent } = req.query;
     const { where, params } = buildDateFilter(from, to);
+    const agentFilter = buildAgentTaskFilter(agent, params);
 
     const rows = db.prepare(`
-      SELECT 
+      SELECT
         activity_category as category,
-        COUNT(*) as task_count,
-        SUM(total_cost) as total_cost,
-        SUM(tool_call_count) as total_turns,
-        SUM(edit_turns) as edit_turns,
-        SUM(oneshot_turns) as oneshot_turns,
-        SUM(retry_cycles) as retry_cycles,
-        AVG(duration) as avg_duration,
-        SUM(error_count) as total_errors,
-        SUM(total_tokens_in) as total_tokens_in,
-        SUM(total_tokens_out) as total_tokens_out,
-        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed
-      FROM tasks ${where}
+        COUNT(DISTINCT t.id) as task_count,
+        SUM(t.total_cost) as total_cost,
+        SUM(t.tool_call_count) as total_turns,
+        SUM(t.edit_turns) as edit_turns,
+        SUM(t.oneshot_turns) as oneshot_turns,
+        SUM(t.retry_cycles) as retry_cycles,
+        AVG(t.duration) as avg_duration,
+        SUM(t.error_count) as total_errors,
+        SUM(t.total_tokens_in) as total_tokens_in,
+        SUM(t.total_tokens_out) as total_tokens_out,
+        SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END) as completed
+      FROM tasks t
+      ${agentFilter.join}
+      ${where}
       GROUP BY activity_category
       ORDER BY total_cost DESC
-    `).all(...params);
+    `).all(...agentFilter.params, ...params);
 
     // Compute one-shot rate per category
     const result = rows.map(r => ({
@@ -474,4 +682,18 @@ function buildDateFilter(from, to, prefix = '') {
   if (to)   { conditions.push(`${prefix}start_ts <= ?`); params.push(new Date(to).getTime()); }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   return { where, params };
+}
+
+// Phase 4: helper for the agent lens on tasks-scoped endpoints. Returns
+// `{ join, params }` — caller concatenates `join` and spreads `params`.
+// `params` is the existing params array (mutated in place for compat).
+function buildAgentTaskFilter(agent, params) {
+  if (!agent) return { join: '', params: [] };
+  const agents = String(agent).split(',').map(s => s.trim()).filter(Boolean);
+  if (!agents.length) return { join: '', params: [] };
+  const placeholders = agents.map(() => '?').join(',');
+  return {
+    join: `INNER JOIN task_models tm_ag ON t.id = tm_ag.task_id AND tm_ag.mode IN (${placeholders})`,
+    params: [...agents],
+  };
 }

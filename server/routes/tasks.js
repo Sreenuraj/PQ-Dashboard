@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { runTestSuite, getBaseline } = require('../testing');
+const { computeSessionMetrics } = require('../analytics/metrics');
 
 module.exports = (db) => {
 
@@ -125,7 +126,9 @@ module.exports = (db) => {
       page = 1, limit = 20,
       from, to, model, source,
       hasErrors, hasReasoning, status,
-      error_category, tool_name, search
+      error_category, tool_name, search,
+      // Phase 4: agent filters
+      agent, multi_agent
     } = req.query;
 
     const offset = (parseInt(page) - 1) * parseInt(limit);
@@ -158,24 +161,49 @@ module.exports = (db) => {
       params.push(model);
     }
 
-    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    // Phase 4: agent filter (OR-composed: agent=web_agent,mobile_agent)
+    let agentJoin = '';
+    if (agent) {
+      const agents = String(agent).split(',').map(s => s.trim()).filter(Boolean);
+      if (agents.length) {
+        agentJoin = 'INNER JOIN task_models tm_ag ON t.id = tm_ag.task_id';
+        conditions.push(`tm_ag.mode IN (${agents.map(() => '?').join(',')})`);
+        params.push(...agents);
+      }
+    }
+    if (multi_agent === '1' || multi_agent === 'true') {
+      conditions.push('t.is_multi_agent = 1');
+    } else if (multi_agent === '0' || multi_agent === 'false') {
+      conditions.push('t.is_multi_agent = 0');
+    }
 
-    const countRow = db.prepare(`SELECT COUNT(DISTINCT t.id) as cnt FROM tasks t ${modelJoin} ${where}`).get(...params);
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    // Combine joins (we may have BOTH model and agent joins, both hitting task_models).
+    // When both are present we need distinct join aliases; agent filter uses tm_ag,
+    // model filter uses tm.
+    const joinSql = [modelJoin, agentJoin].filter(Boolean).join(' ');
+
+    const countRow = db.prepare(`SELECT COUNT(DISTINCT t.id) as cnt FROM tasks t ${joinSql} ${where}`).get(...params);
     const total = countRow?.cnt || 0;
 
     const rows = db.prepare(`
-      SELECT DISTINCT t.* FROM tasks t ${modelJoin} ${where}
+      SELECT DISTINCT t.* FROM tasks t ${joinSql} ${where}
       ORDER BY t.start_ts DESC
       LIMIT ? OFFSET ?
     `).all(...params, parseInt(limit), offset);
 
-    // Attach models list to each task
+    // Attach models list + parsed agent context to each task
     const getModels = db.prepare('SELECT DISTINCT model_id, provider_id, mode FROM task_models WHERE task_id = ?');
-    const tasks = rows.map(t => ({
-      ...t,
-      environment: tryParse(t.environment),
-      models: getModels.all(t.id),
-    }));
+    const tasks = rows.map(t => {
+      const env = tryParse(t.environment);
+      const agentSequence = tryParse(t.agent_sequence_json, []);
+      return {
+        ...t,
+        environment: env,
+        models: getModels.all(t.id),
+        agent_sequence: agentSequence,
+      };
+    });
 
     res.json({ tasks, total, page: parseInt(page), limit: parseInt(limit) });
   });
@@ -188,6 +216,7 @@ module.exports = (db) => {
     const models = db.prepare('SELECT DISTINCT model_id, provider_id, mode, ts FROM task_models WHERE task_id = ? ORDER BY ts').all(req.params.id);
     task.models = models;
     task.environment = tryParse(task.environment);
+    task.agent_sequence = tryParse(task.agent_sequence_json, []);
 
     res.json(task);
   });
@@ -208,6 +237,9 @@ module.exports = (db) => {
   });
 
   // GET /api/tasks/:id/evaluate — Automated heuristic metrics
+  // Phase 4: refactored to use server/analytics/metrics.js as the single source
+  // of truth. The local evidence strings below mirror the formula explanations
+  // served via /api/analytics/metric-defs.
   router.get('/:id/evaluate', (req, res) => {
     const taskId = req.params.id;
     const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
@@ -215,58 +247,42 @@ module.exports = (db) => {
 
     const events = db.prepare('SELECT * FROM events WHERE task_id = ? ORDER BY ts ASC').all(taskId);
 
-    let metrics = { tue: null, rd: null, ce: null, err: null };
-    let evidence = { tue: '', rd: '', ce: '', err: '' };
+    // Phase 4: single source of truth for the 4 metric numbers
+    const m = computeSessionMetrics(task, events);
 
-    // Calculate TUE
+    // Local evidence strings (the metric values themselves come from the module)
+    const evidence = { tue: '', rd: '', ce: '', err: '' };
     const toolEvents = events.filter(e => e.sub_type === 'tool');
     const errorEvents = events.filter(e => !!e.error_category);
     const toolErrors = errorEvents.filter(e => e.error_category === 'tool_failure' || e.error_category === 'validation_error');
     if (toolEvents.length > 0) {
        const successful = toolEvents.length - toolErrors.length;
-       metrics.tue = Math.round((Math.max(0, successful) / toolEvents.length) * 100);
        evidence.tue = `${successful} out of ${toolEvents.length} tool calls executed without failure.`;
     } else {
-       metrics.tue = 100;
        evidence.tue = `No tool invocations were used.`;
     }
-
-    // Calculate RD (Reasoning Density)
     const reasoningEvents = events.filter(e => e.sub_type === 'reasoning');
     const apiEvents = events.filter(e => e.sub_type === 'api_req_started');
     const totalActions = reasoningEvents.length + apiEvents.length + toolEvents.length;
     if (totalActions > 0) {
-       metrics.rd = Math.round((reasoningEvents.length / totalActions) * 100);
        evidence.rd = `${reasoningEvents.length} reasoning block(s) across ${totalActions} core actions.`;
     } else {
-       metrics.rd = 0;
        evidence.rd = 'No core actions found.';
     }
-
-    // Calculate CE (Context Efficiency)
     const ctxEvents = apiEvents.filter(e => e.context_pct != null);
     if (ctxEvents.length > 0) {
        const avgCtx = ctxEvents.reduce((acc, e) => acc + e.context_pct, 0) / ctxEvents.length;
-       metrics.ce = Math.round(100 - avgCtx); // 100 is best (0% used), 0 is worst (100% used)
        evidence.ce = `Average context window used: ${Math.round(avgCtx)}%.`;
     } else {
-       metrics.ce = 100;
        evidence.ce = 'No context usage reported.';
     }
-
-    // Calculate ERR (Error Recovery Rate)
     const totalErrors = task.error_count || errorEvents.length;
     if (totalErrors === 0) {
-       metrics.err = 100;
        evidence.err = 'Task completed cleanly with zero errors.';
+    } else if (task.status === 'completed') {
+       evidence.err = `Task successfully completed despite encountering ${totalErrors} error(s). (Perfect recovery)`;
     } else {
-       if (task.status === 'completed') {
-          metrics.err = 100;
-          evidence.err = `Task successfully completed despite encountering ${totalErrors} error(s). (Perfect recovery)`;
-       } else {
-          metrics.err = 0;
-          evidence.err = `Task failed/interrupted after encountering ${totalErrors} error(s).`;
-       }
+       evidence.err = `Task failed/interrupted after encountering ${totalErrors} error(s).`;
     }
 
     // Fetch manual rating from test_results if exists
@@ -278,6 +294,7 @@ module.exports = (db) => {
     const completionMessage = getCompletionMessage(events) || task.completion_message || null;
 
     // Add an Overall average score, factoring in manual rating (worth 30% if present)
+    const metrics = { tue: m.tue, rd: m.rd, ce: m.ce, err: m.err };
     if (userRating != null) {
       const autoAvg = (metrics.tue + metrics.rd + metrics.ce + metrics.err) / 4;
       const ratingScore = userRating * 20; // convert 1-5 scale to 0-100

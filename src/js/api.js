@@ -46,6 +46,10 @@ export const api = {
   activity:      (p={}) => get('/analytics/activity', p),
   shellCommands: (p={}) => get('/analytics/shell-commands', p),
   activityDaily: (p={}) => get('/analytics/activity/daily', p),
+  // Phase 4: agent-aware analytics
+  agents:        (p={}) => get('/analytics/agents', p),
+  agentMatrix:   (p={}) => get('/analytics/agent-matrix', p),
+  metricDefs:    ()     => get('/analytics/metric-defs'),
   tasks:         (p={}) => get('/tasks', p),
   task:          (id)   => get(`/tasks/${id}`),
   taskEvents:    (id,p={}) => get(`/tasks/${id}/events`, p),
@@ -69,3 +73,11 @@ export const api = {
   refresh:       ()     => post('/refresh'),
   config:        ()     => get('/config'),
 };
+
+// Phase 4: cached metric defs (fetched once per page-load; consumed by MetricTooltip)
+let _metricDefsCache = null;
+export async function getMetricDefs() {
+  if (_metricDefsCache) return _metricDefsCache;
+  _metricDefsCache = await api.metricDefs();
+  return _metricDefsCache;
+}
