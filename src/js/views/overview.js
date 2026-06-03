@@ -2,8 +2,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Phase 4: Overview view with agent-context awareness.
 //   • Master filter (agent chip row) — scopes every panel on the page.
-//   • Top Models — sortable by TUE / RD / CE / ERR with hover-tooltip headers.
-//   • Top Agents — new panel (replaces "Top Activities" spot if both exist).
+//   • Top Models — full-width panel, sortable by any column; uses full
+//     metric wordings (Sessions, Cost, Tool Use Efficacy, Reasoning Density,
+//     Context Efficiency, Error Recovery, Errors) — no abbreviations.
 //   • Stat cards + Reasoning Impact + Activity Snapshot — all agent-scoped.
 //
 // Renders the page twice: once with default filter set, and again whenever the
@@ -71,6 +72,7 @@ export async function renderOverview(container, dateRange = {}) {
         const next = await render();
         paintOverview(container, { state, ...next });
         await hydrateMetricTooltips();
+        return;
       }
     }, { once: false });
   } catch (e) {
@@ -116,6 +118,15 @@ function paintOverview(container, { state, overview, models, agentsData, reasoni
       </div>
     </div>
 
+    <!--
+      Agent-filter chip row.
+      The list is built from api.agents() + api.models() every render, so
+      a new agent (one that wasn't in the DB on previous load) will appear
+      in the row automatically the next time the user lands on this page
+      or clicks any chip (which re-fetches). No manual refresh needed.
+      Colors come from utils.js agentColor(): hardcoded for known agents,
+      hash-derived palette for unknown ones, both stable across renders.
+    -->
     <div class="filter-chip-row" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:8px 0 18px;padding:10px 12px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px">
       <span style="font-size:11px;color:var(--text-3);margin-right:6px;font-weight:600">AGENT FILTER</span>
       ${filterChipsHtml}
@@ -147,28 +158,32 @@ function paintOverview(container, { state, overview, models, agentsData, reasoni
         oneShotRate >= 80 ? 'green' : 'yellow', '#/activity') : ''}
     </div>
 
-    <div class="grid-2">
-      <div class="panel">
-        <div class="panel-title">
-          <span>Top Models</span>
-          <span class="panel-title-meta">${renderSortBadge(state)}<a href="#/models">View all ↗</a></span>
-        </div>
+    <!-- Top Models (full-width, agent-scoped, sortable by any metric) -->
+    <div class="panel">
+      <div class="panel-title">
+        <span>Top Models <span style="font-weight:400;color:var(--text-3);font-size:11px;margin-left:6px">${sortedModels.length} total</span></span>
+        <span class="panel-title-meta">
+          ${renderSortBadge(state)}
+          <a href="#/models">View all ↗</a>
+        </span>
+      </div>
+      <div class="panel-body" style="padding:0">
         <div class="table-wrap" style="overflow-x:auto">
-          <table class="data-table" style="font-size:11.5px">
+          <table class="data-table" style="font-size:12px">
             <thead>
               <tr>
                 <th>Model</th>
-                <th>${sortHeader('Sess',   'task_count', state)}</th>
-                <th>${sortHeader('Cost',   'total_cost', state)}</th>
-                <th>${sortHeader('TUE',    'avg_tue',    state, metricTooltip('tue'))}</th>
-                <th>${sortHeader('RD',     'avg_rd',     state, metricTooltip('rd'))}</th>
-                <th>${sortHeader('CE',     'avg_ce',     state, metricTooltip('ce'))}</th>
-                <th>${sortHeader('ERR',    'avg_err',    state, metricTooltip('err'))}</th>
-                <th>${sortHeader('Errs',   'total_errors', state)}</th>
+                <th>${sortHeader('Sessions',          'task_count',  state)}</th>
+                <th>${sortHeader('Cost',              'total_cost',  state)}</th>
+                <th>${sortHeader('Tool Use Efficacy', 'avg_tue',     state)}</th>
+                <th>${sortHeader('Reasoning Density', 'avg_rd',      state)}</th>
+                <th>${sortHeader('Context Efficiency','avg_ce',     state)}</th>
+                <th>${sortHeader('Error Recovery',    'avg_err',     state)}</th>
+                <th>${sortHeader('Errors',            'total_errors',state)}</th>
               </tr>
             </thead>
             <tbody>
-              ${sortedModels.slice(0, 7).map(m => {
+              ${sortedModels.slice(0, 10).map(m => {
                 const tce = m.total_errors || 0;
                 return `
                   <tr style="cursor:pointer" onclick="window.location.hash='#/sessions?model_id=${encodeURIComponent(m.model_id)}'">
@@ -189,30 +204,6 @@ function paintOverview(container, { state, overview, models, agentsData, reasoni
             </tbody>
           </table>
         </div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-title">
-          <span>Top Agents</span>
-          <span class="panel-title-meta">Click a row to apply as filter</span>
-        </div>
-        ${topAgents.length > 0 ? topAgents.map(a => `
-          <div class="model-row" style="cursor:pointer"
-            onclick="event.stopPropagation();window.location.hash='#/sessions?agent=${encodeURIComponent(a.agent)}'"
-            title="Click to view sessions for ${escAttr(a.agent)}">
-            <div class="model-primary">
-              <div style="display:flex;align-items:center;gap:6px">
-                ${agentChip(a.agent, { clickable: false, size: 11 })}
-              </div>
-              <div class="model-primary-meta">${a.event_count} events</div>
-            </div>
-            <span class="model-stat model-stat-sessions">${a.task_count} sess</span>
-            <span class="model-stat model-stat-cost">${fmtCost(a.total_cost)}</span>
-            ${(a.total_errors || 0) > 0
-              ? `<span class="badge red model-stat-errors" style="font-size:10px">${a.total_errors} err</span>`
-              : `<span class="model-stat-errors model-stat-errors-empty">0 err</span>`}
-          </div>
-        `).join('') : '<div class="empty-state"><p>No agent data yet</p></div>'}
       </div>
     </div>
 
@@ -328,9 +319,15 @@ function sortHeader(label, key, state, tipHtml = '') {
 }
 
 function renderSortBadge(state) {
+  // Match the full-word column labels in the Top Models table.
   const map = {
-    task_count: 'Sessions', total_cost: 'Cost', avg_tue: 'TUE', avg_rd: 'RD',
-    avg_ce: 'CE', avg_err: 'ERR', total_errors: 'Errors',
+    task_count:   'Sessions',
+    total_cost:   'Cost',
+    avg_tue:      'Tool Use Efficacy',
+    avg_rd:       'Reasoning Density',
+    avg_ce:       'Context Efficiency',
+    avg_err:      'Error Recovery',
+    total_errors: 'Errors',
   };
   const label = map[state.sortKey] || state.sortKey;
   return `<span style="font-size:10px;color:var(--text-3);margin-right:6px">Sorted by ${label} ${state.sortDir === 'asc' ? '↑' : '↓'}</span>`;
