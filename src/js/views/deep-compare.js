@@ -621,13 +621,21 @@ function showRowDetailsModal(metric, comparedRows, baseline) {
       
       ${metric === 'tia' && baseline ? `
       <div style="background:var(--bg-3); padding:10px; border-radius:4px; margin-bottom:14px; font-size:11px">
-        <strong>Baseline Expected Tools:</strong> ${(baseline.expected_tools || []).map(t => `<code class="mono">${t}</code>`).join(', ') || 'None'}<br>
+        <strong>Baseline Expected Tools:</strong> ${(baseline.expected_tools || []).map(t => {
+          const name = typeof t === 'string' ? t : t.name;
+          const essential = typeof t === 'object' && t.is_essential;
+          return `<code class="mono">${name}</code>${essential ? ' <span style="color:var(--accent);font-size:9px">*</span>' : ''}`;
+        }).join(', ') || 'None'}<br>
         <strong>Baseline Excluded Tools:</strong> ${(baseline.excluded_tools || []).map(t => `<code class="mono">${t}</code>`).join(', ') || 'None'}
       </div>` : ''}
 
       ${metric === 'bcv' && baseline && baseline.behavior_contract ? `
       <div style="background:var(--bg-3); padding:10px; border-radius:4px; margin-bottom:14px; font-size:11px">
-        <strong>Required Keywords:</strong> ${(baseline.behavior_contract.output_keywords || []).map(k => `"${k}"`).join(', ') || 'None'}<br>
+        <strong>Required Keywords:</strong> ${(baseline.behavior_contract.output_keywords || []).map(k => {
+          const word = typeof k === 'string' ? k : k.word;
+          const essential = typeof k === 'object' && k.is_essential;
+          return `"${word}"${essential ? ' <span style="color:var(--accent);font-size:9px">*</span>' : ''}`;
+        }).join(', ') || 'None'}<br>
         <strong>Excluded Keywords:</strong> ${(baseline.behavior_contract.excluded_keywords || []).map(k => `"${k}"`).join(', ') || 'None'}<br>
         <strong>Constraints:</strong> Code Block: ${baseline.behavior_contract.has_code_block ? 'Yes' : 'No'} | Min Length: ${baseline.behavior_contract.output_min_length || baseline.behavior_contract.min_length || 0} chars
       </div>` : ''}
@@ -636,6 +644,11 @@ function showRowDetailsModal(metric, comparedRows, baseline) {
       <div style="background:var(--bg-3); padding:10px; border-radius:4px; margin-bottom:14px; font-size:11px">
         <strong>Essential Steps Configured in Baseline:</strong><br>
         ${baseline.tool_sequence.filter(s => s.is_essential).map((s, i) => `${i + 1}. <code class="mono">${s.tool_name}</code> ${s.file_path ? `→ <code class="mono">${s.file_path}</code>` : ''} (${escHtml(s.description || 'no description')})`).join('<br>')}
+      </div>` : ''}
+
+      ${metric === 'bse' && baseline && baseline.excluded_files?.length ? `
+      <div style="background:var(--bg-3); padding:10px; border-radius:4px; margin-bottom:14px; font-size:11px">
+        <strong>Excluded Files:</strong> ${(baseline.excluded_files || []).map(f => `<code class="mono">${escHtml(f)}</code>`).join(', ') || 'None'}
       </div>` : ''}
 
       ${!baseline ? `

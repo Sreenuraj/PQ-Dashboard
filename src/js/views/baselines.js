@@ -109,10 +109,19 @@ function renderBaselineCard(b) {
         <details style="margin-bottom:12px">
           <summary class="details-summary">Benchmark summary</summary>
           <div class="benchmark-summary">
-            <div><strong>Expected tools:</strong> ${(b.expected_tools || []).map(escHtml).join(', ') || '-'}</div>
+            <div><strong>Expected tools:</strong> ${(b.expected_tools || []).map(t => {
+              const name = typeof t === 'string' ? t : t.name;
+              const essential = typeof t === 'object' && t.is_essential;
+              return `${escHtml(name)}${essential ? ' <span style="color:var(--accent)">★</span>' : ''}`;
+            }).join(', ') || '-'}</div>
             <div><strong>Excluded tools:</strong> ${(b.excluded_tools || []).map(escHtml).join(', ') || '-'}</div>
-            <div><strong>Contract keywords:</strong> ${(b.behavior_contract?.output_keywords || []).map(escHtml).join(', ') || '-'}</div>
-            <div><strong>Excluded keywords:</strong> ${(b.behavior_contract?.excluded_keywords || []).map(escHtml).join(', ') || '-'}</div>
+            <div><strong>Contract keywords:</strong> ${(b.behavior_contract?.output_keywords || []).map(k => {
+              const word = typeof k === 'string' ? k : k.word;
+              const essential = typeof k === 'object' && k.is_essential;
+              return `"${escHtml(word)}"${essential ? ' <span style="color:var(--accent)">★</span>' : ''}`;
+            }).join(', ') || '-'}</div>
+            <div><strong>Excluded keywords:</strong> ${(b.behavior_contract?.excluded_keywords || []).map(k => `"${escHtml(k)}"`).join(', ') || '-'}</div>
+            <div><strong>Excluded files:</strong> ${(b.excluded_files || []).map(f => `<code class="mono">${escHtml(f)}</code>`).join(', ') || '-'}</div>
           </div>
         </details>
         <div class="prompt-chain">

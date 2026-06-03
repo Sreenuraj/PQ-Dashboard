@@ -21,8 +21,12 @@ export async function renderBaselineEditor(container, id) {
     name: baseline.name || '',
     description: baseline.description || '',
     tags: [...(baseline.tags || [])],
-    expected_tools: [...(baseline.expected_tools || [])],
+    // Phase 3: expected_tools and output_keywords may be objects or legacy strings
+    expected_tools: (baseline.expected_tools || []).map(t =>
+      typeof t === 'string' ? { name: t, is_essential: true } : { ...t }
+    ),
     excluded_tools: [...(baseline.excluded_tools || [])],
+    excluded_files: [...(baseline.excluded_files || [])],
     tool_sequence: JSON.parse(JSON.stringify(baseline.tool_sequence || [])),
     behavior_contract: JSON.parse(JSON.stringify(baseline.behavior_contract || {
       has_code_block: false,
@@ -35,6 +39,10 @@ export async function renderBaselineEditor(container, id) {
 
   if (!state.behavior_contract.output_keywords) state.behavior_contract.output_keywords = [];
   if (!state.behavior_contract.excluded_keywords) state.behavior_contract.excluded_keywords = [];
+  // Phase 3: Normalize output_keywords to objects
+  state.behavior_contract.output_keywords = state.behavior_contract.output_keywords.map(k =>
+    typeof k === 'string' ? { word: k, is_essential: true } : { ...k }
+  );
 
   function render() {
     container.innerHTML = `
@@ -112,22 +120,26 @@ export async function renderBaselineEditor(container, id) {
       <div class="panel" style="margin-top:20px">
         <div class="panel-title">Tool Curation (Expected vs Excluded)</div>
         <div class="panel-body">
-          <p class="view-subtitle" style="margin-bottom:12px">Expected tools are verified to exist in the session trace. Excluded tools cause test failures if invoked.</p>
+          <p class="view-subtitle" style="margin-bottom:12px">Expected tools are verified to exist in the session trace. Excluded tools cause test failures if invoked. <strong>Essential</strong> tools must be used; <strong>optional</strong> tools are nice-to-have.</p>
           <div class="dual-list-container">
             <div>
               <div style="font-size:11px;color:var(--text-3);margin-bottom:4px">EXPECTED TOOLS</div>
               <div class="dual-list" id="expected-tools-list">
                 ${state.expected_tools.map((t, idx) => `
                   <div class="dual-list-item" data-tool-idx="${idx}" data-list="expected" style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                    <span>${escHtml(t)}</span>
+                    <div style="display:flex;align-items:center;gap:6px;flex:1">
+                      <input type="checkbox" data-tool-essential="${idx}" ${t.is_essential ? 'checked' : ''} />
+                      <span>${escHtml(t.name)}</span>
+                      ${t.is_essential ? '<span style="font-size:9px;color:var(--accent);font-weight:600">ESSENTIAL</span>' : ''}
+                    </div>
                     <span class="delete-btn" data-delete-tool="${idx}" data-list="expected" style="color:var(--red);cursor:pointer;font-weight:bold;padding:0 4px;font-size:14px;transition:opacity 0.2s" onmouseover="this.style.opacity=0.7" onmouseout="this.style.opacity=1">×</span>
                   </div>
                 `).join('')}
               </div>
             </div>
             <div class="dual-list-controls">
-              <button id="tool-move-right" class="dual-list-btn">➔</button>
-              <button id="tool-move-left" class="dual-list-btn">➔</button>
+              <button id="tool-move-right" class="dual-list-btn" style="font-size:18px">→</button>
+              <button id="tool-move-left" class="dual-list-btn" style="font-size:18px">←</button>
             </div>
             <div>
               <div style="font-size:11px;color:var(--text-3);margin-bottom:4px">EXCLUDED TOOLS</div>
@@ -153,22 +165,26 @@ export async function renderBaselineEditor(container, id) {
       <div class="panel" style="margin-top:20px">
         <div class="panel-title">Contract Keywords (Required vs Excluded)</div>
         <div class="panel-body">
-          <p class="view-subtitle" style="margin-bottom:12px">Required keywords must appear in final outputs. Excluded keywords trigger contract warnings if detected.</p>
+          <p class="view-subtitle" style="margin-bottom:12px">Required keywords must appear in final outputs. Excluded keywords trigger contract warnings if detected. <strong>Essential</strong> keywords must appear; <strong>optional</strong> keywords are nice-to-have.</p>
           <div class="dual-list-container">
             <div>
               <div style="font-size:11px;color:var(--text-3);margin-bottom:4px">REQUIRED KEYWORDS</div>
               <div class="dual-list" id="required-keywords-list">
                 ${state.behavior_contract.output_keywords.map((k, idx) => `
                   <div class="dual-list-item" data-kw-idx="${idx}" data-list="required" style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                    <span>${escHtml(k)}</span>
+                    <div style="display:flex;align-items:center;gap:6px;flex:1">
+                      <input type="checkbox" data-kw-essential="${idx}" ${k.is_essential ? 'checked' : ''} />
+                      <span>${escHtml(k.word)}</span>
+                      ${k.is_essential ? '<span style="font-size:9px;color:var(--accent);font-weight:600">ESSENTIAL</span>' : ''}
+                    </div>
                     <span class="delete-btn" data-delete-kw="${idx}" data-list="required" style="color:var(--red);cursor:pointer;font-weight:bold;padding:0 4px;font-size:14px;transition:opacity 0.2s" onmouseover="this.style.opacity=0.7" onmouseout="this.style.opacity=1">×</span>
                   </div>
                 `).join('')}
               </div>
             </div>
             <div class="dual-list-controls">
-              <button id="kw-move-right" class="dual-list-btn">➔</button>
-              <button id="kw-move-left" class="dual-list-btn">➔</button>
+              <button id="kw-move-right" class="dual-list-btn" style="font-size:18px">→</button>
+              <button id="kw-move-left" class="dual-list-btn" style="font-size:18px">←</button>
             </div>
             <div>
               <div style="font-size:11px;color:var(--text-3);margin-bottom:4px">EXCLUDED KEYWORDS</div>
@@ -186,6 +202,26 @@ export async function renderBaselineEditor(container, id) {
             <input type="text" id="new-kw-input" class="filter-input" placeholder="Custom keyword" style="flex:1" />
             <button id="add-required-kw" class="action-btn">Add to Required</button>
             <button id="add-excluded-kw" class="action-btn">Add to Excluded</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Phase 3: Excluded Files -->
+      <div class="panel" style="margin-top:20px">
+        <div class="panel-title">Excluded Files (Agent should NOT access)</div>
+        <div class="panel-body">
+          <p class="view-subtitle" style="margin-bottom:12px">Define file path patterns the agent should not access. Supports glob patterns: <code>**/.env</code>, <code>*.key</code>, <code>src/internal/**</code></p>
+          <div id="excluded-files-list">
+            ${state.excluded_files.map((f, idx) => `
+              <div class="dual-list-item" data-file-idx="${idx}" style="display:flex;justify-content:space-between;align-items:center;width:100%;max-width:500px">
+                <span class="mono" style="font-size:12px">${escHtml(f)}</span>
+                <span class="delete-btn" data-delete-file="${idx}" style="color:var(--red);cursor:pointer;font-weight:bold;padding:0 4px;font-size:14px;transition:opacity 0.2s" onmouseover="this.style.opacity=0.7" onmouseout="this.style.opacity=1">×</span>
+              </div>
+            `).join('')}
+          </div>
+          <div class="dual-list-input-group" style="max-width:500px;margin-top:8px">
+            <input type="text" id="new-file-input" class="filter-input" placeholder="e.g. **/.env, secrets.yaml, src/internal/**" style="flex:1" />
+            <button id="add-file-btn" class="action-btn">Add Pattern</button>
           </div>
         </div>
       </div>
@@ -302,7 +338,9 @@ export async function renderBaselineEditor(container, id) {
     let selectedKw = null;
 
     document.querySelectorAll('.dual-list-item').forEach(item => {
-      item.addEventListener('click', () => {
+      item.addEventListener('click', (e) => {
+        // Don't select item when clicking a checkbox — let label toggle work naturally
+        if (e.target.tagName === 'INPUT') return;
         const isTool = item.hasAttribute('data-tool-idx');
         if (isTool) {
           document.querySelectorAll('#expected-tools-list .dual-list-item, #excluded-tools-list .dual-list-item').forEach(el => el.classList.remove('selected'));
@@ -322,19 +360,20 @@ export async function renderBaselineEditor(container, id) {
       });
     });
 
-    // Tools move buttons
+    // Tools move buttons — convert between object (expected) and string (excluded)
     document.getElementById('tool-move-right').addEventListener('click', () => {
       if (selectedTool && selectedTool.list === 'expected') {
-        const tool = state.expected_tools.splice(selectedTool.index, 1)[0];
-        state.excluded_tools.push(tool);
+        const toolObj = state.expected_tools.splice(selectedTool.index, 1)[0];
+        state.excluded_tools.push(toolObj.name);  // excluded stores plain strings
         selectedTool = null;
         render();
       }
     });
     document.getElementById('tool-move-left').addEventListener('click', () => {
       if (selectedTool && selectedTool.list === 'excluded') {
-        const tool = state.excluded_tools.splice(selectedTool.index, 1)[0];
-        state.expected_tools.push(tool);
+        const toolName = state.excluded_tools.splice(selectedTool.index, 1)[0];
+        // Default to non-essential when moving back from excluded — preserves user's intent
+        state.expected_tools.push({ name: toolName, is_essential: false });
         selectedTool = null;
         render();
       }
@@ -344,8 +383,8 @@ export async function renderBaselineEditor(container, id) {
     document.getElementById('add-expected-tool').addEventListener('click', () => {
       const input = document.getElementById('new-tool-input');
       const val = input.value.trim();
-      if (val && !state.expected_tools.includes(val)) {
-        state.expected_tools.push(val);
+      if (val && !state.expected_tools.some(t => t.name === val)) {
+        state.expected_tools.push({ name: val, is_essential: true });
         // Remove from excluded if it was there
         state.excluded_tools = state.excluded_tools.filter(x => x !== val);
         render();
@@ -357,24 +396,25 @@ export async function renderBaselineEditor(container, id) {
       if (val && !state.excluded_tools.includes(val)) {
         state.excluded_tools.push(val);
         // Remove from expected if it was there
-        state.expected_tools = state.expected_tools.filter(x => x !== val);
+        state.expected_tools = state.expected_tools.filter(t => t.name !== val);
         render();
       }
     });
 
-    // Keywords move buttons
+    // Keywords move buttons — convert between object (required) and string (excluded)
     document.getElementById('kw-move-right').addEventListener('click', () => {
       if (selectedKw && selectedKw.list === 'required') {
-        const kw = state.behavior_contract.output_keywords.splice(selectedKw.index, 1)[0];
-        state.behavior_contract.excluded_keywords.push(kw);
+        const kwObj = state.behavior_contract.output_keywords.splice(selectedKw.index, 1)[0];
+        state.behavior_contract.excluded_keywords.push(kwObj.word);  // excluded stores plain strings
         selectedKw = null;
         render();
       }
     });
     document.getElementById('kw-move-left').addEventListener('click', () => {
       if (selectedKw && selectedKw.list === 'excluded') {
-        const kw = state.behavior_contract.excluded_keywords.splice(selectedKw.index, 1)[0];
-        state.behavior_contract.output_keywords.push(kw);
+        const kwWord = state.behavior_contract.excluded_keywords.splice(selectedKw.index, 1)[0];
+        // Default to non-essential when moving back from excluded — preserves user's intent
+        state.behavior_contract.output_keywords.push({ word: kwWord, is_essential: false });
         selectedKw = null;
         render();
       }
@@ -384,8 +424,8 @@ export async function renderBaselineEditor(container, id) {
     document.getElementById('add-required-kw').addEventListener('click', () => {
       const input = document.getElementById('new-kw-input');
       const val = input.value.trim().toLowerCase();
-      if (val && !state.behavior_contract.output_keywords.includes(val)) {
-        state.behavior_contract.output_keywords.push(val);
+      if (val && !state.behavior_contract.output_keywords.some(k => k.word === val)) {
+        state.behavior_contract.output_keywords.push({ word: val, is_essential: true });
         // Remove from excluded if there
         state.behavior_contract.excluded_keywords = state.behavior_contract.excluded_keywords.filter(x => x !== val);
         render();
@@ -397,7 +437,44 @@ export async function renderBaselineEditor(container, id) {
       if (val && !state.behavior_contract.excluded_keywords.includes(val)) {
         state.behavior_contract.excluded_keywords.push(val);
         // Remove from required if there
-        state.behavior_contract.output_keywords = state.behavior_contract.output_keywords.filter(x => x !== val);
+        state.behavior_contract.output_keywords = state.behavior_contract.output_keywords.filter(k => k.word !== val);
+        render();
+      }
+    });
+
+    // Phase 3: Tool essential checkboxes — re-render to update ESSENTIAL tag immediately
+    document.querySelectorAll('[data-tool-essential]').forEach(el => {
+      el.addEventListener('change', () => {
+        const idx = parseInt(el.dataset.toolEssential);
+        state.expected_tools[idx].is_essential = el.checked;
+        render();
+      });
+    });
+
+    // Phase 3: Keyword essential checkboxes — re-render to update ESSENTIAL tag immediately
+    document.querySelectorAll('[data-kw-essential]').forEach(el => {
+      el.addEventListener('change', () => {
+        const idx = parseInt(el.dataset.kwEssential);
+        state.behavior_contract.output_keywords[idx].is_essential = el.checked;
+        render();
+      });
+    });
+
+    // Phase 3: Excluded files deletion
+    document.querySelectorAll('[data-delete-file]').forEach(el => {
+      el.addEventListener('click', () => {
+        const idx = parseInt(el.dataset.deleteFile);
+        state.excluded_files.splice(idx, 1);
+        render();
+      });
+    });
+
+    // Phase 3: Excluded files addition
+    document.getElementById('add-file-btn')?.addEventListener('click', () => {
+      const input = document.getElementById('new-file-input');
+      const val = input.value.trim();
+      if (val && !state.excluded_files.includes(val)) {
+        state.excluded_files.push(val);
         render();
       }
     });
@@ -435,6 +512,7 @@ export async function renderBaselineEditor(container, id) {
           tags: state.tags,
           expected_tools: state.expected_tools,
           excluded_tools: state.excluded_tools,
+          excluded_files: state.excluded_files,
           tool_sequence: state.tool_sequence,
           behavior_contract: state.behavior_contract,
         };

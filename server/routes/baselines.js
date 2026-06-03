@@ -52,6 +52,7 @@ module.exports = (db) => {
     if (req.body.tags !== undefined) updates.tags = JSON.stringify(req.body.tags);
     if (req.body.expected_tools !== undefined) updates.expected_tools_json = JSON.stringify(req.body.expected_tools);
     if (req.body.excluded_tools !== undefined) updates.excluded_tools_json = JSON.stringify(req.body.excluded_tools);
+    if (req.body.excluded_files !== undefined) updates.excluded_files_json = JSON.stringify(req.body.excluded_files);
     if (req.body.tool_sequence !== undefined) updates.tool_sequence_json = JSON.stringify(req.body.tool_sequence);
     if (req.body.behavior_contract !== undefined) updates.behavior_contract_json = JSON.stringify(req.body.behavior_contract);
 
@@ -86,12 +87,14 @@ module.exports = (db) => {
     const now = Date.now();
     db.prepare(`
       UPDATE baselines SET
-        prompts_json = ?, expected_tools_json = ?, tool_sequence_json = ?,
+        prompts_json = ?, expected_tools_json = ?, excluded_tools_json = ?,
+        excluded_files_json = ?, tool_sequence_json = ?,
         behavior_contract_json = ?, reference_metrics_json = ?,
         failed_tools_json = ?, completion_message = ?, updated_at = ?
       WHERE id = ?
     `).run(
       JSON.stringify(benchmark.prompts), JSON.stringify(benchmark.expected_tools),
+      JSON.stringify(benchmark.excluded_tools), JSON.stringify(benchmark.excluded_files),
       JSON.stringify(benchmark.tool_sequence), JSON.stringify(benchmark.behavior_contract),
       JSON.stringify(benchmark.reference_metrics), JSON.stringify(benchmark.failed_tools),
       benchmark.completion_message, now, req.params.id
@@ -115,18 +118,22 @@ module.exports = (db) => {
     const sessionFailed = extractFailedTools(events);
 
     const baseline = parseBaseline(row);
-    const existingTools = new Set([...(baseline.expected_tools || []), ...(baseline.excluded_tools || [])]);
-    const existingKeywords = new Set([
-      ...(baseline.behavior_contract?.output_keywords || []),
+    // Normalize to plain strings for comparison (handle both legacy strings and new objects)
+    const existingToolNames = new Set([
+      ...(baseline.expected_tools || []).map(t => typeof t === 'string' ? t : t.name),
+      ...(baseline.excluded_tools || []),
+    ]);
+    const existingKeywordWords = new Set([
+      ...(baseline.behavior_contract?.output_keywords || []).map(k => typeof k === 'string' ? k : k.word),
       ...(baseline.behavior_contract?.excluded_keywords || []),
     ]);
 
-    const newTools = sessionTools.filter(t => !existingTools.has(t)).map(t => {
+    const newTools = sessionTools.filter(t => !existingToolNames.has(t)).map(t => {
       const count = toolEvents(events).filter(e => e.tool_name === t).length;
       return { tool_name: t, count };
     });
 
-    const newKeywords = sessionKeywords.filter(k => !existingKeywords.has(k)).map(k => {
+    const newKeywords = sessionKeywords.filter(k => !existingKeywordWords.has(k)).map(k => {
       const count = (sessionOutput.toLowerCase().match(new RegExp(k, 'g')) || []).length;
       return { keyword: k, count };
     });
@@ -150,19 +157,29 @@ module.exports = (db) => {
     const { tools_to_add = [], tools_to_exclude = [], keywords_to_add = [], keywords_to_exclude = [], session_id } = req.body || {};
     const baseline = parseBaseline(row);
 
-    // Merge tools
-    const expectedTools = [...new Set([...(baseline.expected_tools || []), ...tools_to_add])];
-    const excludedTools = [...new Set([...(baseline.excluded_tools || []), ...tools_to_exclude])];
+    // Normalize expected_tools to plain name strings for dedup
+    const existingExpectedNames = new Set((baseline.expected_tools || []).map(t => typeof t === 'string' ? t : t.name));
+    const existingExcludedTools = new Set(baseline.excluded_tools || []);
+    const existingOutputKwWords = new Set((baseline.behavior_contract?.output_keywords || []).map(k => typeof k === 'string' ? k : k.word));
+    const existingExcludedKw = new Set(baseline.behavior_contract?.excluded_keywords || []);
+
+    // Merge tools — add new ones as objects with is_essential: true
+    const mergedExpectedNames = new Set([...existingExpectedNames, ...tools_to_add]);
+    const mergedExcludedTools = new Set([...existingExcludedTools, ...tools_to_exclude]);
     // Remove from expected if added to excluded
-    const finalExpected = expectedTools.filter(t => !excludedTools.includes(t));
+    const finalExpectedNames = [...mergedExpectedNames].filter(t => !mergedExcludedTools.has(t));
+    const finalExpected = finalExpectedNames.map(name => ({ name, is_essential: true }));
+    const finalExcluded = [...mergedExcludedTools];
 
-    // Merge keywords
+    // Merge keywords — add new ones as objects with is_essential: true
+    const mergedOutputKwWords = new Set([...existingOutputKwWords, ...keywords_to_add]);
+    const mergedExcludedKw = new Set([...existingExcludedKw, ...keywords_to_exclude]);
+    const finalKwWords = [...mergedOutputKwWords].filter(k => !mergedExcludedKw.has(k));
+    const finalKeywords = finalKwWords.map(word => ({ word, is_essential: true }));
+    const finalExcludedKeywords = [...mergedExcludedKw];
+
     const contract = baseline.behavior_contract || {};
-    const outputKeywords = [...new Set([...(contract.output_keywords || []), ...keywords_to_add])];
-    const excludedKeywords = [...new Set([...(contract.excluded_keywords || []), ...keywords_to_exclude])];
-    const finalKeywords = outputKeywords.filter(k => !excludedKeywords.includes(k));
-
-    const updatedContract = { ...contract, output_keywords: finalKeywords, excluded_keywords: excludedKeywords };
+    const updatedContract = { ...contract, output_keywords: finalKeywords, excluded_keywords: finalExcludedKeywords };
 
     // Track contributing sessions
     const sessions = [...new Set([...(baseline.contributing_sessions || []), session_id].filter(Boolean))];
@@ -175,7 +192,7 @@ module.exports = (db) => {
         updated_at = ?
       WHERE id = ?
     `).run(
-      JSON.stringify(finalExpected), JSON.stringify(excludedTools),
+      JSON.stringify(finalExpected), JSON.stringify(finalExcluded),
       JSON.stringify(updatedContract), JSON.stringify(sessions),
       now, req.params.id
     );
@@ -200,15 +217,16 @@ module.exports = (db) => {
       INSERT INTO baselines (
         id, source_task_id, name, description, tags, model_id, source, activity_category,
         created_at, updated_at, prompts_json, expected_tools_json, excluded_tools_json,
-        tool_sequence_json, behavior_contract_json, reference_metrics_json,
+        excluded_files_json, tool_sequence_json, behavior_contract_json, reference_metrics_json,
         contributing_sessions_json, failed_tools_json, completion_message
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       id, task.id, name || defaultName(task), description || '', JSON.stringify(tags || []),
       model, task.source, task.activity_category, now, now,
       JSON.stringify(benchmark.prompts), JSON.stringify(benchmark.expected_tools),
-      JSON.stringify(benchmark.excluded_tools), JSON.stringify(benchmark.tool_sequence),
-      JSON.stringify(benchmark.behavior_contract), JSON.stringify(benchmark.reference_metrics),
+      JSON.stringify(benchmark.excluded_tools), JSON.stringify(benchmark.excluded_files),
+      JSON.stringify(benchmark.tool_sequence), JSON.stringify(benchmark.behavior_contract),
+      JSON.stringify(benchmark.reference_metrics),
       JSON.stringify([task.id]),  // Source session as first contributor
       JSON.stringify(benchmark.failed_tools), benchmark.completion_message
     );
@@ -225,6 +243,7 @@ function parseBaseline(row) {
     prompts: parse(row.prompts_json, []),
     expected_tools: parse(row.expected_tools_json, []),
     excluded_tools: parse(row.excluded_tools_json, []),
+    excluded_files: parse(row.excluded_files_json, []),
     tool_sequence: parse(row.tool_sequence_json, []),
     behavior_contract: parse(row.behavior_contract_json, {}),
     reference_metrics: parse(row.reference_metrics_json, {}),

@@ -2,35 +2,62 @@ const { toolEvents, normalizeStatus, evidence } = require('./shared');
 
 function runTIA(task, events, rules, baseline) {
   const actual = [...new Set(toolEvents(events).map(e => e.tool_name))];
-  const expected = baseline?.expected_tools?.length
+  const expectedRaw = baseline?.expected_tools?.length
     ? baseline.expected_tools
     : inferExpectedTools(task.first_message || '', rules.tool_invocation?.custom_mappings || []);
+  // Phase 3: Handle both legacy strings and new objects with is_essential
+  const expected = expectedRaw.map(t => typeof t === 'string' ? { name: t, is_essential: true } : t);
   const excluded = baseline?.excluded_tools || [];
 
   if (!expected.length && !excluded.length) {
     return result('skip', 0, [evidence('info', 'Expectation', 'No tool expectation inferred')], 'No matching tool rule found.');
   }
 
-  const matched = expected.filter(t => actual.includes(t));
-  const missing = expected.filter(t => !actual.includes(t));
-  const unexpected = actual.filter(t => !expected.includes(t) && !excluded.includes(t));
+  // Phase 3: Separate essential and optional tools
+  const essentialExpected = expected.filter(t => t.is_essential);
+  const optionalExpected = expected.filter(t => !t.is_essential);
+
+  const essentialMatched = essentialExpected.filter(t => actual.includes(t.name));
+  const essentialMissing = essentialExpected.filter(t => !actual.includes(t.name));
+  const essentialScore = essentialExpected.length > 0
+    ? Math.round((essentialMatched.length / essentialExpected.length) * 100)
+    : 100;
+
+  const optionalMatched = optionalExpected.filter(t => actual.includes(t.name));
+  const optionalMissing = optionalExpected.filter(t => !actual.includes(t.name));
+
+  const expectedNames = expected.map(t => t.name);
+  const unexpected = actual.filter(t => !expectedNames.includes(t) && !excluded.includes(t));
 
   // Phase 2: Check excluded tools
   const excludedUsed = excluded.filter(t => actual.includes(t));
-  const excludedPenalty = excludedUsed.length * 20;
 
-  const baseScore = expected.length
-    ? Math.round((matched.length / Math.max(expected.length, 1)) * (unexpected.length ? 85 : 100))
-    : 100;
-  const score = Math.max(0, baseScore - excludedPenalty);
+  // Phase 3: Essential-aware scoring
+  let score = essentialScore;
+  if (unexpected.length > 0) score = Math.round(score * 0.85);
+  score = Math.max(0, score - excludedUsed.length * 20);
 
-  const ev = [
-    evidence('expected', 'Expected tools', expected.join(', ') || '-'),
-    evidence('actual', 'Actual tools', actual.join(', ') || '-'),
-    evidence(missing.length ? 'violation' : 'info', 'Missing', missing.join(', ') || 'None', missing.length ? 'critical' : 'info'),
-    evidence(unexpected.length ? 'violation' : 'info', 'Unexpected', unexpected.join(', ') || 'None', unexpected.length ? 'warning' : 'info'),
-  ];
-
+  // Phase 3: Evidence with essential/optional breakdown
+  const ev = [];
+  if (essentialExpected.length) {
+    ev.push(evidence('expected', 'Essential tools', essentialExpected.map(t => t.name).join(', ')));
+    ev.push(evidence(essentialMissing.length ? 'violation' : 'info', 'Essential matched',
+      `${essentialMatched.length}/${essentialExpected.length}`, essentialMissing.length ? 'critical' : 'info'));
+    if (essentialMissing.length) {
+      ev.push(evidence('violation', 'Essential tools MISSING', essentialMissing.map(t => t.name).join(', '), 'critical'));
+    }
+  }
+  if (optionalExpected.length) {
+    ev.push(evidence('info', 'Optional tools', optionalExpected.map(t => t.name).join(', ')));
+    ev.push(evidence('info', 'Optional matched', `${optionalMatched.length}/${optionalExpected.length}`));
+    if (optionalMissing.length) {
+      ev.push(evidence('info', 'Optional tools not used', optionalMissing.map(t => t.name).join(', ')));
+    }
+  }
+  ev.push(evidence('actual', 'Actual tools', actual.join(', ') || '-'));
+  if (unexpected.length) {
+    ev.push(evidence('violation', 'Unexpected tools', unexpected.join(', '), 'warning'));
+  }
   if (excluded.length) {
     ev.push(evidence('info', 'Excluded tools', excluded.join(', ')));
     if (excludedUsed.length) {
@@ -38,12 +65,18 @@ function runTIA(task, events, rules, baseline) {
     }
   }
 
-  const status = (matched.length === 0 && expected.length > 0) || excludedUsed.length > 0
-    ? (excludedUsed.length ? 'fail' : 'fail')
-    : unexpected.length ? 'warn' : normalizeStatus(score);
+  // Phase 3: Status based on essential coverage
+  let status;
+  if (essentialMissing.length > 0 || excludedUsed.length > 0) {
+    status = 'fail';
+  } else if (unexpected.length > 0 || optionalMissing.length > 0) {
+    status = 'warn';
+  } else {
+    status = normalizeStatus(score);
+  }
 
   return result(status, score, ev,
-    baseline ? 'Compared against baseline expected/excluded tool sets.' : 'Compared against heuristic keyword mapping.');
+    baseline ? 'Compared against baseline expected/excluded tool sets (essential-aware).' : 'Compared against heuristic keyword mapping.');
 }
 
 function inferExpectedTools(message, mappings) {

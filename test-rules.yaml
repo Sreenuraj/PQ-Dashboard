@@ -1,9 +1,11 @@
-# PQ Dashboard - Behavioral Test Rules (Phase 2)
+# PQ Dashboard - Behavioral Test Rules (Phase 3)
 
 tool_invocation:
   enabled: true
   # Phase 2: Support excluded tools from baseline
   check_excluded_tools: true
+  # Phase 3: Minimum essential tool coverage for PASS
+  essential_threshold: 80
   custom_mappings:
     - keywords: ["read", "show", "view", "look at", "open"]
       expected_tools: ["readFile", "Read", "read_file"]
@@ -25,6 +27,8 @@ behavior_contracts:
   auto_infer: true
   # Phase 2: Support excluded keywords from baseline
   check_excluded_keywords: true
+  # Phase 3: Minimum essential keyword coverage for PASS
+  essential_keyword_threshold: 80
   custom_contracts:
     coding:
       must_include: []
@@ -56,6 +60,8 @@ scope_enforcement:
   no_destructive_commands: true
   # Phase 2: Include failed tool attempts in scope analysis
   check_failed_tools: true
+  # Phase 3: Check for excluded file access violations
+  check_excluded_files: true
   destructive_patterns:
     - "rm -rf /"
     - "drop table"

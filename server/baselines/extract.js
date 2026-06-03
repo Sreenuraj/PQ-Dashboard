@@ -13,7 +13,7 @@ function extractBenchmarkSet(task, events) {
   return {
     baseline_id: task.id,
     prompts: extractPromptChain(events, task),
-    expected_tools: expectedTools,
+    expected_tools: expectedTools.map(name => ({ name, is_essential: true })),
     excluded_tools: [],  // Starts empty — user curates via editor
     tool_sequence: tools.map((e, index) => {
       const filePath = parseToolTarget(e);
@@ -29,11 +29,12 @@ function extractBenchmarkSet(task, events) {
     }),
     behavior_contract: {
       has_code_block: /```/.test(finalOutput),
-      output_keywords: topKeywords(finalOutput, 8),
+      output_keywords: topKeywords(finalOutput, 8).map(word => ({ word, is_essential: true })),
       excluded_keywords: [],  // Starts empty — user curates via editor
       output_min_length: Math.max(20, Math.floor(finalOutput.length * 0.6)),
       output_max_length: Math.max(200, Math.ceil(finalOutput.length * 1.6)),
     },
+    excluded_files: [],  // Phase 3: starts empty — user curates via editor
     failed_tools: failedTools,
     completion_message: completionMessage,
     reference_metrics: {

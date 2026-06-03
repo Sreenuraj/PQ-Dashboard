@@ -100,6 +100,7 @@ function initSchema(db) {
       prompts_json TEXT,
       expected_tools_json TEXT,
       excluded_tools_json TEXT,
+      excluded_files_json TEXT,
       tool_sequence_json TEXT,
       behavior_contract_json TEXT,
       reference_metrics_json TEXT,
@@ -169,6 +170,8 @@ function initSchema(db) {
     'ALTER TABLE tasks ADD COLUMN oneshot_turns INTEGER DEFAULT 0',
     'ALTER TABLE tasks ADD COLUMN retry_cycles INTEGER DEFAULT 0',
     'ALTER TABLE tasks ADD COLUMN shell_command_count INTEGER DEFAULT 0',
+    // Phase 3: Excluded files for baseline scope enforcement
+    'ALTER TABLE baselines ADD COLUMN excluded_files_json TEXT',
   ];
   for (const sql of migrations) {
     try { db.exec(sql); } catch (e) {

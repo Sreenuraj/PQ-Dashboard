@@ -53,7 +53,15 @@ export async function renderTest(container, params = new URLSearchParams()) {
           <div>
             <div class="stat-label">Behavioral Score</div>
             <div class="stat-value">${suite.overall_score}%</div>
-            ${suite.interruption_penalty > 0 ? `<div style="font-size:11px;color:var(--text-3);margin-top:4px">(includes -${suite.interruption_penalty}% interruption penalty)</div>` : ''}
+            ${suite.user_rating ? `
+              <div style="font-size:11px;color:var(--text-3);margin-top:4px">
+                (includes -${suite.interruption_penalty}% interruption penalty, 
+                 rating: ${'★'.repeat(suite.user_rating)}${'☆'.repeat(5-suite.user_rating)} 
+                 → blended at 70/30)
+              </div>
+            ` : suite.interruption_penalty > 0 ? `
+              <div style="font-size:11px;color:var(--text-3);margin-top:4px">(includes -${suite.interruption_penalty}% interruption penalty)</div>
+            ` : ''}
           </div>
           <div class="score-track"><div class="score-fill ${scoreClass(suite.overall_score)}" style="width:${suite.overall_score}%"></div></div>
         </div>

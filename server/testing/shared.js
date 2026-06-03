@@ -66,6 +66,43 @@ function getCompletionMessage(events) {
   return completion.content_preview || completion.response_text || null;
 }
 
+// Phase 3: Excluded files pattern matching
+function matchesExcludedPattern(filePath, patterns) {
+  if (!patterns || !patterns.length) return false;
+  const lower = filePath.toLowerCase();
+  for (const pattern of patterns) {
+    const lowerPattern = pattern.toLowerCase().trim();
+    if (!lowerPattern) continue;
+
+    // Exact match
+    if (lower === lowerPattern) return true;
+
+    // Glob: **/pattern matches anywhere in path
+    if (lowerPattern.startsWith('**/')) {
+      const suffix = lowerPattern.slice(3);
+      if (lower.endsWith(suffix) || lower.includes('/' + suffix)) return true;
+    }
+
+    // Glob: pattern/** matches directory prefix
+    if (lowerPattern.endsWith('/**')) {
+      const prefix = lowerPattern.slice(0, -2);
+      if (lower.startsWith(prefix)) return true;
+    }
+
+    // Glob: *.ext matches files with extension
+    if (lowerPattern.includes('*')) {
+      const regexStr = '^' + lowerPattern.replace(/\*/g, '[^/]*') + '$';
+      try {
+        if (new RegExp(regexStr).test(lower)) return true;
+      } catch (e) { /* invalid regex, skip */ }
+    }
+
+    // Substring match (fallback)
+    if (lower.includes(lowerPattern)) return true;
+  }
+  return false;
+}
+
 module.exports = {
   READ_TOOLS,
   EDIT_TOOLS,
@@ -81,5 +118,5 @@ module.exports = {
   getPrimaryModel,
   countInterruptions,
   getCompletionMessage,
+  matchesExcludedPattern,
 };
-

@@ -1,11 +1,16 @@
-const { BUILT_IN_TOOLS, toolEvents, normalizeStatus, evidence } = require('./shared');
+const { BUILT_IN_TOOLS, toolEvents, normalizeStatus, evidence, parseToolTarget, matchesExcludedPattern } = require('./shared');
 
 function runBSE(task, events, rules, baseline, registry = []) {
   const tools = toolEvents(events);
   if (!tools.length) return result('skip', 0, [evidence('info', 'Tool calls', 'No tool calls')], 'No tool calls to validate.');
 
   const allowed = new Set([...(registry || []), ...BUILT_IN_TOOLS]);
-  if (baseline?.expected_tools?.length) baseline.expected_tools.forEach(t => allowed.add(t));
+  if (baseline?.expected_tools?.length) {
+    baseline.expected_tools.forEach(t => {
+      const name = typeof t === 'string' ? t : t.name;
+      allowed.add(name);
+    });
+  }
   const destructive = rules.scope_enforcement?.destructive_patterns || [];
   const maxToolCalls = rules.scope_enforcement?.max_tool_calls || 100;
   const findings = [];
@@ -18,6 +23,23 @@ function runBSE(task, events, rules, baseline, registry = []) {
     const text = `${e.command_text || ''} ${e.content_preview || ''}`.toLowerCase();
     for (const p of destructive) {
       if (p && text.includes(String(p).toLowerCase())) findings.push(evidence('violation', 'Destructive command', p, 'critical'));
+    }
+  }
+
+  // Phase 3: Excluded files check
+  if (rules.scope_enforcement?.check_excluded_files && baseline?.excluded_files?.length) {
+    const excludedFiles = baseline.excluded_files;
+    const accessedFiles = new Set();
+
+    for (const e of tools) {
+      const filePath = parseToolTarget(e);
+      if (filePath && matchesExcludedPattern(filePath, excludedFiles)) {
+        accessedFiles.add(filePath);
+      }
+    }
+
+    for (const filePath of accessedFiles) {
+      findings.push(evidence('violation', 'Excluded file accessed', `File: ${filePath}`, 'critical'));
     }
   }
 

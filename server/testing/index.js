@@ -45,10 +45,17 @@ function runTestSuite(db, taskId, baselineId = null, pattern = null, persist = t
   else if (interruptionCount >= 3) penalty = 15;
   else if (interruptionCount >= 1) penalty = 5;
 
-  const overallScore = Math.max(0, baseScore - penalty);
-
   const ratingRow = db.prepare('SELECT user_rating FROM test_results WHERE task_id = ? AND user_rating IS NOT NULL ORDER BY run_ts DESC LIMIT 1').get(taskId);
   const userRating = ratingRow ? ratingRow.user_rating : null;
+
+  const automatedScore = Math.max(0, baseScore - penalty);
+
+  // Phase 3: Blend with user rating if available (70% automated, 30% human)
+  let overallScore = automatedScore;
+  if (userRating !== null && userRating !== undefined) {
+    const ratingNormalized = (userRating / 5) * 100;
+    overallScore = Math.round((automatedScore * 0.7) + (ratingNormalized * 0.3));
+  }
 
   const suite = {
     id: makeResultId(taskId, baselineId, Date.now()),
@@ -87,14 +94,21 @@ function weightedScore(results, weights) {
 function getBaseline(db, id) {
   const row = db.prepare('SELECT * FROM baselines WHERE id = ?').get(id);
   if (!row) return null;
+  const expectedTools = parse(row.expected_tools_json, []);
+  const behaviorContract = parse(row.behavior_contract_json, {});
+  // Phase 3: Backward compatibility — normalize legacy string arrays to objects
+  const normalizedExpectedTools = expectedTools.map(t => typeof t === 'string' ? { name: t, is_essential: true } : t);
+  const normalizedKeywords = (behaviorContract.output_keywords || []).map(k => typeof k === 'string' ? { word: k, is_essential: true } : k);
+  const normalizedContract = { ...behaviorContract, output_keywords: normalizedKeywords };
   return {
     ...row,
     tags: parse(row.tags, []),
     prompts: parse(row.prompts_json, []),
-    expected_tools: parse(row.expected_tools_json, []),
+    expected_tools: normalizedExpectedTools,
     excluded_tools: parse(row.excluded_tools_json, []),
+    excluded_files: parse(row.excluded_files_json, []),
     tool_sequence: parse(row.tool_sequence_json, []),
-    behavior_contract: parse(row.behavior_contract_json, {}),
+    behavior_contract: normalizedContract,
     reference_metrics: parse(row.reference_metrics_json, {}),
     contributing_sessions: parse(row.contributing_sessions_json, []),
     failed_tools: parse(row.failed_tools_json, []),

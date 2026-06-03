@@ -39,41 +39,44 @@ Alternatively, you can run them manually in two terminals:
 - Terminal 1: `npm start` (Runs the backend on port 3456 & initial task parse)
 - Terminal 2: `npm run dev` (Runs the Vite frontend on port 5173)
 
-## Session Testing & Baselines (Phase 2)
+## Session Testing & Baselines (Phase 3)
 
 PQ Dashboard features a powerful standalone behavioral testing workflow that allows you to manage baselines, customize execution boundaries, track agent reliability, and score completions:
 
 1. **Standalone Editable Baselines:** Instead of simple static session snapshots, you can create standalone editable baselines from any session (regardless of completion status).
 2. **Baseline Editor (`#/baseline-editor`):** A dual-list curator interface to manage expected and excluded tools, required and excluded contract keywords, descriptions, tags, and toggle essential steps. Allows adding custom entries, moving them dynamically between lists, and deleting unnecessary entries entirely.
-3. **Enrichment & Merging (`#/baseline-enrich`):** Contrast any session trace against a baseline to discover new tools/keywords, and selectively merge them back into the baseline while maintaining a list of contributing sessions.
-4. **Contextual Tool Sequences & Essential Steps:** Tool calls carry auto-derived descriptions (identifying file contexts). Instead of strict ordering, the MTV pattern validates coverage of **Essential Steps** and checks for baseline excluded tools/keywords.
-5. **Session Health & Interruption Tracking:** Automatically tracks user interruptions (`resume_task` events) and context resets, applying automated tiered behavioral penalties (-5%, -15%, -25%).
-6. **Failed Tool Extraction:** Intelligently extracts tool execution failures (such as MCP timeouts, missing parameters, execution errors) from log traces, surfacing warnings and impacting error recovery scores.
-7. **Completion Message & Star Ratings:** Completion message text is parsed and rendered in formatted Markdown. You can rate task execution quality directly on the test page with a 1-5 Star Rating scale.
-8. **Overall Performance Index:** Evaluates task success using a weighted index ($60\%$ Behavioral score, $40\%$ Operational efficiency based on cost, duration, tool calls, and error counts relative to baseline references).
+3. **Essential vs Optional Tools & Keywords:** Each expected tool and contract keyword can be marked as **Essential** (must be used/present — missing causes a score penalty) or **Optional** (nice-to-have — missing is noted but doesn't penalize). Essential items show a ★ badge in the editor and baselines list.
+4. **Excluded Files:** Define file path patterns (glob patterns like `**/.env`, `*.key`, `src/internal/**`) that the agent should NOT access. If any tool call in a tested session touches a matching path, it's a scope violation with a score penalty.
+5. **Enrichment & Merging (`#/baseline-enrich`):** Contrast any session trace against a baseline to discover new tools/keywords, and selectively merge them back into the baseline while maintaining a list of contributing sessions.
+6. **Contextual Tool Sequences & Essential Steps:** Tool calls carry auto-derived descriptions (identifying file contexts). Instead of strict ordering, the MTV pattern validates coverage of **Essential Steps** and checks for baseline excluded tools/keywords.
+7. **Session Health & Interruption Tracking:** Automatically tracks user interruptions (`resume_task` events) and context resets, applying automated tiered behavioral penalties (-5%, -15%, -25%).
+8. **Failed Tool Extraction:** Intelligently extracts tool execution failures (such as MCP timeouts, missing parameters, execution errors) from log traces, surfacing warnings and impacting error recovery scores.
+9. **Completion Message & Star Ratings:** Completion message text is parsed and rendered in formatted Markdown. You can rate task execution quality directly on the test page with a 1-5 Star Rating scale. The rating is blended into the overall score (70% automated / 30% human judgment).
+10. **Overall Performance Index:** Evaluates task success using a weighted index ($60\%$ Behavioral score, $40\%$ Operational efficiency based on cost, duration, tool calls, and error counts relative to baseline references).
 
 ### What a baseline captures
 
 When a task is marked as a baseline, the dashboard stores a benchmark set in SQLite:
 - **Prompt chain:** User prompts in order, plus tools used after each prompt.
-- **Expected & Excluded tools:** Direct list of tools the agent should or should not use.
+- **Expected & Excluded tools:** Direct list of tools the agent should or should not use. Each expected tool can be marked essential or optional.
 - **Essential Steps sequence:** Ordered tool calls with file paths, custom descriptions, and essential toggles.
-- **Behavior contract:** Output structure, length bounds, code-block presence, required keywords, and excluded keywords.
+- **Behavior contract:** Output structure, length bounds, code-block presence, required keywords (with essential/optional flags), and excluded keywords.
+- **Excluded files:** File path patterns the agent should not access (glob patterns supported).
 - **Reference metrics:** Cost, tokens, duration, API calls, tool calls, errors, and context reset status.
 
 ### Behavioral test patterns
 
 The test runner evaluates six deterministic patterns natively from log traces without expensive secondary LLM judge calls:
-- **Tool Invocation Assertion (TIA):** Checks if expected tools were called, and fails if excluded tools were used (applying a 20% score penalty per infraction).
-- **Behavior Contract Validation (BCV):** Checks if required keywords are present and verifies that excluded keywords are absent from the final response.
+- **Tool Invocation Assertion (TIA):** Checks if essential tools were called (score based on essential coverage %). Optional tools are noted but don't penalize. Fails if excluded tools were used (-20% per infraction). Unexpected tools apply a -15% multiplier.
+- **Behavior Contract Validation (BCV):** Checks if essential keywords are present (score based on essential coverage %). Optional keywords are noted but don't penalize. Also verifies code blocks, length bounds, and forbidden/excluded keywords.
 - **Multi-Step Trace Verification (MTV):** Validates coverage of configured baseline **Essential Steps**, and checks tool usage efficiency against reference benchmarks.
-- **Boundary/Scope Enforcement (BSE):** Monitors command safety (detecting destructive commands like `rm -rf /` or `drop table`), limits max tool footprint, and extracts failed tool execution attempts.
+- **Boundary/Scope Enforcement (BSE):** Monitors command safety (detecting destructive commands like `rm -rf /` or `drop table`), limits max tool footprint, extracts failed tool execution attempts, and checks for excluded file access violations (-25 per unique file).
 - **Error Recovery Coherence (ERC):** Analyzes agent adaptation after errors, penalizing failed tool attempts and blind retry loops.
 - **Context Efficiency Compliance (CEC):** Monitors context usage relative to token limits.
 
 ### Dynamic Baseline Switching & Deep Compare
 - `#/baselines` — Manage baselines list, edit tags, copy prompt chains, and access editor/enrichment views.
-- `#/baseline-editor?id=<id>` — Edit baseline tools, keywords, tags, metadata, and essential steps.
+- `#/baseline-editor?id=<id>` — Edit baseline tools, keywords, tags, metadata, essential steps, and excluded files.
 - `#/baseline-enrich?id=<id>` — Compare a session trace against a baseline and merge diffs.
 - `#/test?task=<id>` — Run behavioral tests for a task (automatically resolves the baseline reference if previously tested).
 - `#/deepcompare?tasks=<id1>,<id2>&baseline=<baseline_id>` — Compare tasks side-by-side. Key features include:
