@@ -13,8 +13,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { api } from '../api.js';
-import { fmt, fmtCost, fmtDate, agentColor, agentChip } from '../utils.js';
-import { metricTooltip, hydrateMetricTooltips } from '../components/metric-tooltip.js';
+import { fmt, fmtCost, fmtDate, agentColor, agentChip, agentColorsDistinct } from '../utils.js';
+import { hydrateMetricTooltips } from '../components/metric-tooltip.js';
 
 const STORAGE_KEY = 'pq-overview-agent-filter';
 
@@ -334,10 +334,13 @@ function renderSortBadge(state) {
 }
 
 function renderFilterChips(activeAgents, allAgentNames) {
+  // Use the distinct-color map so all chips in this row get unique colors
+  // even when the underlying agent set is > the palette size.
+  const colorMap = agentColorsDistinct(allAgentNames);
   const all = `<span data-agent-chip="__all__" class="badge" style="cursor:pointer;border:1px solid ${activeAgents.length === 0 ? 'var(--accent)' : 'var(--border)'}55;background:${activeAgents.length === 0 ? 'var(--accent)22' : 'transparent'};color:${activeAgents.length === 0 ? 'var(--accent)' : 'var(--text-2)'};font-size:10px;padding:3px 9px">All</span>`;
   const chips = allAgentNames.map(name => {
     const isActive = activeAgents.includes(name);
-    const color = agentColor(name);
+    const color = colorMap.get(name) || agentColor(name);
     return `<span data-agent-chip="${escAttr(name)}" class="badge" style="cursor:pointer;border:1px solid ${isActive ? color : color + '55'};background:${isActive ? color + '22' : 'transparent'};color:${isActive ? color : 'var(--text-2)'};font-size:10px;padding:3px 9px">${escHtml(name)}</span>`;
   }).join('');
   return all + chips;

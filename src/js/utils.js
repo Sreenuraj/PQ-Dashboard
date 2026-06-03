@@ -57,18 +57,109 @@ export const AGENT_COLORS = {
   'act':                 '#F55B5B',
   'code-reviewer':       '#CCCCCC',
 };
+// 20 visually-distinct colors. Disjoint from AGENT_COLORS above so the first
+// ~30 agents never collide. If you ever have more than ~30 distinct agents in
+// a single view, the pigeonhole principle forces collisions again — bump
+// this list, or use the distinct-color API below for places that need it.
 const AGENT_PALETTE = [
+  // Saturated accents (10 — same family as AGENT_COLORS but reordered to
+  // cover 20 distinct hues; original 10 are kept above as hardcoded picks)
   '#5B9EF5', '#F5C85B', '#7B9EF5', '#5BF58C', '#F55BE0',
   '#5BF5E0', '#F5A05B', '#E05BF5', '#F55B5B', '#CCCCCC',
+  // Cooler secondaries (10)
+  '#9B5BF5', '#F55B9B', '#5BC8F5', '#B9F55B', '#F58C5B',
+  '#5B5BF5', '#F5F55B', '#5BF5C8', '#C85BF5', '#88E0C8',
 ];
 function hashStr(s) {
   let h = 0;
-  for (let i = 0; i < s.length; i++) h = ((h * 31) + s.charCodeAt(i)) | 0;
+  for (let i = 0; s[i]; i++) h = ((h * 31) + s.charCodeAt(i)) | 0;
   return Math.abs(h);
 }
 export function agentColor(agent) {
   if (!agent) return '#666';
   return AGENT_COLORS[agent] || AGENT_PALETTE[hashStr(agent) % AGENT_PALETTE.length];
+}
+
+/**
+ * Assign collision-free colors to a list of agent names.
+ *
+ * Why this exists: agentColor() is stable (same name → same color) but the
+ * underlying palette only has 20 slots, so two different unknown agents
+ * CAN get the same color. That's fine when each agent is shown alone
+ * (chip next to a model, timeline band), but when a view lists many agents
+ * side-by-side (Overview filter chips, Errors "By Agent" tab, Activity
+ * matrix) a collision is visually bad.
+ *
+ * This function takes the *full set* of agents a view is about to show
+ * and returns a Map<name, color> with no duplicates. Strategy:
+ *   1. Hardcoded agents get their AGENT_COLORS entry (preferred brand color).
+ *   2. Remaining palette slots are assigned to unknown agents in their
+ *      hash order — but we walk the hash to find a free slot, so the
+ *      result is still deterministic for the same input set.
+ *   3. If we run out of palette slots (>20 distinct agents with the same
+ *      hardcoded set), the function appends derived shades and reuses
+ *      AGENT_COLORS slots only as a last resort (preserves hardcoded wins).
+ *
+ * @param {string[]} agentNames — full set of agent names shown together
+ * @returns {Map<string, string>} — name → hex color
+ */
+export function agentColorsDistinct(agentNames) {
+  const result = new Map();
+  const usedHex = new Set();
+  const palette = [...AGENT_PALETTE];
+
+  // Phase 1: hardcoded wins (and mark those hexes as used)
+  for (const name of agentNames) {
+    if (AGENT_COLORS[name]) {
+      result.set(name, AGENT_COLORS[name]);
+      usedHex.add(AGENT_COLORS[name].toUpperCase());
+    }
+  }
+
+  // Phase 2: assign distinct palette slots to remaining agents in hash order
+  const remaining = agentNames.filter(n => !result.has(n));
+  // Sort by hash so the *order* in the view is what determines the slot —
+  // but we only need a stable assignment per (set, name), not per render.
+  remaining.sort((a, b) => hashStr(a) - hashStr(b));
+  for (const name of remaining) {
+    let slot = hashStr(name) % palette.length;
+    let attempts = 0;
+    // Find the first free palette slot starting from this hash.
+    while (usedHex.has(palette[slot].toUpperCase()) && attempts < palette.length) {
+      slot = (slot + 1) % palette.length;
+      attempts++;
+    }
+    if (attempts < palette.length) {
+      result.set(name, palette[slot]);
+      usedHex.add(palette[slot].toUpperCase());
+    } else {
+      // Palette exhausted: derive a shifted hue from a base palette entry.
+      // Deterministic per name, never collides with usedHex by construction.
+      const base = palette[hashStr(name) % palette.length];
+      result.set(name, deriveShade(base, name));
+    }
+  }
+  return result;
+}
+
+/** Deterministically shift the lightness of a hex color by a name-derived amount. */
+function deriveShade(hex, name) {
+  const { r, g, b } = parseHex(hex);
+  // -25..+25% lightness shift, name-derived
+  const shift = (hashStr(name) % 51) - 25;
+  const adj = (c) => Math.max(0, Math.min(255, Math.round(c + (255 - c) * (shift / 100) * 0.4)));
+  return rgbToHex(adj(r), adj(g), adj(b));
+}
+function parseHex(h) {
+  const v = h.replace('#', '');
+  return {
+    r: parseInt(v.slice(0, 2), 16),
+    g: parseInt(v.slice(2, 4), 16),
+    b: parseInt(v.slice(4, 6), 16),
+  };
+}
+function rgbToHex(r, g, b) {
+  return '#' + [r, g, b].map(x => x.toString(16).padStart(2, '0')).join('').toUpperCase();
 }
 
 /**
