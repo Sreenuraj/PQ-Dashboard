@@ -1,13 +1,18 @@
 import { api } from '../api.js';
-import { fmtCost } from '../utils.js';
+import { fmtCost, agentColor } from '../utils.js';
 import { renderRadarChart, renderCostChart, renderToolsChart } from '../components/charts.js';
+import { metricTooltip, hydrateMetricTooltips } from '../components/metric-tooltip.js';
 
 export async function renderModels(container, dateRange = {}) {
   container.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading models...</p></div>`;
   const params = {};
   if (dateRange.from) params.from = dateRange.from;
   if (dateRange.to)   params.to   = dateRange.to;
-  const models = await api.models(params);
+  // Phase 4: also fetch the agent-matrix so we can render the Model×Agent heatmap
+  const [models, agentMatrix] = await Promise.all([
+    api.models(params),
+    api.agentMatrix({ ...params, dimension: 'model' }).catch(() => ({ rows: [], cols: [], values: [] })),
+  ]);
 
   if (!models.length) {
     container.innerHTML = `<div class="empty-state"><div class="icon">◉</div><p>No model data yet. Run a refresh.</p></div>`;
@@ -37,15 +42,22 @@ export async function renderModels(container, dateRange = {}) {
     <div class="panel">
       <div class="panel-title">
         <span>Model Performance Table</span>
-        <span class="panel-title-meta">Relative cost bar appears beside each model</span>
+        <span class="panel-title-meta">Relative cost bar appears beside each model · hover ${metricTooltip('tue').match(/pq-metric-tip-icon.{0,200}/)?.[0] ? '?' : '?'} for metric definitions</span>
       </div>
       <div class="table-wrap">
         <table class="data-table">
           <thead>
             <tr>
               <th>Model</th>
-              <th>Provider</th><th>Mode</th><th>Sessions</th>
-              <th>Total Cost</th><th>Avg Cost</th><th>Errors</th>
+              <th>Provider</th>
+              <th>Agent</th>  <!-- Phase 4: Mode → Agent -->
+              <th>Sessions</th>
+              <th>Total Cost</th><th>Avg Cost</th>
+              <th>${metricTooltip('tue')}<span>${'TUE'}</span></th>
+              <th>${metricTooltip('rd')}<span>RD</span></th>
+              <th>${metricTooltip('ce')}<span>CE</span></th>
+              <th>${metricTooltip('err')}<span>ERR</span></th>
+              <th>Errors</th>
               <th>Completion Rate</th><th>Cache %</th><th>Reasoning</th><th>Tier</th>
             </tr>
           </thead>
@@ -55,6 +67,14 @@ export async function renderModels(container, dateRange = {}) {
               const cacheHit = (m.total_tokens_in + m.total_cache_reads) > 0
                 ? Math.round(m.total_cache_reads / (m.total_tokens_in + m.total_cache_reads) * 100) : 0;
               const costWidth = maxModelCost > 0 ? (m.total_cost / maxModelCost * 100) : 0;
+              const tueScore = m.avg_tue == null ? '—' : `${Math.round(m.avg_tue)}%`;
+              const rdScore  = m.avg_rd  == null ? '—' : `${Math.round(m.avg_rd)}%`;
+              const ceScore  = m.avg_ce  == null ? '—' : `${Math.round(m.avg_ce)}%`;
+              const errScore = m.avg_err == null ? '—' : `${Math.round(m.avg_err)}%`;
+              const tueColor = m.avg_tue == null ? 'var(--text-3)' : (m.avg_tue >= 80 ? '#5BF58C' : m.avg_tue >= 50 ? '#F5C85B' : '#F55B5B');
+              const rdColor  = m.avg_rd  == null ? 'var(--text-3)' : (m.avg_rd  >= 10 ? '#5BF58C' : m.avg_rd  >= 3 ? '#F5C85B' : '#F55B5B');
+              const ceColor  = m.avg_ce  == null ? 'var(--text-3)' : (m.avg_ce  >= 50 ? '#5BF58C' : m.avg_ce  >= 20 ? '#F5C85B' : '#F55B5B');
+              const errColor = m.avg_err == null ? 'var(--text-3)' : (m.avg_err >= 80 ? '#5BF58C' : m.avg_err >= 30 ? '#F5C85B' : '#F55B5B');
 
               return `
                 <tr title="Click to view sessions for this model"
@@ -67,10 +87,14 @@ export async function renderModels(container, dateRange = {}) {
                     <div style="margin-top:4px;width:${Math.max(costWidth, 2)}%;height:3px;background:var(--accent);border-radius:99px;opacity:0.5"></div>
                   </td>
                   <td style="font-size:12px;color:var(--text-2)">${m.provider_id || '—'}</td>
-                  <td><span class="badge grey" style="font-size:10px">${m.mode || '—'}</span></td>
+                  <td>${m.mode ? `<span class="badge" style="background:${agentColor(m.mode)}22;color:${agentColor(m.mode)};border:1px solid ${agentColor(m.mode)}55;font-size:10px">${m.mode}</span>` : '—'}</td>
                   <td><strong>${m.task_count}</strong></td>
                   <td style="color:var(--green);font-weight:600">${fmtCost(m.total_cost)}</td>
                   <td style="color:var(--text-2)">${fmtCost(m.avg_cost)}</td>
+                  <td style="color:${tueColor};font-weight:600">${tueScore}</td>
+                  <td style="color:${rdColor};font-weight:600">${rdScore}</td>
+                  <td style="color:${ceColor};font-weight:600">${ceScore}</td>
+                  <td style="color:${errColor};font-weight:600">${errScore}</td>
                   <td style="color:${m.total_errors > 0 ? 'var(--red)' : 'var(--text-3)'};font-weight:${m.total_errors > 0 ? '600' : '400'}">
                     ${m.total_errors}
                   </td>
@@ -92,10 +116,68 @@ export async function renderModels(container, dateRange = {}) {
         </table>
       </div>
     </div>
+
+    <!-- Phase 4: Model × Agent heatmap (which agents each model is being used by) -->
+    <div class="panel">
+      <div class="panel-title">
+        <span>Model × Agent Heatmap</span>
+        <span class="panel-title-meta">Task counts — click a cell to filter sessions</span>
+      </div>
+      <div class="panel-body">
+        ${renderModelAgentHeatmap(agentMatrix)}
+      </div>
+    </div>
   `;
 
   setTimeout(() => renderRadarChart('modelRadarChart', models), 0);
+  await hydrateMetricTooltips();
 }
+
+/**
+ * Phase 4: render the sparse Model×Agent heatmap. The API returns parallel
+ * arrays {rows, cols, values} where rows=models and cols=agents. Each cell
+ * is colored by intensity (darker = more sessions).
+ */
+function renderModelAgentHeatmap(matrix) {
+  if (!matrix || !matrix.rows?.length || !matrix.cols?.length) {
+    return '<div class="empty-state"><p>No agent-model data yet</p></div>';
+  }
+  const max = Math.max(1, ...matrix.values.flat());
+  const colWidth = 110;
+  const rowHeight = 26;
+
+  const header = matrix.cols.map(c => `
+    <div style="position:sticky;top:0;background:var(--bg-2);padding:4px 6px;width:${colWidth}px;text-align:center;font-size:10px;font-weight:600;color:${agentColor(c)};border-bottom:1px solid var(--border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escAttr(c)}">${c.split('/').pop()}</div>
+  `).join('');
+
+  const rows = matrix.rows.map((model, rIdx) => {
+    const cells = matrix.cols.map((c, cIdx) => {
+      const v = matrix.values[rIdx][cIdx];
+      if (!v) return `<div style="width:${colWidth}px;height:${rowHeight}px;background:transparent;border-right:1px solid var(--border);border-bottom:1px solid var(--border)"></div>`;
+      const intensity = v / max;
+      const bg = `rgba(91,158,245,${0.15 + intensity * 0.6})`;
+      return `<div title="${escAttr(model)} × ${escAttr(c)}: ${v} sessions" onclick="event.stopPropagation();window.location.hash='#/sessions?model_id=${encodeURIComponent(model)}&agent=${encodeURIComponent(c)}'" style="cursor:pointer;width:${colWidth}px;height:${rowHeight}px;background:${bg};border-right:1px solid var(--border);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;color:${intensity > 0.5 ? 'var(--text)' : 'var(--text-2)'}">${v}</div>`;
+    }).join('');
+    return `
+      <div style="display:flex">
+        <div style="position:sticky;left:0;background:var(--bg-2);padding:4px 8px;width:160px;font-size:11px;color:var(--text);border-right:1px solid var(--border);border-bottom:1px solid var(--border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escAttr(matrix.rows[rIdx])}">${matrix.rows[rIdx].split('/').pop()}</div>
+        ${cells}
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div style="overflow:auto;max-height:480px;border:1px solid var(--border);border-radius:6px">
+      <div style="display:flex;background:var(--bg-2);position:sticky;top:0;z-index:1">
+        <div style="position:sticky;left:0;background:var(--bg-2);width:160px;border-right:1px solid var(--border);border-bottom:1px solid var(--border)"></div>
+        ${header}
+      </div>
+      ${rows}
+    </div>
+  `;
+}
+
+function escAttr(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'<lt;').replace(/>/g,'>gt;').replace(/"/g,'"quot;'); }
 
 export async function renderCosts(container, dateRange = {}) {
   container.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading cost data...</p></div>`;
