@@ -232,7 +232,7 @@ export async function renderSessions(container, dateRange = {}, queryParams = ne
     window.location.hash = `#/deepcompare?tasks=${ids}`;
   });
 
-  const drilldown = { urlStatus, urlModel, urlErrorCat, urlTool, urlHasErrors, urlHasReasoning };
+  const drilldown = { urlStatus, urlModel, urlErrorCat, urlTool, urlHasErrors, urlHasReasoning, urlAgent, urlMultiAgent };
 
   // Wire filter controls
   let debounceTimer;
