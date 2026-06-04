@@ -29,7 +29,7 @@
 **Description:** Overview shows total cost as $98.14, but clicking on the Costs card shows $150 on the Costs page.
 
 ## Bug #7: Timeline Agent Timeline shows 0% for all agents
-**Status:** Reopened
+**Status:** Fixed (commit 38dd3ff)
 **Description:** In the Timeline page's "Agent Timeline" section, all agents show 0% regardless of actual usage.
 **User Feedback:** Still not fixed.
 
@@ -37,6 +37,10 @@
 **Status:** Reopened
 **Description:** The Tools page doesn't have an agent filter. Users can't see which tools were used by which agent.
 **User Feedback:** Still not fixed, now it's throwing 'Error loading view: escHtml is not defined' in UI.
+
+## Bug #13: In-progress sessions are not listed on the Sessions page
+**Status:** Open
+**Description:** The current active session (e.g., 1780564760573) is not listed on the Sessions page. This is because the parser is designed to scan and parse completed/saved sessions, and does not stream live in-progress sessions. We should investigate how to support displaying or indicating in-progress sessions.
 
 ## Bug #9: SqliteError: near "WHERE": syntax error
 **Status:** Fixed (commit 2997590)

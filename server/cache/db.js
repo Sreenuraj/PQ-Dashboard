@@ -366,17 +366,22 @@ function saveTask(db, taskId, source, summary, metadata, focusCompletion, events
 // ─────────────────────────────────────────────────────────────────────────────
 function buildAgentMeta(events, metadata) {
   const usage = (metadata?.models || []).slice().sort((a, b) => (a.ts || 0) - (b.ts || 0));
-  const phases = usage.filter(u => u.mode).map(u => ({
-    agent: u.mode,
-    model_id: u.model_id,
-    ts_first: u.ts,
-    ts_last: u.ts,
-  }));
+  const phases = usage.filter(u => u.mode).map((u, idx) => {
+    const nextUsage = usage.slice(idx + 1).find(next => next.mode);
+    const ts_first = u.ts;
+    const ts_last = nextUsage ? nextUsage.ts : (events && events.length ? Math.max(...events.map(e => e.ts)) : u.ts);
+    return {
+      agent: u.mode,
+      model_id: u.model_id,
+      ts_first,
+      ts_last,
+    };
+  });
   const merged = [];
   for (const p of phases) {
     const last = merged[merged.length - 1];
     if (last && last.agent === p.agent && last.model_id === p.model_id) {
-      last.ts_last = p.ts;
+      last.ts_last = p.ts_last;
     } else {
       merged.push({ ...p });
     }
