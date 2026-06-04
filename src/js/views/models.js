@@ -191,7 +191,8 @@ export async function renderCosts(container, dateRange = {}) {
   if (dateRange.from) params.from = dateRange.from;
   if (dateRange.to)   params.to   = dateRange.to;
   const [costs, models] = await Promise.all([api.costs({ ...params, groupBy: 'day' }), api.models(params)]);
-  const totalCost = models.reduce((s, m) => s + (m.total_cost || 0), 0);
+  // Sum from the costs API (tasks table, no double-counting) — matches Overview total_cost
+  const totalCost = (costs.byTime || []).reduce((s, d) => s + (d.cost || 0), 0);
 
   container.innerHTML = `
     <div class="top-bar">
