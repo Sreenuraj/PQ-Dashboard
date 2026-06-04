@@ -111,9 +111,13 @@ export async function renderTimeline(container, taskId) {
 function buildAgentBand(task) {
   const sequence = task.agent_sequence || [];
   if (!sequence.length) return '';
-  const firstTs = sequence[0].ts_first || task.start_ts || 0;
-  const lastTs  = sequence[sequence.length - 1].ts_last || task.end_ts || 0;
-  const total   = Math.max(1, lastTs - firstTs);
+  // Sum all phase durations for the total — this ensures percentages always
+  // add up to 100% even when there are gaps between phases (e.g. system
+  // events with NULL mode that don't belong to any agent).
+  const total = Math.max(1, sequence.reduce((s, p) => {
+    const dur = Math.max(0, (p.ts_last || p.ts_first || 0) - (p.ts_first || 0));
+    return s + dur;
+  }, 0));
 
   const segments = sequence.map((p) => {
     const dur = Math.max(0, (p.ts_last || p.ts_first || 0) - (p.ts_first || 0));
