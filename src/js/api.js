@@ -1,7 +1,13 @@
 const API = '/api';
 
 export async function get(path, params = {}) {
-  const qs = new URLSearchParams(params).toString();
+  const cleaned = {};
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && v !== 'undefined' && v !== 'null') {
+      cleaned[k] = v;
+    }
+  });
+  const qs = new URLSearchParams(cleaned).toString();
   const url = `${API}${path}${qs ? '?' + qs : ''}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`API error ${res.status}`);
