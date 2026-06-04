@@ -56,10 +56,10 @@ export async function renderModels(container, dateRange = {}, queryParams = new 
     <div class="panel">
       <div class="panel-title">
         <span>Model Performance Table</span>
-        <span class="panel-title-meta">Relative cost bar appears beside each model · click metric headers for definitions</span>
+        <span class="panel-title-meta">Relative cost bar appears beside each model</span>
       </div>
       <div class="table-wrap">
-        <table class="data-table">
+        <table class="data-table" style="font-size:12px">
           <thead>
             <tr>
               <th>Model</th>
@@ -67,10 +67,10 @@ export async function renderModels(container, dateRange = {}, queryParams = new 
               <th>Agent</th>  <!-- Phase 4: Mode → Agent -->
               <th>Sessions</th>
               <th>Total Cost</th><th>Avg Cost</th>
-              <th>${metricHeaderTooltip('tue', 'Tool Use Efficacy')}</th>
-              <th>${metricHeaderTooltip('rd', 'Reasoning Density')}</th>
-              <th>${metricHeaderTooltip('ce', 'Context Efficiency')}</th>
-              <th>${metricHeaderTooltip('err', 'Error Recovery')}</th>
+              <th>Tool Use Efficacy</th>
+              <th>Reasoning Density</th>
+              <th>Context Efficiency</th>
+              <th>Error Recovery</th>
               <th>Errors</th>
               <th>Completion Rate</th><th>Cache %</th><th>Reasoning</th><th>Tier</th>
             </tr>
