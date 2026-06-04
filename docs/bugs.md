@@ -6,17 +6,17 @@
 **User Feedback:** Still not fixed, it's only showing 'All Agents'.
 
 ## Bug #2: Model stats page has no agent filter
-**Status:** Reopened
+**Status:** Fixed (commit 46d3b06)
 **Description:** When user filters by agent on Overview page and clicks "View all" in Top Models, the Model Stats page doesn't apply that agent filter. The filter should persist across pages.
 **User Feedback:** Still the model stats page does not have an agent filter.
 
 ## Bug #3: Metric tooltips show '?' but don't reveal anything
-**Status:** Reopened
+**Status:** Open
 **Description:** In Model Performance Table, the headers TUE, RD, CE, ERR have a '?' icon for tooltips, but clicking/hovering doesn't show the full metric definition.
 **User Feedback:** Why do we still need the '?' in the header? We should remove the '?' icon and make the header text itself trigger the tooltip.
 
 ## Bug #4: Same agent appearing multiple times in Sessions page
-**Status:** Open
+**Status:** Fixed (commit c8de087)
 **Description:** In the Sessions page Agent(s) column, the same agent appears multiple times for a single session (e.g., web_agent shown twice).
 
 ## Bug #5: Errors by Agent not filtered by Models filter

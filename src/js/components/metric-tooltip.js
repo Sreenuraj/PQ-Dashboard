@@ -78,6 +78,26 @@ export function metricTooltip(key) {
 }
 
 /**
+ * Render the header text itself as a dashed, clickable tooltip trigger.
+ * @param {'tue'|'rd'|'ce'|'err'} key
+ * @param {string} label
+ * @returns {string} HTML
+ */
+export function metricHeaderTooltip(key, label) {
+  ensureStyles();
+  return `
+    <span class="pq-metric-tip" data-metric-key="${key}" onclick="event.stopPropagation();this.classList.toggle('pq-metric-tip-visible')" style="border-bottom:1px dashed var(--text-3);padding-bottom:1px;cursor:help">
+      ${label}
+      <span class="pq-metric-tip-body">
+        <strong data-metric-label>…</strong>
+        <div class="pq-metric-tip-formula" data-metric-formula>…</div>
+        <div class="pq-metric-tip-details" data-metric-details>…</div>
+      </span>
+    </span>
+  `;
+}
+
+/**
  * Hydrate every .pq-metric-tip in the document with the actual metric defs.
  * Call this AFTER the view has been rendered. Safe to call multiple times.
  */

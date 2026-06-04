@@ -1,7 +1,7 @@
 import { api } from '../api.js';
 import { fmtCost, agentColor } from '../utils.js';
 import { renderRadarChart, renderCostChart, renderToolsChart } from '../components/charts.js';
-import { metricTooltip, hydrateMetricTooltips } from '../components/metric-tooltip.js';
+import { metricTooltip, metricHeaderTooltip, hydrateMetricTooltips } from '../components/metric-tooltip.js';
 
 export async function renderModels(container, dateRange = {}, queryParams = new URLSearchParams()) {
   container.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading models...</p></div>`;
@@ -56,7 +56,7 @@ export async function renderModels(container, dateRange = {}, queryParams = new 
     <div class="panel">
       <div class="panel-title">
         <span>Model Performance Table</span>
-        <span class="panel-title-meta">Relative cost bar appears beside each model · hover ${metricTooltip('tue').match(/pq-metric-tip-icon.{0,200}/)?.[0] ? '?' : '?'} for metric definitions</span>
+        <span class="panel-title-meta">Relative cost bar appears beside each model · click metric headers for definitions</span>
       </div>
       <div class="table-wrap">
         <table class="data-table">
@@ -67,10 +67,10 @@ export async function renderModels(container, dateRange = {}, queryParams = new 
               <th>Agent</th>  <!-- Phase 4: Mode → Agent -->
               <th>Sessions</th>
               <th>Total Cost</th><th>Avg Cost</th>
-              <th>${metricTooltip('tue')} Tool Use Efficacy</th>
-              <th>${metricTooltip('rd')} Reasoning Density</th>
-              <th>${metricTooltip('ce')} Context Efficiency</th>
-              <th>${metricTooltip('err')} Error Recovery</th>
+              <th>${metricHeaderTooltip('tue', 'Tool Use Efficacy')}</th>
+              <th>${metricHeaderTooltip('rd', 'Reasoning Density')}</th>
+              <th>${metricHeaderTooltip('ce', 'Context Efficiency')}</th>
+              <th>${metricHeaderTooltip('err', 'Error Recovery')}</th>
               <th>Errors</th>
               <th>Completion Rate</th><th>Cache %</th><th>Reasoning</th><th>Tier</th>
             </tr>
@@ -89,6 +89,7 @@ export async function renderModels(container, dateRange = {}, queryParams = new 
               const rdColor  = m.avg_rd  == null ? 'var(--text-3)' : (m.avg_rd  >= 10 ? '#5BF58C' : m.avg_rd  >= 3 ? '#F5C85B' : '#F55B5B');
               const ceColor  = m.avg_ce  == null ? 'var(--text-3)' : (m.avg_ce  >= 50 ? '#5BF58C' : m.avg_ce  >= 20 ? '#F5C85B' : '#F55B5B');
               const errColor = m.avg_err == null ? 'var(--text-3)' : (m.avg_err >= 80 ? '#5BF58C' : m.avg_err >= 30 ? '#F5C85B' : '#F55B5B');
+              const agents = (m.agents || m.mode ? [m.agents ? m.agents.split(',') : [m.mode]].flat().filter(Boolean) : []);
 
               return `
                 <tr title="Click to view sessions for this model"
@@ -101,7 +102,12 @@ export async function renderModels(container, dateRange = {}, queryParams = new 
                     <div style="margin-top:4px;width:${Math.max(costWidth, 2)}%;height:3px;background:var(--accent);border-radius:99px;opacity:0.5"></div>
                   </td>
                   <td style="font-size:12px;color:var(--text-2)">${m.provider_id || '—'}</td>
-                  <td>${(m.agents || m.mode ? [m.agents ? m.agents.split(',') : [m.mode]].flat().filter(Boolean) : []).map(a => `<span class="badge" style="background:${agentColor(a)}22;color:${agentColor(a)};border:1px solid ${agentColor(a)}55;font-size:10px;margin:1px">${a}</span>`).join('') || '—'}</td>
+                  <td>
+                    <div style="display:flex;flex-wrap:wrap;gap:2px;align-items:center;max-width:180px">
+                      ${agents.slice(0, 3).map(a => `<span class="badge" style="background:${agentColor(a)}22;color:${agentColor(a)};border:1px solid ${agentColor(a)}55;font-size:10px;margin:1px">${a}</span>`).join('')}
+                      ${agents.length > 3 ? `<span class="text-dim" style="font-size:10px;margin-left:2px">+${agents.length - 3}</span>` : ''}
+                    </div>
+                  </td>
                   <td><strong>${m.task_count}</strong></td>
                   <td style="color:var(--green);font-weight:600">${fmtCost(m.total_cost)}</td>
                   <td style="color:var(--text-2)">${fmtCost(m.avg_cost)}</td>
