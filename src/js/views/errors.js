@@ -9,15 +9,20 @@ const API_ERROR_CATEGORIES = [
 
 const TOOL_ERROR_CATEGORIES = ['tool_error', 'compliance_error'];
 
-export async function renderErrors(container, dateRange = {}) {
+export async function renderErrors(container, dateRange = {}, queryParams = new URLSearchParams()) {
   container.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading errors...</p></div>`;
   const params = {};
   if (dateRange.from) params.from = dateRange.from;
   if (dateRange.to)   params.to   = dateRange.to;
+  // Phase 4: read agent filter from URL
+  const urlAgent = queryParams.get('agent');
+  if (urlAgent) params.agent = urlAgent;
+
   // Phase 4: also pull the per-agent breakdown so we can render a "By Agent" tab
-  const [data, agentsData] = await Promise.all([
+  const [data, agentsData, allAgentsData] = await Promise.all([
     api.errors(params),
     api.agents(params).catch(() => ({ agents: [] })),
+    api.agents({ from: dateRange.from, to: dateRange.to }).catch(() => ({ agents: [] })),
   ]);
   const total = data.byCategory?.reduce((s, r) => s + r.count, 0) || 0;
 
@@ -74,7 +79,7 @@ export async function renderErrors(container, dateRange = {}) {
     <div class="top-bar">
       <div>
         <h1 class="view-title">Error Analytics</h1>
-        <p class="view-subtitle">${filteredTotal} error events${activeFilter !== 'all' ? ` (filtered from ${total})` : ''}</p>
+        <p class="view-subtitle">${filteredTotal} error events${activeFilter !== 'all' ? ` (filtered from ${total})` : ''}${urlAgent ? ` · <span style="color:var(--accent-2)">filtered by: ${urlAgent}</span>` : ''}</p>
       </div>
     </div>
 
@@ -97,6 +102,16 @@ export async function renderErrors(container, dateRange = {}) {
           <option value="all">All Models</option>
           ${[...new Set((data.byModel || []).map(r => r.model_id))].filter(Boolean).map(m => `
             <option value="${m}" ${activeModelFilter === m ? 'selected' : ''}>${m}</option>
+          `).join('')}
+        </select>
+      </div>
+
+      <div style="display:flex;gap:8px;align-items:center">
+        <span style="font-size:12px;color:var(--text-3)">Agent:</span>
+        <select id="error-agent-select" class="filter-select" style="padding:4px 8px">
+          <option value="all">All Agents</option>
+          ${(allAgentsData.agents || []).map(a => `
+            <option value="${a.agent}" ${urlAgent === a.agent ? 'selected' : ''}>${a.agent}</option>
           `).join('')}
         </select>
       </div>
@@ -228,6 +243,16 @@ export async function renderErrors(container, dateRange = {}) {
       modelSelect.addEventListener('change', (e) => {
         activeModelFilter = e.target.value;
         render();
+      });
+    }
+
+    // Wire agent select
+    const agentSelect = container.querySelector('#error-agent-select');
+    if (agentSelect) {
+      agentSelect.addEventListener('change', (e) => {
+        const val = e.target.value;
+        const newUrl = val && val !== 'all' ? `#/errors?agent=${encodeURIComponent(val)}` : '#/errors';
+        window.location.hash = newUrl;
       });
     }
 
