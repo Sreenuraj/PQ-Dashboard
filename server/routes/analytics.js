@@ -115,9 +115,17 @@ module.exports = (db) => {
   // GET /api/analytics/agents — per-agent breakdown
   // Powers the Overview "Top Agents" card, the Errors "By Agent" tab,
   // the Activity "By Agent" matrix, and the Models heatmap row labels.
+  // Phase 4: optional ?agent= filter (comma-separated, OR) scopes to specific agents.
   router.get('/agents', (req, res) => {
-    const { from, to } = req.query;
-    const { where, params } = buildDateFilter(from, to, 't.');
+    const { from, to, agent } = req.query;
+    const { where, params: dateParams } = buildDateFilter(from, to, 't.');
+    const agentFilter = buildAgentTaskFilter(agent, []);
+
+    const whereParts = [];
+    const allParams = [...dateParams];
+    if (where) whereParts.push(where);
+    if (agentFilter.condition) { whereParts.push(agentFilter.condition); allParams.push(...agentFilter.params); }
+    const whereClause = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
 
     const agents = db.prepare(`
       SELECT
@@ -135,10 +143,10 @@ module.exports = (db) => {
       FROM events e
       INNER JOIN tasks t ON t.id = e.task_id
       WHERE e.mode IS NOT NULL AND e.mode != ''
-      ${where ? 'AND ' + where.slice(6) : ''}
+      ${whereClause ? 'AND ' + whereClause.slice(6) : ''}
       GROUP BY e.mode
       ORDER BY task_count DESC
-    `).all(...params);
+    `).all(...allParams);
 
     // Sub-breakdowns: top 5 models per agent, activity mix per agent,
     // longest 5 sessions per agent.
@@ -149,6 +157,13 @@ module.exports = (db) => {
 
     if (agentNames.length) {
       const placeholders = agentNames.map(() => '?').join(',');
+      // Build the shared WHERE clause for sub-breakdowns (date + agent filter)
+      const subWhereParts = [];
+      const subParams = [...dateParams];
+      if (where) subWhereParts.push(where);
+      if (agentFilter.condition) { subWhereParts.push(agentFilter.condition); subParams.push(...agentFilter.params); }
+      const subWhereClause = subWhereParts.length ? `AND ${subWhereParts.join(' AND ')}` : '';
+
       const topModelsRows = db.prepare(`
         SELECT
           e.mode AS agent,
@@ -159,10 +174,10 @@ module.exports = (db) => {
         FROM events e
         INNER JOIN tasks t ON t.id = e.task_id
         WHERE e.mode IN (${placeholders}) AND e.model_id IS NOT NULL
-        ${where ? 'AND ' + where.slice(6) : ''}
+        ${subWhereClause}
         GROUP BY e.mode, e.model_id
         ORDER BY e.mode, task_count DESC
-      `).all(...agentNames, ...params);
+      `).all(...agentNames, ...subParams);
 
       for (const r of topModelsRows) {
         if (!topModelsPerAgent[r.agent]) topModelsPerAgent[r.agent] = [];
@@ -184,9 +199,9 @@ module.exports = (db) => {
         FROM events e
         INNER JOIN tasks t ON t.id = e.task_id
         WHERE e.mode IN (${placeholders})
-        ${where ? 'AND ' + where.slice(6) : ''}
+        ${subWhereClause}
         GROUP BY e.mode, category
-      `).all(...agentNames, ...params);
+      `).all(...agentNames, ...subParams);
       for (const r of activityRows) {
         if (!activityByAgent[r.agent]) activityByAgent[r.agent] = {};
         activityByAgent[r.agent][r.category] = r.task_count;
@@ -207,11 +222,11 @@ module.exports = (db) => {
           FROM events e
           INNER JOIN tasks t ON t.id = e.task_id
           WHERE e.mode IN (${placeholders})
-          ${where ? 'AND ' + where.slice(6) : ''}
+          ${subWhereClause}
         )
         WHERE rn <= 5
         ORDER BY agent, duration DESC
-      `).all(...agentNames, ...params);
+      `).all(...agentNames, ...subParams);
       for (const r of longestRows) {
         if (!longestSessionsPerAgent[r.agent]) longestSessionsPerAgent[r.agent] = [];
         longestSessionsPerAgent[r.agent].push({
