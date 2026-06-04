@@ -203,12 +203,29 @@ export function agentChip(agent, opts = {}) {
   return `<span class="badge" style="background:${color}22;color:${color};border:1px solid ${color}55;font-size:${size}px;${cursor}" title="${escHtml(agent)}" ${handler}>${escHtml(agent)}</span>`;
 }
 
-/** Render a list of agent_sequence phases as chips (max N, then +k). */
+/** Render a list of agent_sequence phases as chips (max N, then +k).
+ *  Consecutive same-agent phases are collapsed into a single chip with
+ *  a "×N" badge so re-entries are visible without visual clutter. */
 export function agentChainChips(sequence, opts = {}) {
   if (!sequence?.length) return '<span class="text-dim" style="font-size:10px">—</span>';
   const { max = 3, clickable = true } = opts;
-  const html = sequence.slice(0, max).map(s => agentChip(s.agent, { clickable })).join('');
-  const overflow = sequence.length - max;
+  // Collapse consecutive same-agent phases
+  const collapsed = [];
+  for (const s of sequence) {
+    const last = collapsed[collapsed.length - 1];
+    if (last && last.agent === s.agent) last.phase_count = (last.phase_count || 1) + 1;
+    else collapsed.push({ agent: s.agent, phase_count: 1 });
+  }
+  const shown = collapsed.slice(0, max);
+  const html = shown.map(c => {
+    const chip = agentChip(c.agent, { clickable });
+    if (c.phase_count > 1) {
+      // Append a small "×N" badge after the chip
+      return chip + `<span class="text-dim" style="font-size:9px;margin-left:1px">×${c.phase_count}</span>`;
+    }
+    return chip;
+  }).join('');
+  const overflow = collapsed.length - shown.length;
   const overflowHtml = overflow > 0
     ? `<span class="text-dim" style="font-size:10px;margin-left:2px">+${overflow}</span>`
     : '';

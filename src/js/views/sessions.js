@@ -85,12 +85,20 @@ export async function renderSessions(container, dateRange = {}, queryParams = ne
   currentPage = 1;
   selectedTasks.clear();
 
-  // Phase 4: fetch the agent list once for the f-agent dropdown
+  // Phase 4: fetch the agent list for the f-agent dropdown.
+  // Fallback to models endpoint if /agents is unavailable.
   let agentList = [];
   try {
     const ag = await api.agents({ from: dateRange.from, to: dateRange.to });
     agentList = (ag.agents || []).map(a => a.agent);
-  } catch { /* tolerate */ }
+  } catch {
+    try {
+      const models = await api.models({ from: dateRange.from, to: dateRange.to });
+      const agentSet = new Set();
+      models.forEach(m => { if (m.agents) m.agents.split(',').forEach(a => agentSet.add(a.trim())); });
+      agentList = [...agentSet].sort();
+    } catch { /* tolerate */ }
+  }
 
   container.innerHTML = `
     <div class="top-bar">
