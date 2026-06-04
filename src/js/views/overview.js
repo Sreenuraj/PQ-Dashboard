@@ -19,11 +19,11 @@ import { hydrateMetricTooltips } from '../components/metric-tooltip.js';
 const STORAGE_KEY = 'pq-overview-agent-filter';
 
 export async function renderOverview(container, dateRange = {}) {
-  const initialAgent = readStoredAgent();
+  const initialAgents = readStoredAgents();
   const state = {
     from: dateRange.from,
     to: dateRange.to,
-    agents: initialAgent ? [initialAgent] : [],
+    agents: initialAgents,           // array — supports multi-select
     sortKey: 'task_count',
     sortDir: 'desc',
   };
@@ -44,6 +44,16 @@ export async function renderOverview(container, dateRange = {}) {
 
   try {
     const { overview, models, agentsData, reasoning, activityData } = await render();
+
+    // Validate stored agents against current data — remove stale entries
+    // (e.g. an agent that was renamed or no longer has sessions).
+    const liveAgentNames = new Set();
+    for (const a of (agentsData.agents || [])) liveAgentNames.add(a.agent);
+    for (const m of models) if (m.mode) liveAgentNames.add(m.mode);
+    const before = state.agents.length;
+    state.agents = state.agents.filter(a => liveAgentNames.has(a));
+    if (state.agents.length !== before) writeStoredAgents(state.agents);
+
     paintOverview(container, { state, overview, models, agentsData, reasoning, activityData });
     await hydrateMetricTooltips();
 
@@ -52,13 +62,14 @@ export async function renderOverview(container, dateRange = {}) {
       const chip = e.target.closest('[data-agent-chip]');
       if (chip) {
         const agent = chip.dataset.agentChip;
-        if (agent === '__all__') state.agents = [];
-        else {
+        if (agent === '__all__') {
+          state.agents = [];
+        } else {
           const idx = state.agents.indexOf(agent);
           if (idx === -1) state.agents.push(agent);
           else state.agents.splice(idx, 1);
         }
-        writeStoredAgent(state.agents[0] || null);
+        writeStoredAgents(state.agents);
         const next = await render();
         paintOverview(container, { state, ...next });
         await hydrateMetricTooltips();
@@ -161,7 +172,7 @@ function paintOverview(container, { state, overview, models, agentsData, reasoni
     <!-- Top Models (full-width, agent-scoped, sortable by any metric) -->
     <div class="panel">
       <div class="panel-title">
-        <span>Top Models <span style="font-weight:400;color:var(--text-3);font-size:11px;margin-left:6px">${sortedModels.length} total</span></span>
+        <span>Top Models${state.agents.length === 1 ? ` <span style="font-weight:400;color:var(--text-3);font-size:11px;margin-left:6px">for ${escHtml(state.agents[0])}</span>` : state.agents.length > 1 ? ` <span style="font-weight:400;color:var(--text-3);font-size:11px;margin-left:6px">for ${escHtml(state.agents.join(' + '))}</span>` : ` <span style="font-weight:400;color:var(--text-3);font-size:11px;margin-left:6px">${sortedModels.length} total</span>`}</span>
         <span class="panel-title-meta">
           ${renderSortBadge(state)}
           <a href="#/models">View all ↗</a>
@@ -415,11 +426,21 @@ function buildParams(state) {
   return p;
 }
 
-function readStoredAgent() {
-  try { return localStorage.getItem(STORAGE_KEY); } catch { return null; }
+// ── Multi-agent localStorage (stores a JSON array, not a single string) ───
+
+function readStoredAgents() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter(a => typeof a === 'string') : [];
+  } catch { return []; }
 }
-function writeStoredAgent(agent) {
-  try { agent ? localStorage.setItem(STORAGE_KEY, agent) : localStorage.removeItem(STORAGE_KEY); } catch {}
+function writeStoredAgents(agents) {
+  try {
+    if (agents.length) localStorage.setItem(STORAGE_KEY, JSON.stringify(agents));
+    else localStorage.removeItem(STORAGE_KEY);
+  } catch {}
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────

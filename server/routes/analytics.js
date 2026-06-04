@@ -9,8 +9,14 @@ module.exports = (db) => {
   // the given agent(s) (OR-composed).
   router.get('/overview', (req, res) => {
     const { from, to, agent } = req.query;
-    const { where, params } = buildDateFilter(from, to);
-    const agentFilter = buildAgentTaskFilter(agent, params);
+    const { where, params: dateParams } = buildDateFilter(from, to);
+    const agentFilter = buildAgentTaskFilter(agent, []);
+
+    const whereParts = [];
+    const allParams = [...dateParams];
+    if (where) whereParts.push(where);
+    if (agentFilter.condition) { whereParts.push(agentFilter.condition); allParams.push(...agentFilter.params); }
+    const whereClause = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
 
     const totals = db.prepare(`
       SELECT
@@ -29,11 +35,10 @@ module.exports = (db) => {
         SUM(CASE WHEN t.status = 'interrupted' THEN 1 ELSE 0 END) as interrupted,
         SUM(CASE WHEN t.has_reasoning = 1 THEN 1 ELSE 0 END) as with_reasoning
       FROM tasks t
-      ${agentFilter.join}
-      ${where}
-    `).get(...agentFilter.params, ...params);
+      ${whereClause}
+    `).get(...allParams);
 
-    const sources = db.prepare(`SELECT t.source, COUNT(DISTINCT t.id) as cnt FROM tasks t ${agentFilter.join} ${where} GROUP BY t.source`).all(...agentFilter.params, ...params);
+    const sources = db.prepare(`SELECT t.source, COUNT(DISTINCT t.id) as cnt FROM tasks t ${whereClause} GROUP BY t.source`).all(...allParams);
 
     res.json({ ...totals, sources });
   });
@@ -43,24 +48,37 @@ module.exports = (db) => {
   // (cheap rollups; session_metrics is pre-computed by the parser).
   router.get('/models', (req, res) => {
     const { from, to, agent } = req.query;
-    const { where, params } = buildDateFilter(from, to, 't.');
+    const { where, params: dateParams } = buildDateFilter(from, to, 't.');
 
     // Phase 4: optional agent filter (OR-composed: agent=web_agent,mobile_agent)
-    let agentClause = '';
-    if (agent) {
-      const agents = String(agent).split(',').map(s => s.trim()).filter(Boolean);
-      if (agents.length) {
-        // Only consider rows where THIS model_usage entry was on the given agent(s)
-        agentClause = ` AND tm.mode IN (${agents.map(() => '?').join(',')})`;
-        params.push(...agents);
-      }
-    }
+    const agentFilter = buildAgentTaskFilter(agent, []);
+
+    // Build WHERE clause properly — agent filter must be in WHERE, not swallowed by LEFT JOIN
+    const whereParts = [];
+    const allParams = [...dateParams];
+    if (where) whereParts.push(where);
+    if (agentFilter.condition) { whereParts.push(agentFilter.condition); allParams.push(...agentFilter.params); }
+    const whereClause = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
+
+    // When filtering by agent, also restrict tm.mode to the selected agent(s) and
+    // group by (model_id, mode). This ensures:
+    //   1. Each (model, agent) pair gets its own row — no more "MAX(mode)" picking
+    //      the wrong agent badge when a model is shared across agents.
+    //   2. The task_count, cost, and metrics reflect ONLY the selected agent's usage
+    //      of that model, not all agents combined.
+    // Without an agent filter, we keep the original single-row-per-model grouping.
+    const agentList = agent ? String(agent).split(',').map(s => s.trim()).filter(Boolean) : [];
+    const modeFilter = agentList.length
+      ? `AND tm.mode IN (${agentList.map(() => '?').join(',')})`
+      : '';
+    const modeParams = agentList;
+    const groupBy = agentList.length ? 'tm.model_id, tm.mode' : 'tm.model_id';
 
     const models = db.prepare(`
       SELECT
         tm.model_id,
         MAX(tm.provider_id) as provider_id,
-        MAX(tm.mode) as mode,
+        tm.mode,
         COUNT(DISTINCT tm.task_id) as task_count,
         SUM(t.total_cost) as total_cost,
         AVG(t.total_cost) as avg_cost,
@@ -83,10 +101,11 @@ module.exports = (db) => {
       FROM task_models tm
       INNER JOIN tasks t ON t.id = tm.task_id
       LEFT JOIN session_metrics sm ON sm.task_id = t.id
-      ${where}${agentClause}
-      GROUP BY tm.model_id
+      ${whereClause}
+      ${modeFilter}
+      GROUP BY ${groupBy}
       ORDER BY task_count DESC
-    `).all(...params);
+    `).all(...allParams, ...modeParams);
 
     res.json(models);
   });
@@ -480,8 +499,14 @@ module.exports = (db) => {
   // Phase 4: optional ?agent= filter
   router.get('/reasoning', (req, res) => {
     const { from, to, agent } = req.query;
-    const { where, params } = buildDateFilter(from, to);
-    const agentFilter = buildAgentTaskFilter(agent, params);
+    const { where, params: dateParams } = buildDateFilter(from, to);
+    const agentFilter = buildAgentTaskFilter(agent, []);
+
+    const whereParts = [];
+    const allParams = [...dateParams];
+    if (where) whereParts.push(where);
+    if (agentFilter.condition) { whereParts.push(agentFilter.condition); allParams.push(...agentFilter.params); }
+    const whereClause = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
 
     const stats = db.prepare(`
       SELECT
@@ -492,10 +517,9 @@ module.exports = (db) => {
         AVG(t.total_cost) as avg_cost,
         AVG(t.error_count) as avg_errors
       FROM tasks t
-      ${agentFilter.join}
-      ${where}
+      ${whereClause}
       GROUP BY has_reasoning
-    `).all(...agentFilter.params, ...params);
+    `).all(...allParams);
     res.json(stats);
   });
 
@@ -591,8 +615,14 @@ module.exports = (db) => {
   // Phase 4: optional ?agent= filter
   router.get('/activity', (req, res) => {
     const { from, to, agent } = req.query;
-    const { where, params } = buildDateFilter(from, to);
-    const agentFilter = buildAgentTaskFilter(agent, params);
+    const { where, params: dateParams } = buildDateFilter(from, to);
+    const agentFilter = buildAgentTaskFilter(agent, []);
+
+    const whereParts = [];
+    const allParams = [...dateParams];
+    if (where) whereParts.push(where);
+    if (agentFilter.condition) { whereParts.push(agentFilter.condition); allParams.push(...agentFilter.params); }
+    const whereClause = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
 
     const rows = db.prepare(`
       SELECT
@@ -609,11 +639,10 @@ module.exports = (db) => {
         SUM(t.total_tokens_out) as total_tokens_out,
         SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END) as completed
       FROM tasks t
-      ${agentFilter.join}
-      ${where}
+      ${whereClause}
       GROUP BY activity_category
       ORDER BY total_cost DESC
-    `).all(...agentFilter.params, ...params);
+    `).all(...allParams);
 
     // Compute one-shot rate per category
     const result = rows.map(r => ({
@@ -685,15 +714,16 @@ function buildDateFilter(from, to, prefix = '') {
 }
 
 // Phase 4: helper for the agent lens on tasks-scoped endpoints. Returns
-// `{ join, params }` — caller concatenates `join` and spreads `params`.
-// `params` is the existing params array (mutated in place for compat).
+// `{ condition, params }` — caller ANDs `condition` into the WHERE clause.
+// Uses EXISTS (not JOIN) to avoid duplicating task rows when a session has
+// multiple model_usage entries (multi-agent sessions).
 function buildAgentTaskFilter(agent, params) {
-  if (!agent) return { join: '', params: [] };
+  if (!agent) return { condition: '', params: [] };
   const agents = String(agent).split(',').map(s => s.trim()).filter(Boolean);
-  if (!agents.length) return { join: '', params: [] };
+  if (!agents.length) return { condition: '', params: [] };
   const placeholders = agents.map(() => '?').join(',');
   return {
-    join: `INNER JOIN task_models tm_ag ON t.id = tm_ag.task_id AND tm_ag.mode IN (${placeholders})`,
+    condition: `EXISTS (SELECT 1 FROM task_models tm_ag WHERE tm_ag.task_id = t.id AND tm_ag.mode IN (${placeholders}))`,
     params: [...agents],
   };
 }

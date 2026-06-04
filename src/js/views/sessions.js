@@ -293,7 +293,7 @@ async function loadSessions(container, dateRange = {}, drilldown = {}) {
     tbody.innerHTML = data.tasks.map(t => {
       const sequence = t.agent_sequence || [];
       const agentCell = sequence.length
-        ? `<div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">${agentChainChips(sequence, { max: 3, clickable: false })}</div>`
+        ? `<div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">${agentChainChips(sequence, { max: 3, clickable: true })}</div>`
         : '<span style="color:var(--text-3);font-size:11px">—</span>';
       return `
       <tr data-id="${t.id}" class="session-row" style="cursor:pointer">

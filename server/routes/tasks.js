@@ -162,12 +162,13 @@ module.exports = (db) => {
     }
 
     // Phase 4: agent filter (OR-composed: agent=web_agent,mobile_agent)
-    let agentJoin = '';
+    // Uses EXISTS (not JOIN) to avoid duplicating task rows when a session
+    // has multiple model_usage entries (multi-agent sessions).
     if (agent) {
       const agents = String(agent).split(',').map(s => s.trim()).filter(Boolean);
       if (agents.length) {
-        agentJoin = 'INNER JOIN task_models tm_ag ON t.id = tm_ag.task_id';
-        conditions.push(`tm_ag.mode IN (${agents.map(() => '?').join(',')})`);
+        const placeholders = agents.map(() => '?').join(',');
+        conditions.push(`EXISTS (SELECT 1 FROM task_models tm_ag WHERE tm_ag.task_id = t.id AND tm_ag.mode IN (${placeholders}))`);
         params.push(...agents);
       }
     }
@@ -181,7 +182,7 @@ module.exports = (db) => {
     // Combine joins (we may have BOTH model and agent joins, both hitting task_models).
     // When both are present we need distinct join aliases; agent filter uses tm_ag,
     // model filter uses tm.
-    const joinSql = [modelJoin, agentJoin].filter(Boolean).join(' ');
+    const joinSql = modelJoin;
 
     const countRow = db.prepare(`SELECT COUNT(DISTINCT t.id) as cnt FROM tasks t ${joinSql} ${where}`).get(...params);
     const total = countRow?.cnt || 0;
