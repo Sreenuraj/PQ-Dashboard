@@ -56,10 +56,10 @@ export async function renderModels(container, dateRange = {}, queryParams = new 
               <th>Agent</th>  <!-- Phase 4: Mode → Agent -->
               <th>Sessions</th>
               <th>Total Cost</th><th>Avg Cost</th>
-              <th>${metricTooltip('tue')}<span>${'TUE'}</span></th>
-              <th>${metricTooltip('rd')}<span>RD</span></th>
-              <th>${metricTooltip('ce')}<span>CE</span></th>
-              <th>${metricTooltip('err')}<span>ERR</span></th>
+              <th>${metricTooltip('tue')} Tool Use Efficacy</th>
+              <th>${metricTooltip('rd')} Reasoning Density</th>
+              <th>${metricTooltip('ce')} Context Efficiency</th>
+              <th>${metricTooltip('err')} Error Recovery</th>
               <th>Errors</th>
               <th>Completion Rate</th><th>Cache %</th><th>Reasoning</th><th>Tier</th>
             </tr>

@@ -41,7 +41,8 @@ function ensureStyles() {
       transition: opacity 120ms ease 50ms;
       text-align: left;
     }
-    .pq-metric-tip:hover .pq-metric-tip-body { opacity: 1; }
+    .pq-metric-tip:hover .pq-metric-tip-body,
+    .pq-metric-tip.pq-metric-tip-visible .pq-metric-tip-body { opacity: 1; pointer-events: auto; }
     .pq-metric-tip .pq-metric-tip-body strong { color: var(--text); display: block; margin-bottom: 4px; }
     .pq-metric-tip .pq-metric-tip-formula {
       font-family: var(--font-mono); font-size: 10px;
@@ -65,7 +66,7 @@ export function metricTooltip(key) {
   // To avoid a flash, we pre-render a generic body that gets replaced.
   // (Re-render is cheap because the page is small.)
   return `
-    <span class="pq-metric-tip" data-metric-key="${key}">
+    <span class="pq-metric-tip" data-metric-key="${key}" onclick="event.stopPropagation();this.classList.toggle('pq-metric-tip-visible')">
       <span class="pq-metric-tip-icon">?</span>
       <span class="pq-metric-tip-body">
         <strong data-metric-label>…</strong>
