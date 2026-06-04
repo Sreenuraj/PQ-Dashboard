@@ -44,7 +44,7 @@
 `SqliteError: near "WHERE": syntax error` at `server/routes/analytics.js` line 130 and line 76.
 
 ## Bug #11: Sessions page ignores agent filter from URL query parameters
-**Status:** Open
+**Status:** Fixed (commit 5b56ca8)
 **Description:** Clicking a cell in the Model × Agent Heatmap takes the user to the Sessions page with both `model_id` and `agent` filters in the URL, but the Sessions page ignores the `agent` filter and shows sessions for other agents too.
 **Files:** `src/js/views/sessions.js`
 

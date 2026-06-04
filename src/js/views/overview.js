@@ -30,31 +30,31 @@ export async function renderOverview(container, dateRange = {}) {
 
   const render = async () => {
     const params = buildParams(state);
-    const [overview, models, agentsData, reasoning, activityData] = await Promise.all([
+    const [overview, models, agentsData, reasoning, activityData, allAgentsData] = await Promise.all([
       api.overview(params),
       api.models(params),
       api.agents(params).catch(() => ({ agents: [] })),
       api.reasoning(params),
       api.activity(params).catch(() => []),
+      api.agents({ from: dateRange.from, to: dateRange.to }).catch(() => ({ agents: [] })),
     ]);
-    return { overview, models, agentsData, reasoning, activityData };
+    return { overview, models, agentsData, reasoning, activityData, allAgentsData };
   };
 
   container.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading overview...</p></div>`;
 
   try {
-    const { overview, models, agentsData, reasoning, activityData } = await render();
+    const { overview, models, agentsData, reasoning, activityData, allAgentsData } = await render();
 
     // Validate stored agents against current data — remove stale entries
     // (e.g. an agent that was renamed or no longer has sessions).
     const liveAgentNames = new Set();
-    for (const a of (agentsData.agents || [])) liveAgentNames.add(a.agent);
-    for (const m of models) if (m.mode) liveAgentNames.add(m.mode);
+    for (const a of (allAgentsData.agents || [])) liveAgentNames.add(a.agent);
     const before = state.agents.length;
     state.agents = state.agents.filter(a => liveAgentNames.has(a));
     if (state.agents.length !== before) writeStoredAgents(state.agents);
 
-    paintOverview(container, { state, overview, models, agentsData, reasoning, activityData });
+    paintOverview(container, { state, overview, models, agentsData, reasoning, activityData, allAgentsData });
     await hydrateMetricTooltips();
 
     // Re-render handler: chip clicks mutate state.agents and re-fetch.
@@ -91,7 +91,7 @@ export async function renderOverview(container, dateRange = {}) {
   }
 }
 
-function paintOverview(container, { state, overview, models, agentsData, reasoning, activityData }) {
+function paintOverview(container, { state, overview, models, agentsData, reasoning, activityData, allAgentsData }) {
   const completionRate = overview.total_tasks > 0
     ? Math.round((overview.completed / overview.total_tasks) * 100) : 0;
   const cacheHitRate = (overview.total_tokens_in + overview.total_cache_reads) > 0
@@ -116,8 +116,7 @@ function paintOverview(container, { state, overview, models, agentsData, reasoni
 
   // Filter chip row (with "All" + dynamic chips for every agent seen in data)
   const allAgentNames = new Set();
-  for (const a of (agentsData.agents || [])) allAgentNames.add(a.agent);
-  for (const m of models) if (m.mode) allAgentNames.add(m.mode);
+  for (const a of (allAgentsData.agents || [])) allAgentNames.add(a.agent);
   const sortedAgentNames = [...allAgentNames].sort();
   const filterChipsHtml = renderFilterChips(state.agents, sortedAgentNames);
 
