@@ -12,9 +12,10 @@ export async function renderModels(container, dateRange = {}, queryParams = new 
   const urlAgent = queryParams.get('agent');
   if (urlAgent) params.agent = urlAgent;
   // Phase 4: also fetch the agent-matrix so we can render the Model×Agent heatmap
-  const [models, agentMatrix] = await Promise.all([
+  const [models, agentMatrix, agentsData] = await Promise.all([
     api.models(params),
     api.agentMatrix({ ...params, dimension: 'model' }).catch(() => ({ rows: [], cols: [], values: [] })),
+    api.agents({ from: dateRange.from, to: dateRange.to }).catch(() => ({ agents: [] })),
   ]);
 
   if (!models.length) {
@@ -31,6 +32,16 @@ export async function renderModels(container, dateRange = {}, queryParams = new 
         <p class="view-subtitle">${models.length} distinct models${urlAgent ? ` · <span style="color:var(--accent-2)">filtered by: ${escHtml(urlAgent)}</span>` : ''} · <span style="color:var(--accent-2);font-size:11px">Click any row to see sessions for that model ↗</span></p>
       </div>
       <!-- date picker injected here -->
+    </div>
+
+    <div class="filters-bar" style="margin-bottom:14px">
+      <span style="font-size:12px;color:var(--text-3)">Agent:</span>
+      <select id="models-agent-filter" class="filter-select" style="padding:4px 8px">
+        <option value="">All Agents</option>
+        ${(agentsData.agents || []).map(a => `
+          <option value="${escAttr(a.agent)}" ${urlAgent === a.agent ? 'selected' : ''}>${escHtml(a.agent)} (${a.task_count})</option>
+        `).join('')}
+      </select>
     </div>
 
     <div class="panel">
@@ -134,6 +145,16 @@ export async function renderModels(container, dateRange = {}, queryParams = new 
 
   setTimeout(() => renderRadarChart('modelRadarChart', models), 0);
   await hydrateMetricTooltips();
+
+  // Wire agent filter
+  const agentSelect = container.querySelector('#models-agent-filter');
+  if (agentSelect) {
+    agentSelect.addEventListener('change', (e) => {
+      const val = e.target.value;
+      const newUrl = val ? `#/models?agent=${encodeURIComponent(val)}` : '#/models';
+      window.location.hash = newUrl;
+    });
+  }
 }
 
 /**
@@ -183,7 +204,11 @@ function renderModelAgentHeatmap(matrix) {
   `;
 }
 
-function escAttr(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'<lt;').replace(/>/g,'>gt;').replace(/"/g,'"quot;'); }
+function escHtml(s) {
+  return String(s ?? '').replace(/&/g,'&').replace(/</g,'<').replace(/>/g,'>').replace(/"/g,'"').replace(/'/g,'&#39;');
+}
+
+function escAttr(s) { return String(s).replace(/&/g,'&').replace(/</g,'<').replace(/>/g,'>').replace(/"/g,'"'); }
 
 export async function renderCosts(container, dateRange = {}) {
   container.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading cost data...</p></div>`;

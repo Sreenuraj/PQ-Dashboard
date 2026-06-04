@@ -49,5 +49,5 @@
 **Files:** `src/js/views/sessions.js`
 
 ## Bug #10: Overview page agent filter chips disappear
-**Status:** Open
+**Status:** Fixed (commit d7c9b75)
 **Description:** In the agent filter in overview page, when selecting an agent (e.g., mobile_agent), all other agent chips disappear.
