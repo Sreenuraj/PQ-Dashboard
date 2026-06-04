@@ -9,14 +9,16 @@ module.exports = (db) => {
   // the given agent(s) (OR-composed).
   router.get('/overview', (req, res) => {
     const { from, to, agent } = req.query;
-    const { where, params: dateParams } = buildDateFilter(from, to);
+    const { conditions, params: dateParams } = buildDateFilter(from, to);
     const agentFilter = buildAgentTaskFilter(agent, []);
 
-    const whereParts = [];
+    const allConditions = [...conditions];
     const allParams = [...dateParams];
-    if (where) whereParts.push(where);
-    if (agentFilter.condition) { whereParts.push(agentFilter.condition); allParams.push(...agentFilter.params); }
-    const whereClause = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
+    if (agentFilter.condition) {
+      allConditions.push(agentFilter.condition);
+      allParams.push(...agentFilter.params);
+    }
+    const whereClause = allConditions.length ? `WHERE ${allConditions.join(' AND ')}` : '';
 
     const totals = db.prepare(`
       SELECT
@@ -48,17 +50,10 @@ module.exports = (db) => {
   // (cheap rollups; session_metrics is pre-computed by the parser).
   router.get('/models', (req, res) => {
     const { from, to, agent } = req.query;
-    const { where, params: dateParams } = buildDateFilter(from, to, 't.');
+    const { conditions, params: dateParams } = buildDateFilter(from, to, 't.');
 
-    // Phase 4: optional agent filter (OR-composed: agent=web_agent,mobile_agent)
-    const agentFilter = buildAgentTaskFilter(agent, []);
-
-    // Build WHERE clause properly — agent filter must be in WHERE, not swallowed by LEFT JOIN
-    const whereParts = [];
+    const allConditions = [...conditions];
     const allParams = [...dateParams];
-    if (where) whereParts.push(where);
-    if (agentFilter.condition) { whereParts.push(agentFilter.condition); allParams.push(...agentFilter.params); }
-    const whereClause = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
 
     // Always group by model_id only — one row per model.
     // The tm.mode IN (...) filter restricts which agent's usage is counted,
@@ -66,10 +61,12 @@ module.exports = (db) => {
     // used this model. This way, selecting mobile_agent + web_agent shows
     // each model once with both agent chips, not split into separate rows.
     const agentList = agent ? String(agent).split(',').map(s => s.trim()).filter(Boolean) : [];
-    const modeFilter = agentList.length
-      ? `AND tm.mode IN (${agentList.map(() => '?').join(',')})`
-      : '';
-    const modeParams = agentList;
+    if (agentList.length) {
+      allConditions.push(`tm.mode IN (${agentList.map(() => '?').join(',')})`);
+      allParams.push(...agentList);
+    }
+    const whereClause = allConditions.length ? `WHERE ${allConditions.join(' AND ')}` : '';
+
     const groupBy = 'tm.model_id';
     const selectMode = 'MAX(tm.mode) as mode';
 
@@ -102,10 +99,9 @@ module.exports = (db) => {
       INNER JOIN tasks t ON t.id = tm.task_id
       LEFT JOIN session_metrics sm ON sm.task_id = t.id
       ${whereClause}
-      ${modeFilter}
       GROUP BY ${groupBy}
       ORDER BY task_count DESC
-    `).all(...allParams, ...modeParams);
+    `).all(...allParams);
 
     res.json(models);
   });
@@ -118,14 +114,15 @@ module.exports = (db) => {
   // Phase 4: optional ?agent= filter (comma-separated, OR) scopes to specific agents.
   router.get('/agents', (req, res) => {
     const { from, to, agent } = req.query;
-    const { where, params: dateParams } = buildDateFilter(from, to, 't.');
+    const { conditions, params: dateParams } = buildDateFilter(from, to, 't.');
     const agentFilter = buildAgentTaskFilter(agent, []);
 
-    const whereParts = [];
+    const allConditions = [...conditions];
     const allParams = [...dateParams];
-    if (where) whereParts.push(where);
-    if (agentFilter.condition) { whereParts.push(agentFilter.condition); allParams.push(...agentFilter.params); }
-    const whereClause = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
+    if (agentFilter.condition) {
+      allConditions.push(agentFilter.condition);
+      allParams.push(...agentFilter.params);
+    }
 
     const agents = db.prepare(`
       SELECT
@@ -143,7 +140,7 @@ module.exports = (db) => {
       FROM events e
       INNER JOIN tasks t ON t.id = e.task_id
       WHERE e.mode IS NOT NULL AND e.mode != ''
-      ${whereClause ? 'AND ' + whereClause.slice(6) : ''}
+      ${allConditions.length ? 'AND ' + allConditions.join(' AND ') : ''}
       GROUP BY e.mode
       ORDER BY task_count DESC
     `).all(...allParams);
@@ -158,11 +155,13 @@ module.exports = (db) => {
     if (agentNames.length) {
       const placeholders = agentNames.map(() => '?').join(',');
       // Build the shared WHERE clause for sub-breakdowns (date + agent filter)
-      const subWhereParts = [];
+      const subConditions = [...conditions];
       const subParams = [...dateParams];
-      if (where) subWhereParts.push(where);
-      if (agentFilter.condition) { subWhereParts.push(agentFilter.condition); subParams.push(...agentFilter.params); }
-      const subWhereClause = subWhereParts.length ? `AND ${subWhereParts.join(' AND ')}` : '';
+      if (agentFilter.condition) {
+        subConditions.push(agentFilter.condition);
+        subParams.push(...agentFilter.params);
+      }
+      const subWhereClause = subConditions.length ? 'AND ' + subConditions.join(' AND ') : '';
 
       const topModelsRows = db.prepare(`
         SELECT
@@ -251,7 +250,8 @@ module.exports = (db) => {
   // Sparse pivot: rows = agents, cols = dimension values, values = task_count.
   router.get('/agent-matrix', (req, res) => {
     const { from, to, dimension = 'model' } = req.query;
-    const { where, params } = buildDateFilter(from, to, 't.');
+    const { conditions, params } = buildDateFilter(from, to, 't.');
+    const whereClause = conditions.length ? 'AND ' + conditions.join(' AND ') : '';
 
     let rows, cols, values, colExpr;
     if (dimension === 'model') {
@@ -272,7 +272,7 @@ module.exports = (db) => {
       FROM events e
       INNER JOIN tasks t ON t.id = e.task_id
       WHERE e.mode IS NOT NULL AND e.mode != ''
-      ${where ? 'AND ' + where.slice(6) : ''}
+      ${whereClause}
       GROUP BY e.mode, col_value
     `;
     const raw = db.prepare(sql).all(...params);
@@ -303,7 +303,8 @@ module.exports = (db) => {
   // GET /api/analytics/errors
   router.get('/errors', (req, res) => {
     const { from, to } = req.query;
-    const { where, params } = buildDateFilter(from, to, 't.');
+    const { conditions, params } = buildDateFilter(from, to, 't.');
+    const whereClause = conditions.length ? 'AND ' + conditions.join(' AND ') : '';
 
     const byCategory = db.prepare(`
       SELECT 
@@ -313,7 +314,7 @@ module.exports = (db) => {
         e.model_id
       FROM events e
       INNER JOIN tasks t ON t.id = e.task_id
-      WHERE e.error_category IS NOT NULL ${where ? 'AND ' + where.slice(6) : ''}
+      WHERE e.error_category IS NOT NULL ${whereClause}
       GROUP BY e.error_category
       ORDER BY count DESC
     `).all(...params);
@@ -326,7 +327,7 @@ module.exports = (db) => {
         COUNT(*) as count
       FROM events e
       INNER JOIN tasks t ON t.id = e.task_id
-      WHERE e.error_category IS NOT NULL ${where ? 'AND ' + where.slice(6) : ''}
+      WHERE e.error_category IS NOT NULL ${whereClause}
       GROUP BY day, e.error_category, e.model_id
       ORDER BY day ASC
     `).all(...params);
@@ -339,7 +340,7 @@ module.exports = (db) => {
         COUNT(*) as count
       FROM events e
       INNER JOIN tasks t ON t.id = e.task_id
-      WHERE e.error_category IS NOT NULL AND e.model_id IS NOT NULL ${where ? 'AND ' + where.slice(6) : ''}
+      WHERE e.error_category IS NOT NULL AND e.model_id IS NOT NULL ${whereClause}
       GROUP BY e.provider_id, e.model_id, e.error_category
       ORDER BY count DESC
     `).all(...params);
@@ -351,14 +352,16 @@ module.exports = (db) => {
   // Phase 4: optional ?agent= filter (comma-separated, OR) scopes to specific agents.
   router.get('/tools', (req, res) => {
     const { from, to, agent } = req.query;
-    const { where, params: dateParams } = buildDateFilter(from, to, 't.');
+    const { conditions, params: dateParams } = buildDateFilter(from, to, 't.');
     const agentFilter = buildAgentTaskFilter(agent, []);
 
-    const whereParts = [];
+    const allConditions = [...conditions];
     const allParams = [...dateParams];
-    if (where) whereParts.push(where);
-    if (agentFilter.condition) { whereParts.push(agentFilter.condition); allParams.push(...agentFilter.params); }
-    const whereClause = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
+    if (agentFilter.condition) {
+      allConditions.push(agentFilter.condition);
+      allParams.push(...agentFilter.params);
+    }
+    const whereClause = allConditions.length ? 'AND ' + allConditions.join(' AND ') : '';
 
     const topTools = db.prepare(`
       SELECT 
@@ -368,7 +371,7 @@ module.exports = (db) => {
         COUNT(DISTINCT e.model_id) as model_count
       FROM events e
       INNER JOIN tasks t ON t.id = e.task_id
-      WHERE e.tool_name IS NOT NULL AND e.tool_name != 'unknown' ${whereClause ? 'AND ' + whereClause.slice(6) : ''}
+      WHERE e.tool_name IS NOT NULL AND e.tool_name != 'unknown' ${whereClause}
       GROUP BY e.tool_name
       ORDER BY count DESC
       LIMIT 20
@@ -380,7 +383,7 @@ module.exports = (db) => {
         COUNT(*) as count
       FROM events e
       INNER JOIN tasks t ON t.id = e.task_id
-      WHERE e.command_text IS NOT NULL ${whereClause ? 'AND ' + whereClause.slice(6) : ''}
+      WHERE e.command_text IS NOT NULL ${whereClause}
       GROUP BY SUBSTR(e.command_text, 1, 30)
       ORDER BY count DESC
       LIMIT 15
@@ -392,7 +395,8 @@ module.exports = (db) => {
   // GET /api/analytics/costs
   router.get('/costs', (req, res) => {
     const { from, to, groupBy = 'day' } = req.query;
-    const { where, params } = buildDateFilter(from, to);
+    const { conditions, params } = buildDateFilter(from, to);
+    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
     const fmt = groupBy === 'week'
       ? `strftime('%Y-W%W', start_ts / 1000, 'unixepoch')`
@@ -406,7 +410,7 @@ module.exports = (db) => {
         SUM(total_tokens_out) as tokens_out,
         SUM(total_cache_reads) as cache_reads,
         COUNT(*) as task_count
-      FROM tasks ${where}
+      FROM tasks ${whereClause}
       GROUP BY period
       ORDER BY period ASC
     `).all(...params);
@@ -417,13 +421,14 @@ module.exports = (db) => {
   // GET /api/analytics/sequences
   router.get('/sequences', (req, res) => {
     const { from, to } = req.query;
-    const { where, params } = buildDateFilter(from, to, 't.');
+    const { conditions, params } = buildDateFilter(from, to, 't.');
+    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
     const events = db.prepare(`
       SELECT e.task_id, e.sub_type, e.tool_name, e.error_category
       FROM events e
       INNER JOIN tasks t ON t.id = e.task_id
-      ${where}
+      ${whereClause}
       ORDER BY e.task_id, e.ts ASC
     `).all(...params);
 
@@ -469,11 +474,12 @@ module.exports = (db) => {
   // GET /api/analytics/flow
   router.get('/flow', (req, res) => {
     const { from, to } = req.query;
-    const { where, params } = buildDateFilter(from, to);
+    const { conditions, params } = buildDateFilter(from, to);
+    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
     const tasks = db.prepare(`
       SELECT id, status, has_reasoning, tool_call_count, error_count 
-      FROM tasks ${where}
+      FROM tasks ${whereClause}
     `).all(...params);
 
     let nodesHash = { 'Task Start': 0, 'Reasoning': 1, 'No Reasoning': 2, 'Tools Used': 3, 'No Tools': 4, 'Completed': 5, 'Interrupted': 6, 'Error': 7, 'Has API Errors': 8 };
@@ -522,14 +528,16 @@ module.exports = (db) => {
   // Phase 4: optional ?agent= filter
   router.get('/reasoning', (req, res) => {
     const { from, to, agent } = req.query;
-    const { where, params: dateParams } = buildDateFilter(from, to);
+    const { conditions, params: dateParams } = buildDateFilter(from, to);
     const agentFilter = buildAgentTaskFilter(agent, []);
 
-    const whereParts = [];
+    const allConditions = [...conditions];
     const allParams = [...dateParams];
-    if (where) whereParts.push(where);
-    if (agentFilter.condition) { whereParts.push(agentFilter.condition); allParams.push(...agentFilter.params); }
-    const whereClause = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
+    if (agentFilter.condition) {
+      allConditions.push(agentFilter.condition);
+      allParams.push(...agentFilter.params);
+    }
+    const whereClause = allConditions.length ? `WHERE ${allConditions.join(' AND ')}` : '';
 
     const stats = db.prepare(`
       SELECT
@@ -638,14 +646,16 @@ module.exports = (db) => {
   // Phase 4: optional ?agent= filter
   router.get('/activity', (req, res) => {
     const { from, to, agent } = req.query;
-    const { where, params: dateParams } = buildDateFilter(from, to);
+    const { conditions, params: dateParams } = buildDateFilter(from, to);
     const agentFilter = buildAgentTaskFilter(agent, []);
 
-    const whereParts = [];
+    const allConditions = [...conditions];
     const allParams = [...dateParams];
-    if (where) whereParts.push(where);
-    if (agentFilter.condition) { whereParts.push(agentFilter.condition); allParams.push(...agentFilter.params); }
-    const whereClause = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
+    if (agentFilter.condition) {
+      allConditions.push(agentFilter.condition);
+      allParams.push(...agentFilter.params);
+    }
+    const whereClause = allConditions.length ? `WHERE ${allConditions.join(' AND ')}` : '';
 
     const rows = db.prepare(`
       SELECT
@@ -679,7 +689,8 @@ module.exports = (db) => {
   // GET /api/analytics/shell-commands — Top shell command frequency
   router.get('/shell-commands', (req, res) => {
     const { from, to } = req.query;
-    const { where, params } = buildDateFilter(from, to, 't.');
+    const { conditions, params } = buildDateFilter(from, to, 't.');
+    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
     const rows = db.prepare(`
       SELECT 
@@ -688,7 +699,7 @@ module.exports = (db) => {
         COUNT(DISTINCT sc.task_id) as task_count
       FROM task_shell_commands sc
       INNER JOIN tasks t ON t.id = sc.task_id
-      ${where}
+      ${whereClause}
       GROUP BY sc.command_base
       ORDER BY count DESC
       LIMIT 20
@@ -700,7 +711,8 @@ module.exports = (db) => {
   // GET /api/analytics/activity/daily — Daily cost by activity category
   router.get('/activity/daily', (req, res) => {
     const { from, to } = req.query;
-    const { where, params } = buildDateFilter(from, to);
+    const { conditions, params } = buildDateFilter(from, to);
+    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
     const rows = db.prepare(`
       SELECT 
@@ -708,7 +720,7 @@ module.exports = (db) => {
         activity_category as category,
         SUM(total_cost) as cost,
         COUNT(*) as task_count
-      FROM tasks ${where}
+      FROM tasks ${whereClause}
       GROUP BY day, activity_category
       ORDER BY day ASC
     `).all(...params);
@@ -732,8 +744,7 @@ function buildDateFilter(from, to, prefix = '') {
   const params = [];
   if (from) { conditions.push(`${prefix}start_ts >= ?`); params.push(new Date(from).getTime()); }
   if (to)   { conditions.push(`${prefix}start_ts <= ?`); params.push(new Date(to).getTime()); }
-  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-  return { where, params };
+  return { conditions, params };
 }
 
 // Phase 4: helper for the agent lens on tasks-scoped endpoints. Returns
