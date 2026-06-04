@@ -237,14 +237,18 @@ export async function renderCosts(container, dateRange = {}) {
   setTimeout(() => renderCostChart('costByModelChart', models, totalCost), 0);
 }
 
-export async function renderTools(container, dateRange = {}) {
+export async function renderTools(container, dateRange = {}, queryParams = new URLSearchParams()) {
   container.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading tool data...</p></div>`;
   const params = {};
   if (dateRange.from) params.from = dateRange.from;
   if (dateRange.to)   params.to   = dateRange.to;
-  const [data, seqData] = await Promise.all([
+  // Phase 4: read agent filter from URL
+  const urlAgent = queryParams.get('agent');
+  if (urlAgent) params.agent = urlAgent;
+  const [data, seqData, agentsData] = await Promise.all([
     api.tools(params),
-    api.sequences(params)
+    api.sequences(params),
+    api.agents(params).catch(() => ({ agents: [] })),
   ]);
 
   const tools = data.topTools || [];
@@ -253,9 +257,19 @@ export async function renderTools(container, dateRange = {}) {
     <div class="top-bar">
       <div>
         <h1 class="view-title">Tool Usage</h1>
-        <p class="view-subtitle">Agent tool calls across all sessions · <span style="color:var(--accent-2);font-size:11px">Click a bar to see sessions using that tool ↗</span></p>
+        <p class="view-subtitle">Agent tool calls across all sessions${urlAgent ? ` · <span style="color:var(--accent-2)">filtered by: ${escHtml(urlAgent)}</span>` : ''} · <span style="color:var(--accent-2);font-size:11px">Click a bar to see sessions using that tool ↗</span></p>
       </div>
       <!-- date picker injected here -->
+    </div>
+
+    <div class="filters-bar" style="margin-bottom:14px">
+      <span style="font-size:12px;color:var(--text-3)">Agent:</span>
+      <select id="tools-agent-filter" class="filter-select" style="padding:4px 8px">
+        <option value="">All Agents</option>
+        ${(agentsData.agents || []).map(a => `
+          <option value="${escAttr(a.agent)}" ${urlAgent === a.agent ? 'selected' : ''}>${escHtml(a.agent)} (${a.task_count})</option>
+        `).join('')}
+      </select>
     </div>
 
     <div class="panel">
@@ -312,6 +326,16 @@ export async function renderTools(container, dateRange = {}) {
   `;
 
   setTimeout(() => renderToolsChart('toolsChart', tools), 0);
+
+  // Wire agent filter
+  const agentSelect = container.querySelector('#tools-agent-filter');
+  if (agentSelect) {
+    agentSelect.addEventListener('change', (e) => {
+      const val = e.target.value;
+      const newUrl = val ? `#/tools?agent=${encodeURIComponent(val)}` : '#/tools';
+      window.location.hash = newUrl;
+    });
+  }
 }
 
 function fmtK(n) {

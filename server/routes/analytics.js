@@ -348,9 +348,17 @@ module.exports = (db) => {
   });
 
   // GET /api/analytics/tools
+  // Phase 4: optional ?agent= filter (comma-separated, OR) scopes to specific agents.
   router.get('/tools', (req, res) => {
-    const { from, to } = req.query;
-    const { where, params } = buildDateFilter(from, to, 't.');
+    const { from, to, agent } = req.query;
+    const { where, params: dateParams } = buildDateFilter(from, to, 't.');
+    const agentFilter = buildAgentTaskFilter(agent, []);
+
+    const whereParts = [];
+    const allParams = [...dateParams];
+    if (where) whereParts.push(where);
+    if (agentFilter.condition) { whereParts.push(agentFilter.condition); allParams.push(...agentFilter.params); }
+    const whereClause = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
 
     const topTools = db.prepare(`
       SELECT 
@@ -360,11 +368,11 @@ module.exports = (db) => {
         COUNT(DISTINCT e.model_id) as model_count
       FROM events e
       INNER JOIN tasks t ON t.id = e.task_id
-      WHERE e.tool_name IS NOT NULL AND e.tool_name != 'unknown' ${where ? 'AND ' + where.slice(6) : ''}
+      WHERE e.tool_name IS NOT NULL AND e.tool_name != 'unknown' ${whereClause ? 'AND ' + whereClause.slice(6) : ''}
       GROUP BY e.tool_name
       ORDER BY count DESC
       LIMIT 20
-    `).all(...params);
+    `).all(...allParams);
 
     const commandTypes = db.prepare(`
       SELECT 
@@ -372,11 +380,11 @@ module.exports = (db) => {
         COUNT(*) as count
       FROM events e
       INNER JOIN tasks t ON t.id = e.task_id
-      WHERE e.command_text IS NOT NULL ${where ? 'AND ' + where.slice(6) : ''}
+      WHERE e.command_text IS NOT NULL ${whereClause ? 'AND ' + whereClause.slice(6) : ''}
       GROUP BY SUBSTR(e.command_text, 1, 30)
       ORDER BY count DESC
       LIMIT 15
-    `).all(...params);
+    `).all(...allParams);
 
     res.json({ topTools, commandTypes });
   });
