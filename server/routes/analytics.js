@@ -60,25 +60,25 @@ module.exports = (db) => {
     if (agentFilter.condition) { whereParts.push(agentFilter.condition); allParams.push(...agentFilter.params); }
     const whereClause = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
 
-    // When filtering by agent, also restrict tm.mode to the selected agent(s) and
-    // group by (model_id, mode). This ensures:
-    //   1. Each (model, agent) pair gets its own row — no more "MAX(mode)" picking
-    //      the wrong agent badge when a model is shared across agents.
-    //   2. The task_count, cost, and metrics reflect ONLY the selected agent's usage
-    //      of that model, not all agents combined.
-    // Without an agent filter, we keep the original single-row-per-model grouping.
+    // Agent filter behavior:
+    // • With agent filter: group by (model_id, mode) so each (model, agent) pair
+    //   gets its own row with correct per-agent metrics and badge.
+    // • Without agent filter: group by model_id only — one row per model,
+    //   with GROUP_CONCAT showing ALL agents that used it.
     const agentList = agent ? String(agent).split(',').map(s => s.trim()).filter(Boolean) : [];
     const modeFilter = agentList.length
       ? `AND tm.mode IN (${agentList.map(() => '?').join(',')})`
       : '';
     const modeParams = agentList;
     const groupBy = agentList.length ? 'tm.model_id, tm.mode' : 'tm.model_id';
+    const selectMode = agentList.length ? 'tm.mode' : 'MAX(tm.mode) as mode';
 
     const models = db.prepare(`
       SELECT
         tm.model_id,
         MAX(tm.provider_id) as provider_id,
-        tm.mode,
+        ${selectMode},
+        GROUP_CONCAT(DISTINCT tm.mode) as agents,
         COUNT(DISTINCT tm.task_id) as task_count,
         SUM(t.total_cost) as total_cost,
         AVG(t.total_cost) as avg_cost,

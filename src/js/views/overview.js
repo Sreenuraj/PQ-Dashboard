@@ -200,7 +200,10 @@ function paintOverview(container, { state, overview, models, agentsData, reasoni
                   <tr style="cursor:pointer" onclick="window.location.hash='#/sessions?model_id=${encodeURIComponent(m.model_id)}'">
                     <td>
                       <div class="mono" style="color:var(--text)">${m.model_id?.split('/').pop() || 'unknown'}</div>
-                      <div style="font-size:10px;color:var(--text-3)">${m.provider_id || ''}${m.mode ? ' · ' + agentChip(m.mode, { clickable: false, size: 9 }) : ''}</div>
+                      <div style="font-size:10px;color:var(--text-3);display:flex;flex-wrap:wrap;gap:3px;align-items:center;margin-top:2px">
+                        ${m.provider_id || ''}
+                        ${(m.agents || m.mode ? [m.agents ? m.agents.split(',') : [m.mode]].flat().filter(Boolean) : []).map(a => agentChip(a, { clickable: false, size: 9 })).join('')}
+                      </div>
                     </td>
                     <td><strong>${m.task_count}</strong></td>
                     <td style="color:var(--green)">${fmtCost(m.total_cost)}</td>
