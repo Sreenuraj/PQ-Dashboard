@@ -175,7 +175,7 @@ function paintOverview(container, { state, overview, models, agentsData, reasoni
         <span>Top Models${state.agents.length === 1 ? ` <span style="font-weight:400;color:var(--text-3);font-size:11px;margin-left:6px">for ${escHtml(state.agents[0])}</span>` : state.agents.length > 1 ? ` <span style="font-weight:400;color:var(--text-3);font-size:11px;margin-left:6px">for ${escHtml(state.agents.join(' + '))}</span>` : ` <span style="font-weight:400;color:var(--text-3);font-size:11px;margin-left:6px">${sortedModels.length} total</span>`}</span>
         <span class="panel-title-meta">
           ${renderSortBadge(state)}
-          <a href="#/models">View all ↗</a>
+          <a href="#/models${state.agents.length ? '?agent=' + encodeURIComponent(state.agents.join(',')) : ''}">View all ↗</a>
         </span>
       </div>
       <div class="panel-body" style="padding:0">

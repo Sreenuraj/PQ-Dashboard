@@ -3,11 +3,14 @@ import { fmtCost, agentColor } from '../utils.js';
 import { renderRadarChart, renderCostChart, renderToolsChart } from '../components/charts.js';
 import { metricTooltip, hydrateMetricTooltips } from '../components/metric-tooltip.js';
 
-export async function renderModels(container, dateRange = {}) {
+export async function renderModels(container, dateRange = {}, queryParams = new URLSearchParams()) {
   container.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading models...</p></div>`;
   const params = {};
   if (dateRange.from) params.from = dateRange.from;
   if (dateRange.to)   params.to   = dateRange.to;
+  // Phase 4: read agent filter from URL (e.g. ?agent=web_agent,mobile_agent)
+  const urlAgent = queryParams.get('agent');
+  if (urlAgent) params.agent = urlAgent;
   // Phase 4: also fetch the agent-matrix so we can render the Model×Agent heatmap
   const [models, agentMatrix] = await Promise.all([
     api.models(params),
@@ -25,7 +28,7 @@ export async function renderModels(container, dateRange = {}) {
     <div class="top-bar">
       <div>
         <h1 class="view-title">Model Analytics</h1>
-        <p class="view-subtitle">${models.length} distinct models · <span style="color:var(--accent-2);font-size:11px">Click any row to see sessions for that model ↗</span></p>
+        <p class="view-subtitle">${models.length} distinct models${urlAgent ? ` · <span style="color:var(--accent-2)">filtered by: ${escHtml(urlAgent)}</span>` : ''} · <span style="color:var(--accent-2);font-size:11px">Click any row to see sessions for that model ↗</span></p>
       </div>
       <!-- date picker injected here -->
     </div>
