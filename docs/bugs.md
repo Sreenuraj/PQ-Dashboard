@@ -51,3 +51,8 @@
 ## Bug #10: Overview page agent filter chips disappear
 **Status:** Fixed (commit d7c9b75)
 **Description:** In the agent filter in overview page, when selecting an agent (e.g., mobile_agent), all other agent chips disappear.
+
+## Bug #12: Connect Model Efficiency Matrix Radar Chart with Model Performance Table sorting
+**Status:** Open
+**Description:** The Model Efficiency Matrix Radar Chart says "(all models)" but only displays the top 5. We should change the label to "(top 5 models)" and connect it with the Model Performance Table sorting. When the user sorts the table by any column (e.g., Tool Use Efficacy, Reasoning Density, Cost, etc.), the Radar Chart should automatically update to show the top 5 models according to that sort order.
+**Files:** `src/js/views/models.js`, `src/js/components/charts.js`
