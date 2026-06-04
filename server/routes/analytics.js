@@ -60,18 +60,18 @@ module.exports = (db) => {
     if (agentFilter.condition) { whereParts.push(agentFilter.condition); allParams.push(...agentFilter.params); }
     const whereClause = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
 
-    // Agent filter behavior:
-    // • With agent filter: group by (model_id, mode) so each (model, agent) pair
-    //   gets its own row with correct per-agent metrics and badge.
-    // • Without agent filter: group by model_id only — one row per model,
-    //   with GROUP_CONCAT showing ALL agents that used it.
+    // Always group by model_id only — one row per model.
+    // The tm.mode IN (...) filter restricts which agent's usage is counted,
+    // and GROUP_CONCAT(DISTINCT tm.mode) shows which of the selected agents
+    // used this model. This way, selecting mobile_agent + web_agent shows
+    // each model once with both agent chips, not split into separate rows.
     const agentList = agent ? String(agent).split(',').map(s => s.trim()).filter(Boolean) : [];
     const modeFilter = agentList.length
       ? `AND tm.mode IN (${agentList.map(() => '?').join(',')})`
       : '';
     const modeParams = agentList;
-    const groupBy = agentList.length ? 'tm.model_id, tm.mode' : 'tm.model_id';
-    const selectMode = agentList.length ? 'tm.mode' : 'MAX(tm.mode) as mode';
+    const groupBy = 'tm.model_id';
+    const selectMode = 'MAX(tm.mode) as mode';
 
     const models = db.prepare(`
       SELECT
