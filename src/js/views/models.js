@@ -31,7 +31,7 @@ export async function renderModels(container, dateRange = {}) {
     </div>
 
     <div class="panel">
-      <div class="panel-title">Model Efficiency Matrix <span style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">(top 5 models)</span></div>
+      <div class="panel-title">Model Efficiency Matrix <span style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">(all models)</span></div>
       <div class="panel-body">
         <div class="chart-wrap tall">
           <canvas id="modelRadarChart"></canvas>
@@ -87,7 +87,7 @@ export async function renderModels(container, dateRange = {}) {
                     <div style="margin-top:4px;width:${Math.max(costWidth, 2)}%;height:3px;background:var(--accent);border-radius:99px;opacity:0.5"></div>
                   </td>
                   <td style="font-size:12px;color:var(--text-2)">${m.provider_id || '—'}</td>
-                  <td>${m.mode ? `<span class="badge" style="background:${agentColor(m.mode)}22;color:${agentColor(m.mode)};border:1px solid ${agentColor(m.mode)}55;font-size:10px">${m.mode}</span>` : '—'}</td>
+                  <td>${(m.agents || m.mode ? [m.agents ? m.agents.split(',') : [m.mode]].flat().filter(Boolean) : []).map(a => `<span class="badge" style="background:${agentColor(a)}22;color:${agentColor(a)};border:1px solid ${agentColor(a)}55;font-size:10px;margin:1px">${a}</span>`).join('') || '—'}</td>
                   <td><strong>${m.task_count}</strong></td>
                   <td style="color:var(--green);font-weight:600">${fmtCost(m.total_cost)}</td>
                   <td style="color:var(--text-2)">${fmtCost(m.avg_cost)}</td>
@@ -146,21 +146,24 @@ function renderModelAgentHeatmap(matrix) {
   const colWidth = 110;
   const rowHeight = 26;
 
-  const header = matrix.cols.map(c => `
-    <div style="position:sticky;top:0;background:var(--bg-2);padding:4px 6px;width:${colWidth}px;text-align:center;font-size:10px;font-weight:600;color:${agentColor(c)};border-bottom:1px solid var(--border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escAttr(c)}">${c.split('/').pop()}</div>
+  // API returns: rows=agents, cols=models, values[row][col]
+  // We render: rows=models (left labels), cols=agents (top headers)
+  // so the heatmap reads naturally: "which agents use which models"
+  const header = matrix.rows.map(a => `
+    <div style="position:sticky;top:0;background:var(--bg-2);padding:4px 6px;width:${colWidth}px;text-align:center;font-size:10px;font-weight:600;color:${agentColor(a)};border-bottom:1px solid var(--border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escAttr(a)}">${a}</div>
   `).join('');
 
-  const rows = matrix.rows.map((model, rIdx) => {
-    const cells = matrix.cols.map((c, cIdx) => {
+  const rows = matrix.cols.map((model, cIdx) => {
+    const cells = matrix.rows.map((agent, rIdx) => {
       const v = matrix.values[rIdx][cIdx];
       if (!v) return `<div style="width:${colWidth}px;height:${rowHeight}px;background:transparent;border-right:1px solid var(--border);border-bottom:1px solid var(--border)"></div>`;
       const intensity = v / max;
       const bg = `rgba(91,158,245,${0.15 + intensity * 0.6})`;
-      return `<div title="${escAttr(model)} × ${escAttr(c)}: ${v} sessions" onclick="event.stopPropagation();window.location.hash='#/sessions?model_id=${encodeURIComponent(model)}&agent=${encodeURIComponent(c)}'" style="cursor:pointer;width:${colWidth}px;height:${rowHeight}px;background:${bg};border-right:1px solid var(--border);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;color:${intensity > 0.5 ? 'var(--text)' : 'var(--text-2)'}">${v}</div>`;
+      return `<div title="${escAttr(model)} × ${escAttr(agent)}: ${v} sessions" onclick="event.stopPropagation();window.location.hash='#/sessions?model_id=${encodeURIComponent(model)}&agent=${encodeURIComponent(agent)}'" style="cursor:pointer;width:${colWidth}px;height:${rowHeight}px;background:${bg};border-right:1px solid var(--border);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;color:${intensity > 0.5 ? 'var(--text)' : 'var(--text-2)'}">${v}</div>`;
     }).join('');
     return `
       <div style="display:flex">
-        <div style="position:sticky;left:0;background:var(--bg-2);padding:4px 8px;width:160px;font-size:11px;color:var(--text);border-right:1px solid var(--border);border-bottom:1px solid var(--border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escAttr(matrix.rows[rIdx])}">${matrix.rows[rIdx].split('/').pop()}</div>
+        <div style="position:sticky;left:0;background:var(--bg-2);padding:4px 8px;width:160px;font-size:11px;color:var(--text);border-right:1px solid var(--border);border-bottom:1px solid var(--border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escAttr(matrix.cols[cIdx])}">${model.split('/').pop()}</div>
         ${cells}
       </div>
     `;
