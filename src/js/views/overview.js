@@ -59,6 +59,9 @@ export async function renderOverview(container, dateRange = {}) {
 
     // Re-render handler: chip clicks mutate state.agents and re-fetch.
     container.addEventListener('click', async (e) => {
+      // Only handle clicks if we are actually on the overview page
+      if (window.location.hash.replace('#/', '').split('?')[0] !== 'overview') return;
+
       const chip = e.target.closest('[data-agent-chip]');
       if (chip) {
         const agent = chip.dataset.agentChip;
