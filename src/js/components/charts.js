@@ -30,27 +30,25 @@ const THEME_COLORS = [
   'rgba(34, 197, 94, 1)',    // Green
 ];
 
-/** Radar chart for model efficiency matrix */
+/** Radar chart for model efficiency matrix — aligned with PQ-Score dimensions */
 export function renderRadarChart(canvasId, models) {
   const ctx = document.getElementById(canvasId);
   if (!ctx) return;
 
   const topModels = models.slice(0, 5);
-  const maxTasks = Math.max(...models.map(m => m.task_count), 1);
   const maxAvgCost = Math.max(...models.map(m => m.avg_cost || 0), 0.001);
 
   const datasets = topModels.map((m, i) => {
     const color = THEME_COLORS[i % THEME_COLORS.length];
     const completionRate = m.task_count ? (m.completed / m.task_count * 100) : 0;
-    const cacheHit = (m.total_tokens_in + m.total_cache_reads) > 0
-      ? (m.total_cache_reads / (m.total_tokens_in + m.total_cache_reads) * 100) : 0;
-    const usage = (m.task_count / maxTasks) * 100;
-    const reasoning = m.task_count ? (m.with_reasoning / m.task_count * 100) : 0;
+    const errorRecovery = m.avg_err ?? 0;
+    const tueScore = m.avg_tue ?? 0;
     const costScore = 100 - ((m.avg_cost || 0) / maxAvgCost * 100);
+    const contextEff = m.avg_ce ?? 0;
 
     return {
       label: m.model_id.split('/').pop(),
-      data: [completionRate, cacheHit, usage, reasoning, costScore],
+      data: [completionRate, errorRecovery, tueScore, costScore, contextEff],
       backgroundColor: color.replace('1)', '0.15)'),
       borderColor: color,
       borderWidth: 2,
@@ -61,7 +59,7 @@ export function renderRadarChart(canvasId, models) {
   return new Chart(ctx, {
     type: 'radar',
     data: {
-      labels: ['Completion Rate', 'Cache Efficiency', 'Usage Frequency', 'Reasoning Rate', 'Cost Efficiency'],
+      labels: ['Completion Rate', 'Error Recovery', 'Tool Use Efficacy', 'Cost Efficiency', 'Context Efficiency'],
       datasets
     },
     options: {

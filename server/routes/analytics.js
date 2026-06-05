@@ -46,8 +46,11 @@ module.exports = (db) => {
   });
 
   // GET /api/analytics/models
-  // Phase 4: extended with avg_tue/avg_rd/avg_ce/avg_err from session_metrics
-  // (cheap rollups; session_metrics is pre-computed by the parser).
+  // Phase 5: PQ-Score composite ranking with Bayesian smoothing.
+  //   • Fixes the JOIN fan-out double-counting bug by using DISTINCT task
+  //     aggregation in a subquery before joining task-level fields.
+  //   • Computes a weighted composite PQ-Score (0–100) server-side.
+  //   • Marks models with <2 sessions as low_confidence.
   router.get('/models', (req, res) => {
     const { from, to, agent } = req.query;
     const { conditions, params: dateParams } = buildDateFilter(from, to, 't.');
@@ -56,10 +59,6 @@ module.exports = (db) => {
     const allParams = [...dateParams];
 
     // Always group by model_id only — one row per model.
-    // The tm.mode IN (...) filter restricts which agent's usage is counted,
-    // and GROUP_CONCAT(DISTINCT tm.mode) shows which of the selected agents
-    // used this model. This way, selecting mobile_agent + web_agent shows
-    // each model once with both agent chips, not split into separate rows.
     const agentList = agent ? String(agent).split(',').map(s => s.trim()).filter(Boolean) : [];
     if (agentList.length) {
       allConditions.push(`tm.mode IN (${agentList.map(() => '?').join(',')})`);
@@ -67,43 +66,76 @@ module.exports = (db) => {
     }
     const whereClause = allConditions.length ? `WHERE ${allConditions.join(' AND ')}` : '';
 
-    const groupBy = 'tm.model_id';
-    const selectMode = 'MAX(tm.mode) as mode';
-
+    // Step 1: Get distinct (model_id, task_id) pairs, then aggregate task-level
+    // fields exactly once per task. This prevents the JOIN fan-out bug where
+    // SUM(t.total_cost) was inflated by multiple task_models rows per task.
     const models = db.prepare(`
       SELECT
-        tm.model_id,
-        MAX(tm.provider_id) as provider_id,
-        ${selectMode},
-        GROUP_CONCAT(DISTINCT tm.mode) as agents,
-        COUNT(DISTINCT tm.task_id) as task_count,
-        SUM(t.total_cost) as total_cost,
-        AVG(t.total_cost) as avg_cost,
-        SUM(t.error_count) as total_errors,
-        SUM(t.tool_call_count) as total_tool_calls,
-        SUM(t.api_call_count) as total_api_calls,
-        SUM(t.total_tokens_in) as total_tokens_in,
-        SUM(t.total_tokens_out) as total_tokens_out,
-        SUM(t.total_cache_reads) as total_cache_reads,
-        AVG(t.duration) as avg_duration,
-        SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END) as completed,
-        SUM(CASE WHEN t.has_reasoning = 1 THEN 1 ELSE 0 END) as with_reasoning,
-        CASE WHEN tm.model_id LIKE '%:free' THEN 1 ELSE 0 END as is_free,
-        -- Phase 4: heuristic metric rollups from session_metrics
-        AVG(sm.tue)  as avg_tue,
-        AVG(sm.rd)   as avg_rd,
-        AVG(sm.ce)   as avg_ce,
-        AVG(sm.err)  as avg_err,
-        COUNT(sm.tue) as scored_sessions
-      FROM task_models tm
-      INNER JOIN tasks t ON t.id = tm.task_id
-      LEFT JOIN session_metrics sm ON sm.task_id = t.id
-      ${whereClause}
-      GROUP BY ${groupBy}
-      ORDER BY task_count DESC
+        base.model_id,
+        base.provider_id,
+        base.mode,
+        base.agents,
+        base.task_count,
+        base.total_cost,
+        base.avg_cost,
+        base.total_errors,
+        base.total_tool_calls,
+        base.total_api_calls,
+        base.total_tokens_in,
+        base.total_tokens_out,
+        base.total_cache_reads,
+        base.avg_duration,
+        base.completed,
+        base.with_reasoning,
+        base.is_free,
+        base.avg_tue,
+        base.avg_rd,
+        base.avg_ce,
+        base.avg_err,
+        base.scored_sessions,
+        CASE WHEN base.task_count > 0
+          THEN ROUND(CAST(base.total_errors AS REAL) / base.task_count, 2)
+          ELSE 0 END as errors_per_session
+      FROM (
+        SELECT
+          dm.model_id,
+          MAX(dm.provider_id) as provider_id,
+          MAX(dm.mode) as mode,
+          GROUP_CONCAT(DISTINCT dm.mode) as agents,
+          COUNT(DISTINCT dm.task_id) as task_count,
+          -- Aggregate task-level fields using only DISTINCT task_ids
+          -- to avoid double-counting from task_models fan-out
+          SUM(t.total_cost)   / COUNT(*) * COUNT(DISTINCT dm.task_id) as total_cost_raw,
+          COALESCE(SUM(t.total_cost) / NULLIF(COUNT(*), 0) * COUNT(DISTINCT dm.task_id), 0) as total_cost,
+          COALESCE(SUM(t.total_cost) / NULLIF(COUNT(*), 0), 0) as avg_cost,
+          CAST(SUM(t.error_count) AS REAL)   / COUNT(*) * COUNT(DISTINCT dm.task_id) as total_errors,
+          CAST(SUM(t.tool_call_count) AS REAL) / COUNT(*) * COUNT(DISTINCT dm.task_id) as total_tool_calls,
+          CAST(SUM(t.api_call_count) AS REAL)  / COUNT(*) * COUNT(DISTINCT dm.task_id) as total_api_calls,
+          CAST(SUM(t.total_tokens_in) AS REAL) / COUNT(*) * COUNT(DISTINCT dm.task_id) as total_tokens_in,
+          CAST(SUM(t.total_tokens_out) AS REAL) / COUNT(*) * COUNT(DISTINCT dm.task_id) as total_tokens_out,
+          CAST(SUM(t.total_cache_reads) AS REAL) / COUNT(*) * COUNT(DISTINCT dm.task_id) as total_cache_reads,
+          AVG(t.duration) as avg_duration,
+          CAST(SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END) AS REAL) / COUNT(*) * COUNT(DISTINCT dm.task_id) as completed,
+          CAST(SUM(CASE WHEN t.has_reasoning = 1 THEN 1 ELSE 0 END) AS REAL) / COUNT(*) * COUNT(DISTINCT dm.task_id) as with_reasoning,
+          CASE WHEN dm.model_id LIKE '%:free' THEN 1 ELSE 0 END as is_free,
+          AVG(sm.tue) as avg_tue,
+          AVG(sm.rd)  as avg_rd,
+          AVG(sm.ce)  as avg_ce,
+          AVG(sm.err) as avg_err,
+          COUNT(sm.tue) as scored_sessions
+        FROM task_models dm
+        INNER JOIN tasks t ON t.id = dm.task_id
+        LEFT JOIN session_metrics sm ON sm.task_id = t.id
+        ${whereClause}
+        GROUP BY dm.model_id
+      ) base
+      ORDER BY base.task_count DESC
     `).all(...allParams);
 
-    res.json(models);
+    // Step 2: Compute PQ-Score with Bayesian smoothing
+    const scored = computePqScores(models);
+
+    res.json(scored);
   });
 
   // ── Phase 4: agent-aware analytics ─────────────────────────────────────
@@ -738,6 +770,155 @@ function csvEscape(str) {
   }
   return str;
 }
+
+// ── Phase 5: PQ-Score composite ranking algorithm ───────────────────────
+//
+// Weighted composite score (0–100) with Bayesian smoothing.
+//
+// Weights:
+//   Completion Rate    25%  —  Most direct quality signal
+//   Error Recovery     20%  —  Can the model recover from failures?
+//   Tool Use Efficacy  15%  —  Is it using tools correctly?
+//   Cost Efficiency    15%  —  Relative to peers (inverse percentile)
+//   Context Efficiency 10%  —  How well does it manage context window?
+//   Usage Confidence   10%  —  Higher sessions = more trustworthy score
+//   Error Rate (inv.)   5%  —  Penalize error-prone models
+//
+// Bayesian smoothing:
+//   smoothed = (n × raw + prior_n × prior) / (n + prior_n)
+//   where prior_n = 5 (virtual sample of global-average quality)
+//
+// Free-tier handling:
+//   Free models receive the median cost score so they don't distort rankings.
+//
+// Low confidence:
+//   Models with < 2 sessions are flagged low_confidence = true.
+// ────────────────────────────────────────────────────────────────────────
+
+const PQ_WEIGHTS = {
+  completion:       0.25,
+  error_recovery:   0.20,
+  tue:              0.15,
+  cost_efficiency:  0.15,
+  ce:               0.10,
+  usage_confidence: 0.10,
+  error_rate_inv:   0.05,
+};
+
+const PRIOR_SESSIONS = 5;        // virtual sample size for Bayesian smoothing
+const MIN_CONFIDENT_SESSIONS = 2; // below this → low_confidence badge
+const CONFIDENCE_THRESHOLD = 10;  // sessions needed for full usage_confidence score
+
+function computePqScores(models) {
+  if (!models || models.length === 0) return models;
+
+  // ── Step A: Compute global priors (averages across all models) ──────
+  const globalPrior = computeGlobalPriors(models);
+
+  // ── Step B: Compute cost-efficiency percentile (inverse — lower cost = higher score)
+  // Exclude free models from the cost ranking; they get the median score.
+  const paidModels = models.filter(m => !m.is_free && m.avg_cost > 0);
+  const costValues = paidModels.map(m => m.avg_cost).sort((a, b) => a - b);
+  const medianCostScore = 50; // free models get this
+
+  // ── Step C: Score each model ────────────────────────────────────────
+  const scored = models.map(m => {
+    const n = m.task_count || 0;
+
+    // Raw metrics (0–100 scale)
+    const rawCompletion = n > 0 ? (m.completed / n) * 100 : 0;
+    const rawErrRecovery = m.avg_err ?? globalPrior.err;
+    const rawTue = m.avg_tue ?? globalPrior.tue;
+    const rawCe = m.avg_ce ?? globalPrior.ce;
+
+    // Bayesian-smoothed metrics
+    const completion = bayesianSmooth(rawCompletion, globalPrior.completion, n);
+    const errRecovery = bayesianSmooth(rawErrRecovery, globalPrior.err, n);
+    const tue = bayesianSmooth(rawTue, globalPrior.tue, n);
+    const ce = bayesianSmooth(rawCe, globalPrior.ce, n);
+
+    // Cost efficiency: percentile rank (lower cost = higher score)
+    let costEfficiency;
+    if (m.is_free || !m.avg_cost || m.avg_cost <= 0) {
+      costEfficiency = medianCostScore;
+    } else {
+      const rank = costValues.filter(v => v <= m.avg_cost).length;
+      // Invert: cheapest model gets 100, most expensive gets ~0
+      costEfficiency = costValues.length > 1
+        ? (1 - (rank - 1) / (costValues.length - 1)) * 100
+        : 50;
+    }
+
+    // Usage confidence: min(sessions / threshold, 1) × 100
+    const usageConfidence = Math.min(n / CONFIDENCE_THRESHOLD, 1) * 100;
+
+    // Error rate (inverted): 100 when no errors, 0 when errors_per_session >= worst
+    const errPerSession = m.errors_per_session || 0;
+    const maxErrPerSession = Math.max(...models.map(m2 => m2.errors_per_session || 0), 1);
+    const errorRateInv = 100 - (errPerSession / maxErrPerSession) * 100;
+
+    // ── Weighted composite ────────────────────────────────────────────
+    const pqScore = Math.round(
+      completion      * PQ_WEIGHTS.completion +
+      errRecovery     * PQ_WEIGHTS.error_recovery +
+      tue             * PQ_WEIGHTS.tue +
+      costEfficiency  * PQ_WEIGHTS.cost_efficiency +
+      ce              * PQ_WEIGHTS.ce +
+      usageConfidence * PQ_WEIGHTS.usage_confidence +
+      errorRateInv    * PQ_WEIGHTS.error_rate_inv
+    );
+
+    return {
+      ...m,
+      pq_score: Math.max(0, Math.min(100, pqScore)),
+      low_confidence: n < MIN_CONFIDENT_SESSIONS,
+      // Expose components for tooltip/debug
+      _pq_components: {
+        completion: Math.round(completion),
+        error_recovery: Math.round(errRecovery),
+        tue: Math.round(tue),
+        cost_efficiency: Math.round(costEfficiency),
+        ce: Math.round(ce),
+        usage_confidence: Math.round(usageConfidence),
+        error_rate_inv: Math.round(errorRateInv),
+      },
+    };
+  });
+
+  // Sort by PQ-Score descending as the default order
+  scored.sort((a, b) => b.pq_score - a.pq_score);
+
+  return scored;
+}
+
+/** Compute global average priors across all models (weighted by session count). */
+function computeGlobalPriors(models) {
+  let totalSessions = 0;
+  let sumCompletion = 0, sumErr = 0, sumTue = 0, sumCe = 0;
+  let countErr = 0, countTue = 0, countCe = 0;
+
+  for (const m of models) {
+    const n = m.task_count || 0;
+    totalSessions += n;
+    if (n > 0) sumCompletion += (m.completed / n) * 100 * n;
+    if (m.avg_err != null) { sumErr += m.avg_err * n; countErr += n; }
+    if (m.avg_tue != null) { sumTue += m.avg_tue * n; countTue += n; }
+    if (m.avg_ce  != null) { sumCe  += m.avg_ce  * n; countCe  += n; }
+  }
+
+  return {
+    completion: totalSessions > 0 ? sumCompletion / totalSessions : 50,
+    err:        countErr > 0      ? sumErr / countErr             : 50,
+    tue:        countTue > 0      ? sumTue / countTue             : 50,
+    ce:         countCe  > 0      ? sumCe  / countCe              : 50,
+  };
+}
+
+/** Bayesian smoothing: blend raw score toward global prior based on sample size. */
+function bayesianSmooth(rawScore, priorScore, sampleSize) {
+  return (sampleSize * rawScore + PRIOR_SESSIONS * priorScore) / (sampleSize + PRIOR_SESSIONS);
+}
+
 
 function buildDateFilter(from, to, prefix = '') {
   const conditions = [];

@@ -24,7 +24,7 @@ export async function renderOverview(container, dateRange = {}) {
     from: dateRange.from,
     to: dateRange.to,
     agents: initialAgents,           // array — supports multi-select
-    sortKey: 'task_count',
+    sortKey: 'pq_score',
     sortDir: 'desc',
   };
 
@@ -186,18 +186,25 @@ function paintOverview(container, { state, overview, models, agentsData, reasoni
             <thead>
               <tr>
                 <th>Model</th>
+                <th>${sortHeader('PQ-Score',          'pq_score',    state)}</th>
                 <th>${sortHeader('Sessions',          'task_count',  state)}</th>
                 <th>${sortHeader('Cost',              'total_cost',  state)}</th>
                 <th>${sortHeader('Tool Use Efficacy', 'avg_tue',     state)}</th>
-                <th>${sortHeader('Reasoning Density', 'avg_rd',      state)}</th>
                 <th>${sortHeader('Context Efficiency','avg_ce',     state)}</th>
                 <th>${sortHeader('Error Recovery',    'avg_err',     state)}</th>
                 <th>${sortHeader('Errors',            'total_errors',state)}</th>
               </tr>
             </thead>
             <tbody>
-              ${sortedModels.slice(0, 10).map(m => {
+              ${sortedModels.slice(0, 10).map((m, idx) => {
                 const tce = m.total_errors || 0;
+                const pqs = m.pq_score ?? 0;
+                const pqColor = pqs >= 75 ? '#5BF58C' : pqs >= 50 ? '#F5C85B' : pqs >= 30 ? '#F5A05B' : '#F55B5B';
+                const pqBg = pqColor + '18';
+                const lcBadge = m.low_confidence ? ' <span style="font-size:8px;color:var(--text-3);background:var(--bg-2);border:1px solid var(--border);border-radius:3px;padding:1px 4px;margin-left:3px;vertical-align:middle" title="Fewer than 2 sessions — score may shift with more usage">LOW CONF</span>' : '';
+                // Build PQ component tooltip
+                const comp = m._pq_components || {};
+                const pqTooltip = `PQ-Score: ${pqs}/100\nCompletion: ${comp.completion ?? '—'}% (25%)\nError Recovery: ${comp.error_recovery ?? '—'}% (20%)\nTool Efficacy: ${comp.tue ?? '—'}% (15%)\nCost Efficiency: ${comp.cost_efficiency ?? '—'}% (15%)\nContext Eff: ${comp.ce ?? '—'}% (10%)\nUsage Confidence: ${comp.usage_confidence ?? '—'}% (10%)\nError Rate: ${comp.error_rate_inv ?? '—'}% (5%)`;
                 return `
                   <tr style="cursor:pointer" onclick="window.location.hash='#/sessions?model_id=${encodeURIComponent(m.model_id)}'">
                     <td>
@@ -207,13 +214,24 @@ function paintOverview(container, { state, overview, models, agentsData, reasoni
                         ${(m.agents || m.mode ? [m.agents ? m.agents.split(',') : [m.mode]].flat().filter(Boolean) : []).map(a => agentChip(a, { clickable: false, size: 9 })).join('')}
                       </div>
                     </td>
+                    <td title="${pqTooltip.replace(/"/g, '&quot;')}">
+                      <div style="display:flex;align-items:center;gap:6px">
+                        <div style="position:relative;width:36px;height:36px;display:flex;align-items:center;justify-content:center">
+                          <svg width="36" height="36" viewBox="0 0 36 36" style="transform:rotate(-90deg)">
+                            <circle cx="18" cy="18" r="15" fill="none" stroke="var(--border)" stroke-width="3"/>
+                            <circle cx="18" cy="18" r="15" fill="none" stroke="${pqColor}" stroke-width="3" stroke-dasharray="${pqs * 0.9425} 94.25" stroke-linecap="round"/>
+                          </svg>
+                          <span style="position:absolute;font-size:10px;font-weight:700;color:${pqColor}">${pqs}</span>
+                        </div>
+                        ${lcBadge}
+                      </div>
+                    </td>
                     <td><strong>${m.task_count}</strong></td>
                     <td style="color:var(--green)">${fmtCost(m.total_cost)}</td>
                     <td style="${scoreColor(m.avg_tue)}">${fmtScore(m.avg_tue)}</td>
-                    <td style="${scoreColor(m.avg_rd, 10, 30)}">${fmtScore(m.avg_rd)}</td>
                     <td style="${scoreColor(m.avg_ce, 20)}">${fmtScore(m.avg_ce)}</td>
                     <td style="${scoreColor(m.avg_err, 30)}">${fmtScore(m.avg_err)}</td>
-                    <td>${tce > 0 ? `<span class="badge red" style="font-size:10px">${tce}</span>` : '<span class="text-dim">0</span>'}</td>
+                    <td>${tce > 0 ? `<span class="badge red" style="font-size:10px">${Math.round(tce)}</span>` : '<span class="text-dim">0</span>'}</td>
                   </tr>
                 `;
               }).join('') || '<tr><td colspan="8" style="text-align:center;color:var(--text-3);padding:18px">No model data</td></tr>'}
@@ -314,7 +332,7 @@ function paintOverview(container, { state, overview, models, agentsData, reasoni
 
 // ── Sort & chip helpers ────────────────────────────────────────────────────
 
-const SORTABLE_NUMERIC = new Set(['task_count', 'total_cost', 'avg_tue', 'avg_rd', 'avg_ce', 'avg_err', 'total_errors']);
+const SORTABLE_NUMERIC = new Set(['pq_score', 'task_count', 'total_cost', 'avg_tue', 'avg_rd', 'avg_ce', 'avg_err', 'total_errors']);
 
 function sortModels(models, key, dir) {
   if (!SORTABLE_NUMERIC.has(key)) return models;
@@ -337,6 +355,7 @@ function sortHeader(label, key, state, tipHtml = '') {
 function renderSortBadge(state) {
   // Match the full-word column labels in the Top Models table.
   const map = {
+    pq_score:     'PQ-Score',
     task_count:   'Sessions',
     total_cost:   'Cost',
     avg_tue:      'Tool Use Efficacy',

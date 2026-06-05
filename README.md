@@ -1,98 +1,267 @@
 # PQ Dashboard
 
-A robust, incremental, and config-driven observability dashboard for analyzing your PostQode AI agent task history. This dashboard provides insightful behavioral analytics, timeline views, error classification, model economics, and tool usage statistics entirely locally.
+A local-first observability dashboard for analyzing PostQode AI agent task history. PQ Dashboard provides behavioral analytics, model ranking, agent-aware filtering, error classification, tool usage statistics, and deterministic evaluation metrics — all computed from log traces without LLM judge calls.
+
+---
 
 ## Features
-- **Incremental Parsing:** Only new or changed tasks are processed when you click "Refresh Data", leveraging a lightweight, high-performance SQLite caching layer.
-- **Config-Driven Source Paths:** Centralized configuration via `pq-config.yaml` lets you manage multiple IDE sources (VS Code, VS Code Insiders, Cursor, etc.).
-- **Behavioral & Reasoning Analytics:** Track AI task completions vs interruptions, deep error classification (API failures, tool errors), and quantify the exact metric impact of 🧠 reasoning traces on success and cost metrics.
-- **Interactive Timelines & Sequences:** Drill down into a per-task view revealing step-by-step reasoning traces, API calls, and tool usage sequences.
-- **Advanced Visualizations:** Includes a D3.js powered *Activity Flow* Sankey diagram tracing task execution, and Chart.js powered *Model Efficiency Matrices* and *Error Cascades*.
-- **Activity Intelligence Page:** A terminal-style analytics view that groups sessions into deterministic activity categories such as testing, coding, debugging, and exploration. It surfaces cost by activity, one-shot edit success rate, retry cycles, shell-command frequency, and daily activity trends directly from stored task/event traces.
-- **Agentic Evaluation (Eval):** Deterministic, heuristic-backed evaluation metrics derived inspired by frameworks like DeepEval and Raga.ai Catalyst. Automatically calculate *Tool Utilization Efficacy (TUE)*, *Error Recovery Rate (ERR)*, *Reasoning Density (RD)*, and *Context Efficiency (CE)* natively from log traces without expensive secondary LLM judge calls.
-- **Baseline Sessions & Behavioral Testing:** Mark a completed session as a baseline reference, extract its prompt chain, expected tools, tool sequence, behavior contract, and operational metrics, then test other sessions against that known-good execution.
-- **Task Investigation View:** A powerful deep-dive observability trace viewer. Intelligently displays full tool invocations, logic breakdowns, and payloads. Features an integrated live search across all task events (prompts, responses, errors, tools).
-- **Task Comparison Dashboard:** Choose multiple tasks from your Session index and run side-by-side comparisons of execution variables, cost/duration bars, automated agentic scorecard metrics, behavioral test results, and tool sequences.
-- **PostQode Native Aesthetic:** Carefully matched styling to the modern PostQode dark theme for visual seamlessness.
+
+### Core Analytics
+- **Incremental Parsing** — Only new or changed tasks are processed on refresh. A lightweight SQLite caching layer ensures sub-second reloads even with thousands of sessions.
+- **Config-Driven Sources** — Centralized `pq-config.yaml` manages multiple IDE sources (VS Code, VS Code Insiders, Cursor, etc.) with per-source enable/disable.
+- **Interactive Timelines** — Per-task drill-down revealing step-by-step reasoning traces, API calls, tool usage sequences, and agent handoffs.
+- **Advanced Visualizations** — D3.js Sankey diagram for task execution flow, Chart.js radar charts for model efficiency, and heatmaps for model × agent cross-analysis.
+
+### Agent-Aware Analytics
+PQ Dashboard treats agents as first-class entities. Every session records which agent(s) handled the work (`web_agent`, `plan`, `agent`, `mobile_agent`, etc.), and the dashboard surfaces this across every view:
+
+- **Agent Master Filter** — A chip-based filter bar on the Overview page scopes every stat, panel, and chart to specific agents. Supports multi-select.
+- **Multi-Agent Sessions** — Sessions spanning multiple agents (e.g. `web_agent → plan → plan → agent`) are identified automatically. The full agent sequence is preserved, including re-entries with different models.
+- **Per-Agent Breakdowns** — Top models per agent, errors per agent, activity by agent, and longest sessions per agent — answering questions like *"which model works best with web_agent?"*
+- **Model × Agent Heatmap** — A cross-pivot matrix showing task counts for every model/agent combination. Click any cell to drill into those sessions.
+- **Agent Timeline Band** — A color-coded band on the Timeline view shows which agent was active at every point, making handoffs visually obvious.
+- **Agent Color Palette** — Stable, distinct colors per agent across every page. Known agents have hardcoded brand colors; unknown agents get hash-derived palette colors.
+
+### Model Ranking — PQ-Score Algorithm
+
+The dashboard computes a **PQ-Score (0–100)** for every model — a weighted composite that balances quality, cost, reliability, and usage confidence. This replaces naive session-count ordering to surface truly top-performing models.
+
+#### How PQ-Score Works
+
+| Component | Weight | What It Measures |
+|-----------|--------|------------------|
+| **Completion Rate** | 25% | Did the model finish the job? `completed / total_sessions × 100` |
+| **Error Recovery** | 20% | Can the model recover from failures? `100` if completed despite errors, `0` if failed after errors |
+| **Tool Use Efficacy** | 15% | Is it using tools correctly? `100 × (tool_calls − tool_failures) / tool_calls` |
+| **Cost Efficiency** | 15% | Inverse percentile rank of average cost per session (cheapest = 100) |
+| **Context Efficiency** | 10% | How well does it manage the context window? `100 − avg(context_pct)` |
+| **Usage Confidence** | 10% | More sessions = more trustworthy score. `min(sessions / 10, 1) × 100` |
+| **Error Rate (inverse)** | 5% | Penalizes error-prone models. `100 − (errors_per_session / max) × 100` |
+
+#### Bayesian Smoothing
+
+To prevent a model with 1 perfect session from outranking a model with 30 good sessions, PQ-Score applies **Bayesian smoothing**:
+
+```
+smoothed = (sessions × raw_score + 5 × global_avg) / (sessions + 5)
+```
+
+A model with 1 session at 100% completion gets pulled toward the global average, while a model with 30 sessions at 80% stays close to 80%. The `5` acts as a "virtual sample" of average-quality data.
+
+#### Fairness Safeguards
+
+- **Low Confidence Flag** — Models with fewer than 2 sessions show a `LOW CONF` badge. They're ranked but visually distinguished so you know the score is provisional.
+- **Free-Tier Handling** — Models with `:free` suffix receive the median cost score (50) instead of infinite cost efficiency, preventing distortion.
+- **Score Breakdown Tooltip** — Hover over any PQ-Score to see the exact contribution of each component.
+
+#### Example Ranking
+
+With real data, a model like `grok-4.1-fast` (PQ=80) can outrank `claude-sonnet-4.5` (PQ=75) despite having fewer total sessions — because its much lower cost ($0.05/session vs $1.14/session), decent completion rate, and high usage confidence produce a better composite score.
+
+### Heuristic Evaluation Metrics
+
+Four deterministic metrics are computed per session from log traces — no LLM judge calls required. These are defined once in `server/analytics/metrics.js` and used consistently across all views.
+
+| Metric | Short | Formula | Interpretation |
+|--------|-------|---------|----------------|
+| **Tool Use Efficacy** | TUE | `100 × (tool_calls − tool_failures) / tool_calls` | Higher = tools used more effectively. 100 when no tool calls. |
+| **Reasoning Density** | RD | `100 × reasoning_events / (reasoning + API + tool events)` | Higher = agent paused to think more often before acting. |
+| **Context Efficiency** | CE | `100 − avg(context_pct)` | Higher = context window used more sparingly. 100 = never filled. |
+| **Error Recovery** | ERR | `100` if no errors or completed despite errors, else `0` | Completed sessions always score 100, even with many errors. |
+
+These metrics power the PQ-Score algorithm, the radar chart on the Models page, sortable columns on Overview and Models, and per-session evaluation reports.
+
+### Activity Intelligence
+- **Activity Classification** — Deterministic heuristics classify sessions into categories (coding, debugging, testing, exploration, planning, etc.) from tool usage, shell commands, and prompt keywords.
+- **One-Shot Rate** — Percentage of edit turns that succeeded on the first try, surfaced per activity category.
+- **Retry Cycles & Shell Commands** — Track how often the agent retried operations and which shell commands were executed most frequently.
+- **Daily Activity Trends** — Cost and session counts broken down by activity category over time.
+
+### Session Testing & Baselines
+
+A standalone behavioral testing workflow for managing baselines, customizing execution boundaries, tracking agent reliability, and scoring completions:
+
+- **Editable Baselines** — Create standalone baselines from any session. The Baseline Editor provides a dual-list curator for expected/excluded tools, required/excluded keywords, essential step toggles, and file scope enforcement.
+- **Essential vs Optional** — Each expected tool and contract keyword can be marked **Essential** (must be present — missing causes a score penalty) or **Optional** (noted but no penalty). Essential items show a ★ badge.
+- **Excluded Files** — Define glob patterns (`**/.env`, `*.key`, `src/internal/**`) for files the agent should not access. Violations incur scope penalties.
+- **Enrichment & Merging** — Compare any session trace against a baseline to discover new tools/keywords, then selectively merge them back.
+- **Session Health Tracking** — Automatically tracks user interruptions and context resets, applying tiered behavioral penalties.
+- **Star Ratings** — Rate task execution quality on a 1–5 scale. The rating blends into the overall score (70% automated / 30% human judgment).
+
+#### Behavioral Test Patterns
+
+Six deterministic patterns evaluated natively from log traces:
+
+| Pattern | What It Checks |
+|---------|---------------|
+| **Tool Invocation Assertion (TIA)** | Essential tools called, excluded tools avoided, unexpected tools flagged |
+| **Behavior Contract Validation (BCV)** | Essential keywords present, code blocks exist, length bounds met, forbidden keywords absent |
+| **Multi-Step Trace Verification (MTV)** | Coverage of essential steps, tool usage efficiency vs baseline |
+| **Boundary/Scope Enforcement (BSE)** | Command safety (no `rm -rf /`), max tool footprint, excluded file access violations |
+| **Error Recovery Coherence (ERC)** | Agent adaptation after errors, blind retry loop detection |
+| **Context Efficiency Compliance (CEC)** | Context usage relative to token limits |
+
+#### Key Views
+
+| Route | Purpose |
+|-------|---------|
+| `#/baselines` | Manage baselines, edit tags, copy prompt chains |
+| `#/baseline-editor?id=<id>` | Edit tools, keywords, essential steps, excluded files |
+| `#/baseline-enrich?id=<id>` | Compare a session against a baseline, merge diffs |
+| `#/test?task=<id>` | Run behavioral tests for a task |
+| `#/deepcompare?tasks=<id1>,<id2>` | Side-by-side comparison with ranked performance index |
+
+### Task Investigation & Comparison
+- **Investigation View** — Full observability trace viewer with tool invocations, logic breakdowns, payloads, and live search across all events. Color-coded by active agent.
+- **Task Comparison** — Side-by-side comparison of cost/duration, automated scorecard metrics, behavioral test results, and tool sequences.
+- **Deep Compare** — Multi-task comparison with baseline switching, interactive detail modals, and ranked performance bars.
+
+---
 
 ## Prerequisites
-- **Node.js** (v18+ recommended)
-- **npm** (comes with Node)
+
+- **Node.js** v18+
+- **npm** (bundled with Node)
 
 ## Installation
-1. Clone this repository or navigate to this folder.
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-3. Check and adjust paths within `pq-config.yaml` to ensure your target IDEs are enabled.
-
-## Running the Dashboard
-With simple wrapper scripts, you can control the Node.js backend and Vite frontend effortlessly:
 
 ```bash
-# Start backend, frontend, and open dashboard in your default browser
+git clone <repo-url> && cd PQ-Dashboard
+npm install
+```
+
+Check and adjust IDE source paths in `pq-config.yaml` to point to your PostQode task directories.
+
+## Running the Dashboard
+
+```bash
+# Start backend + frontend + open browser
 ./start.sh
 ```
 
-Alternatively, you can run them manually in two terminals:
-- Terminal 1: `npm start` (Runs the backend on port 3456 & initial task parse)
-- Terminal 2: `npm run dev` (Runs the Vite frontend on port 5173)
+Or run manually in two terminals:
 
-## Session Testing & Baselines (Phase 3)
+```bash
+# Terminal 1: Backend (port 3456) + initial parse
+npm start
 
-PQ Dashboard features a powerful standalone behavioral testing workflow that allows you to manage baselines, customize execution boundaries, track agent reliability, and score completions:
+# Terminal 2: Frontend dev server (port 5173)
+npm run dev
+```
 
-1. **Standalone Editable Baselines:** Instead of simple static session snapshots, you can create standalone editable baselines from any session (regardless of completion status).
-2. **Baseline Editor (`#/baseline-editor`):** A dual-list curator interface to manage expected and excluded tools, required and excluded contract keywords, descriptions, tags, and toggle essential steps. Allows adding custom entries, moving them dynamically between lists, and deleting unnecessary entries entirely.
-3. **Essential vs Optional Tools & Keywords:** Each expected tool and contract keyword can be marked as **Essential** (must be used/present — missing causes a score penalty) or **Optional** (nice-to-have — missing is noted but doesn't penalize). Essential items show a ★ badge in the editor and baselines list.
-4. **Excluded Files:** Define file path patterns (glob patterns like `**/.env`, `*.key`, `src/internal/**`) that the agent should NOT access. If any tool call in a tested session touches a matching path, it's a scope violation with a score penalty.
-5. **Enrichment & Merging (`#/baseline-enrich`):** Contrast any session trace against a baseline to discover new tools/keywords, and selectively merge them back into the baseline while maintaining a list of contributing sessions.
-6. **Contextual Tool Sequences & Essential Steps:** Tool calls carry auto-derived descriptions (identifying file contexts). Instead of strict ordering, the MTV pattern validates coverage of **Essential Steps** and checks for baseline excluded tools/keywords.
-7. **Session Health & Interruption Tracking:** Automatically tracks user interruptions (`resume_task` events) and context resets, applying automated tiered behavioral penalties (-5%, -15%, -25%).
-8. **Failed Tool Extraction:** Intelligently extracts tool execution failures (such as MCP timeouts, missing parameters, execution errors) from log traces, surfacing warnings and impacting error recovery scores.
-9. **Completion Message & Star Ratings:** Completion message text is parsed and rendered in formatted Markdown. You can rate task execution quality directly on the test page with a 1-5 Star Rating scale. The rating is blended into the overall score (70% automated / 30% human judgment).
-10. **Overall Performance Index:** Evaluates task success using a weighted index ($60\%$ Behavioral score, $40\%$ Operational efficiency based on cost, duration, tool calls, and error counts relative to baseline references).
-
-### What a baseline captures
-
-When a task is marked as a baseline, the dashboard stores a benchmark set in SQLite:
-- **Prompt chain:** User prompts in order, plus tools used after each prompt.
-- **Expected & Excluded tools:** Direct list of tools the agent should or should not use. Each expected tool can be marked essential or optional.
-- **Essential Steps sequence:** Ordered tool calls with file paths, custom descriptions, and essential toggles.
-- **Behavior contract:** Output structure, length bounds, code-block presence, required keywords (with essential/optional flags), and excluded keywords.
-- **Excluded files:** File path patterns the agent should not access (glob patterns supported).
-- **Reference metrics:** Cost, tokens, duration, API calls, tool calls, errors, and context reset status.
-
-### Behavioral test patterns
-
-The test runner evaluates six deterministic patterns natively from log traces without expensive secondary LLM judge calls:
-- **Tool Invocation Assertion (TIA):** Checks if essential tools were called (score based on essential coverage %). Optional tools are noted but don't penalize. Fails if excluded tools were used (-20% per infraction). Unexpected tools apply a -15% multiplier.
-- **Behavior Contract Validation (BCV):** Checks if essential keywords are present (score based on essential coverage %). Optional keywords are noted but don't penalize. Also verifies code blocks, length bounds, and forbidden/excluded keywords.
-- **Multi-Step Trace Verification (MTV):** Validates coverage of configured baseline **Essential Steps**, and checks tool usage efficiency against reference benchmarks.
-- **Boundary/Scope Enforcement (BSE):** Monitors command safety (detecting destructive commands like `rm -rf /` or `drop table`), limits max tool footprint, extracts failed tool execution attempts, and checks for excluded file access violations (-25 per unique file).
-- **Error Recovery Coherence (ERC):** Analyzes agent adaptation after errors, penalizing failed tool attempts and blind retry loops.
-- **Context Efficiency Compliance (CEC):** Monitors context usage relative to token limits.
-
-### Dynamic Baseline Switching & Deep Compare
-- `#/baselines` — Manage baselines list, edit tags, copy prompt chains, and access editor/enrichment views.
-- `#/baseline-editor?id=<id>` — Edit baseline tools, keywords, tags, metadata, essential steps, and excluded files.
-- `#/baseline-enrich?id=<id>` — Compare a session trace against a baseline and merge diffs.
-- `#/test?task=<id>` — Run behavioral tests for a task (automatically resolves the baseline reference if previously tested).
-- `#/deepcompare?tasks=<id1>,<id2>&baseline=<baseline_id>` — Compare tasks side-by-side. Key features include:
-  - **Ranked Performance Index Bar Graphs:** Displays a horizontal progress bar chart in the summary panel ranking compared sessions by Overall Index.
-  - **Clean Comparative Layout:** The baseline reference column is filtered out of the comparison table so you can focus strictly on the results of the tested session(s).
-  - **Interactive Detail Modals:** Click on any row (e.g. Cost, TIA, MTV, BSE) to trigger an overlay popup displaying a detailed side-by-side comparison of each session's actual metrics and evidence logs against the baseline reference (or best-in-class heuristic values).
-  - **Baseline Switcher Dropdown:** Dynamically re-evaluates all scores and metric differences on the fly.
+---
 
 ## Architecture
-- **Backend (`server/`):** Express.js + `better-sqlite3`. Contains the config loader, filesystem scanner, event extraction logic (`ui_messages.json` parsing), task cache deduplication, and REST API routes (including advanced on-the-fly sequence mapping and Sankey node generators).
-- **Activity Classification (`server/classifier.js`):** Deterministic heuristics classify each task from tool usage, shell commands, and prompt keywords. The resulting category and retry metrics are stored in SQLite and power the Activity Intelligence page without any secondary LLM calls.
-- **Baseline Extraction (`server/baselines/`):** Extracts prompt chains, tool sets, ordered tool sequences, behavior contracts, and reference metrics from completed task traces.
-- **Behavioral Testing (`server/testing/`):** Runs six deterministic test patterns against stored task events, using baseline data when provided and `test-rules.yaml` only as a no-baseline fallback.
-- **Frontend (`src/`):** A lightweight `Vite` setup using Vanilla HTML/JS/CSS. Dynamic routing logic and encapsulated API clients present the curated data visually alongside high-performance charts rendered via `d3-sankey` AND `chart.js`.
-- **Cache (`data/`):** Local SQLite WAL-mode cache mapping historical task events dynamically.
+
+```
+PQ-Dashboard/
+├── server/                     # Express.js backend
+│   ├── index.js                # Entry point
+│   ├── config.js               # pq-config.yaml loader
+│   ├── classifier.js           # Deterministic activity classification
+│   ├── model-registry.js       # OpenRouter/Vercel model metadata cache
+│   ├── analytics/
+│   │   └── metrics.js          # Single source of truth: TUE/RD/CE/ERR definitions + PQ-Score
+│   ├── baselines/              # Baseline extraction (prompts, tools, contracts)
+│   ├── cache/
+│   │   └── db.js               # SQLite schema, migrations, parser denormalization
+│   ├── parser/                 # Incremental task parser (ui_messages.json → events)
+│   ├── routes/
+│   │   ├── analytics.js        # /api/analytics/* (overview, models, agents, errors, etc.)
+│   │   ├── baselines.js        # /api/baselines/*
+│   │   └── tasks.js            # /api/tasks/* (list, detail, evaluate, test)
+│   └── testing/                # Behavioral test runner (TIA/BCV/MTV/BSE/ERC/CEC)
+├── src/                        # Vite frontend
+│   ├── index.html
+│   ├── css/                    # PostQode-matched dark theme
+│   ├── js/
+│   │   ├── app.js              # Router, view lifecycle
+│   │   ├── api.js              # API client
+│   │   ├── utils.js            # Agent colors, formatting, chip rendering
+│   │   ├── components/
+│   │   │   ├── charts.js       # Chart.js (radar, bar, line, doughnut)
+│   │   │   ├── date-picker.js  # Date range picker
+│   │   │   └── metric-tooltip.js # Metric definition tooltips
+│   │   └── views/              # One file per page (overview, models, sessions, etc.)
+│   └── img/
+├── data/                       # SQLite database (WAL mode)
+├── docs/                       # Design documents
+├── pq-config.yaml              # IDE source configuration
+├── test-rules.yaml             # Fallback behavioral test rules
+└── vite.config.js              # Vite config with API proxy
+```
+
+### Key Design Decisions
+
+- **All metrics are deterministic.** No LLM judge calls — everything is computed from log trace data (tool calls, errors, reasoning events, context usage).
+- **Agent = display name for `mode`.** The DB stores `mode` as the column name; the UI displays it as "Agent" everywhere. The mapping is centralized in `utils.js`.
+- **Pre-computed session metrics.** The `session_metrics` table caches TUE/RD/CE/ERR per session at parse time, making per-model aggregations a cheap `GROUP BY` instead of per-request recomputation.
+- **PQ-Score is server-side.** The composite ranking is computed in `analytics.js` so the Overview and Models pages always agree on ordering.
+
+---
+
+## Data Model
+
+### Core Tables
+
+| Table | Purpose |
+|-------|---------|
+| `tasks` | One row per session. Stores cost, tokens, errors, status, activity category, agent metadata (`primary_agent`, `agent_count`, `is_multi_agent`, `agent_sequence_json`). |
+| `events` | One row per parsed event (API call, tool use, error, reasoning). Stores `mode` (agent), `model_id`, cost, tokens, error classification. |
+| `task_models` | Junction table: one row per (task, model, agent) combination. Powers the model analytics queries. |
+| `session_metrics` | Cached per-session heuristic scores (TUE, RD, CE, ERR). Populated by the parser. |
+
+### Supporting Tables
+
+| Table | Purpose |
+|-------|---------|
+| `baselines` | Editable behavioral baselines with prompt chains, tool sets, contracts, and excluded files. |
+| `test_results` | Behavioral test scores per task (TIA, BCV, MTV, BSE, ERC, CEC). |
+| `task_shell_commands` | Shell command frequency per task. |
+| `parse_meta` | File hash tracking for incremental parsing. |
+
+---
+
+## API Reference
+
+### Analytics
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/analytics/overview` | Aggregate stats (sessions, cost, tokens, errors, completion). Supports `?agent=` filter. |
+| `GET /api/analytics/models` | Per-model breakdown with PQ-Score, heuristic metrics, and `low_confidence` flag. Supports `?agent=` filter. |
+| `GET /api/analytics/agents` | Per-agent breakdown with sub-breakdowns (top models, activity mix, longest sessions). |
+| `GET /api/analytics/agent-matrix` | Sparse pivot: agents × models/activities/statuses. `?dimension=model\|activity\|status` |
+| `GET /api/analytics/errors` | Error breakdown by category, model, and time. |
+| `GET /api/analytics/tools` | Top tools and shell commands. Supports `?agent=` filter. |
+| `GET /api/analytics/activity` | Activity category breakdown with one-shot rates. Supports `?agent=` filter. |
+| `GET /api/analytics/reasoning` | With-reasoning vs without-reasoning comparison. |
+| `GET /api/analytics/metric-defs` | TUE/RD/CE/ERR definitions for UI tooltips (single source of truth). |
+
+### Tasks
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/tasks` | Session list with filtering (`?agent=`, `?multi_agent=1`, `?model_id=`, `?status=`, etc.) |
+| `GET /api/tasks/:id` | Session detail with events. |
+| `GET /api/tasks/:id/evaluate` | Per-session heuristic evaluation (TUE, RD, CE, ERR). |
+| `GET /api/tasks/:id/test` | Run behavioral tests against baseline. |
+
+### Baselines
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET/POST /api/baselines` | List and create baselines. |
+| `GET/PUT/DELETE /api/baselines/:id` | CRUD operations on baselines. |
+| `POST /api/baselines/:id/enrich` | Enrich baseline from another session's trace. |
+
+---
 
 ## Troubleshooting
-- **No data visible?** Make sure the paths under `sources:` in `pq-config.yaml` are correctly matching your filesystem structure and have `enabled: true`.
-- **EADDRINUSE errors?** This means the ports 3456 or 5173 are blocked. Use `pkill -f "node server/index.js"` and `pkill -f "vite"` to free them.
+
+| Problem | Solution |
+|---------|----------|
+| No data visible | Check `pq-config.yaml` — ensure source paths are correct and `enabled: true`. |
+| EADDRINUSE error | Ports 3456/5173 are in use. Run `pkill -f "node server/index.js"` and `pkill -f "vite"`. |
+| Stale data after schema change | Delete `data/dashboard.db` and restart the server to trigger a fresh parse. |
+| Agent data missing | Agent metadata is computed at parse time. If sessions were parsed before agent support was added, delete the DB and re-parse. |

@@ -2,7 +2,7 @@ import { api } from '../api.js';
 import { fmtCost, agentColor } from '../utils.js';
 import { renderRadarChart, renderCostChart, renderToolsChart } from '../components/charts.js';
 
-let sortKey = 'task_count';
+let sortKey = 'pq_score';
 let sortDir = 'desc';
 let radarChartInstance = null;
 
@@ -71,11 +71,11 @@ export async function renderModels(container, dateRange = {}, queryParams = new 
                 <th>${sortHeader('Model', 'model_id')}</th>
                 <th>${sortHeader('Provider', 'provider_id')}</th>
                 <th>Agent</th>  <!-- Phase 4: Mode → Agent -->
+                <th>${sortHeader('PQ-Score', 'pq_score')}</th>
                 <th>${sortHeader('Sessions', 'task_count')}</th>
                 <th>${sortHeader('Total Cost', 'total_cost')}</th>
                 <th>${sortHeader('Avg Cost', 'avg_cost')}</th>
                 <th>${sortHeader('Tool Use Efficacy', 'avg_tue')}</th>
-                <th>${sortHeader('Reasoning Density', 'avg_rd')}</th>
                 <th>${sortHeader('Context Efficiency', 'avg_ce')}</th>
                 <th>${sortHeader('Error Recovery', 'avg_err')}</th>
                 <th>${sortHeader('Errors', 'total_errors')}</th>
@@ -92,14 +92,19 @@ export async function renderModels(container, dateRange = {}, queryParams = new 
                   ? Math.round(m.total_cache_reads / (m.total_tokens_in + m.total_cache_reads) * 100) : 0;
                 const costWidth = maxModelCost > 0 ? (m.total_cost / maxModelCost * 100) : 0;
                 const tueScore = m.avg_tue == null ? '—' : `${Math.round(m.avg_tue)}%`;
-                const rdScore  = m.avg_rd  == null ? '—' : `${Math.round(m.avg_rd)}%`;
                 const ceScore  = m.avg_ce  == null ? '—' : `${Math.round(m.avg_ce)}%`;
                 const errScore = m.avg_err == null ? '—' : `${Math.round(m.avg_err)}%`;
                 const tueColor = m.avg_tue == null ? 'var(--text-3)' : (m.avg_tue >= 80 ? '#5BF58C' : m.avg_tue >= 50 ? '#F5C85B' : '#F55B5B');
-                const rdColor  = m.avg_rd  == null ? 'var(--text-3)' : (m.avg_rd  >= 10 ? '#5BF58C' : m.avg_rd  >= 3 ? '#F5C85B' : '#F55B5B');
                 const ceColor  = m.avg_ce  == null ? 'var(--text-3)' : (m.avg_ce  >= 50 ? '#5BF58C' : m.avg_ce  >= 20 ? '#F5C85B' : '#F55B5B');
                 const errColor = m.avg_err == null ? 'var(--text-3)' : (m.avg_err >= 80 ? '#5BF58C' : m.avg_err >= 30 ? '#F5C85B' : '#F55B5B');
                 const agents = (m.agents || m.mode ? [m.agents ? m.agents.split(',') : [m.mode]].flat().filter(Boolean) : []);
+                // PQ-Score rendering
+                const pqs = m.pq_score ?? 0;
+                const pqColor = pqs >= 75 ? '#5BF58C' : pqs >= 50 ? '#F5C85B' : pqs >= 30 ? '#F5A05B' : '#F55B5B';
+                const lcBadge = m.low_confidence ? '<span style="font-size:8px;color:var(--text-3);background:var(--bg-2);border:1px solid var(--border);border-radius:3px;padding:1px 4px;margin-left:3px" title="Fewer than 2 sessions">LOW CONF</span>' : '';
+                // Build PQ component tooltip
+                const comp = m._pq_components || {};
+                const pqTooltip = `PQ-Score: ${pqs}/100\nCompletion: ${comp.completion ?? '—'}% (25%)\nError Recovery: ${comp.error_recovery ?? '—'}% (20%)\nTool Efficacy: ${comp.tue ?? '—'}% (15%)\nCost Efficiency: ${comp.cost_efficiency ?? '—'}% (15%)\nContext Eff: ${comp.ce ?? '—'}% (10%)\nUsage Confidence: ${comp.usage_confidence ?? '—'}% (10%)\nError Rate: ${comp.error_rate_inv ?? '—'}% (5%)`;
 
                 return `
                   <tr title="Click to view sessions for this model"
@@ -118,15 +123,26 @@ export async function renderModels(container, dateRange = {}, queryParams = new 
                         ${agents.length > 3 ? `<span class="text-dim" style="font-size:10px;margin-left:2px">+${agents.length - 3}</span>` : ''}
                       </div>
                     </td>
+                    <td title="${pqTooltip.replace(/"/g, '&quot;')}">
+                      <div style="display:flex;align-items:center;gap:5px">
+                        <div style="position:relative;width:32px;height:32px;display:flex;align-items:center;justify-content:center">
+                          <svg width="32" height="32" viewBox="0 0 36 36" style="transform:rotate(-90deg)">
+                            <circle cx="18" cy="18" r="15" fill="none" stroke="var(--border)" stroke-width="3"/>
+                            <circle cx="18" cy="18" r="15" fill="none" stroke="${pqColor}" stroke-width="3" stroke-dasharray="${pqs * 0.9425} 94.25" stroke-linecap="round"/>
+                          </svg>
+                          <span style="position:absolute;font-size:9px;font-weight:700;color:${pqColor}">${pqs}</span>
+                        </div>
+                        ${lcBadge}
+                      </div>
+                    </td>
                     <td><strong>${m.task_count}</strong></td>
                     <td style="color:var(--green);font-weight:600">${fmtCost(m.total_cost)}</td>
                     <td style="color:var(--text-2)">${fmtCost(m.avg_cost)}</td>
                     <td style="color:${tueColor};font-weight:600">${tueScore}</td>
-                    <td style="color:${rdColor};font-weight:600">${rdScore}</td>
                     <td style="color:${ceColor};font-weight:600">${ceScore}</td>
                     <td style="color:${errColor};font-weight:600">${errScore}</td>
                     <td style="color:${m.total_errors > 0 ? 'var(--red)' : 'var(--text-3)'};font-weight:${m.total_errors > 0 ? '600' : '400'}">
-                      ${m.total_errors}
+                      ${Math.round(m.total_errors)}
                     </td>
                     <td>
                       <div style="display:flex;align-items:center;gap:8px">
@@ -192,7 +208,7 @@ export async function renderModels(container, dateRange = {}, queryParams = new 
 }
 
 const SORTABLE_NUMERIC = new Set([
-  'model_id', 'provider_id', 'task_count', 'total_cost', 'avg_cost',
+  'model_id', 'provider_id', 'pq_score', 'task_count', 'total_cost', 'avg_cost',
   'avg_tue', 'avg_rd', 'avg_ce', 'avg_err', 'total_errors', 'completed', 'cache_hit'
 ]);
 
@@ -233,6 +249,7 @@ function getSortLabel(key) {
   const map = {
     model_id: 'Model Name',
     provider_id: 'Provider',
+    pq_score: 'PQ-Score',
     task_count: 'Sessions',
     total_cost: 'Total Cost',
     avg_cost: 'Avg Cost',
