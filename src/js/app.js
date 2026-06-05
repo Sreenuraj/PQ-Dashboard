@@ -79,9 +79,6 @@ function navigate() {
     el.classList.toggle('active', el.dataset.view === view);
   });
 
-  // Init date picker in new view's top-bar
-  setTimeout(() => initDatePicker('view-container'), 50);
-
   const render = routes[view] || routes.overview;
 
   const wrapper = document.getElementById('date-range-wrapper');
@@ -89,7 +86,9 @@ function navigate() {
 
   container.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading...</p></div>`;
   
-  Promise.resolve(render(params)).catch(err => {
+  Promise.resolve(render(params)).then(() => {
+    initDatePicker('view-container');
+  }).catch(err => {
     console.error(err);
     container.innerHTML = `
       <div class="empty-state">
@@ -112,7 +111,7 @@ window.addEventListener('daterange:change', () => {
 
   container.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading...</p></div>`;
   Promise.resolve(render(params)).then(() => {
-    setTimeout(() => initDatePicker('view-container'), 50);
+    initDatePicker('view-container');
   }).catch(console.error);
 });
 
