@@ -16,6 +16,7 @@ import { renderDeepCompare } from './views/deep-compare.js';
 import { api }            from './api.js';
 import { getDateRange, initDatePicker } from './components/date-picker.js';
 import { applyChartTheme } from './components/charts.js';
+import { initSidebar }     from './components/sidebar.js';
 
 // ── Theme Init ──
 const root = document.documentElement;
@@ -156,4 +157,5 @@ async function pollRefresh() {
 }
 
 // ── Init ──
+initSidebar();
 navigate();

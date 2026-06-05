@@ -12,72 +12,81 @@
 </head>
 <body>
   <div id="app">
-    <!-- Sidebar -->
-    <aside id="sidebar">
-      <div class="sidebar-header">
-      <div class="logo">
-          <img src="./img/logo.svg" alt="PostQode" style="width:30px;height:30px;flex-shrink:0" />
-          <div>
-            <div class="logo-text">PostQode</div>
-            <span class="logo-sub">Agent Dashboard</span>
+    <!-- Sidebar Wrapper -->
+    <div id="sidebar-wrapper" class="pinned">
+      <aside id="sidebar">
+        <div class="sidebar-header">
+          <div class="logo">
+            <img src="./img/logo.svg" alt="PostQode" style="width:30px;height:30px;flex-shrink:0" />
+            <div class="logo-info">
+              <div class="logo-text">PostQode</div>
+              <span class="logo-sub">Agent Dashboard</span>
+            </div>
+          </div>
+          <button id="sidebar-pin-btn" class="sidebar-pin-btn" title="Collapse Sidebar">
+            <svg class="pin-svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="17" x2="12" y2="22"></line>
+              <path d="M5 17h14v-1.76a2 2 0 0 0-.44-1.24l-2.78-3.47A2 2 0 0 1 15 9.3V5a2 2 0 0 0-2-2h-2a2 2 0 0 0-2 2v4.3a2 2 0 0 1-.78 1.23L5.44 14a2 2 0 0 0-.44 1.24V17z"></path>
+            </svg>
+          </button>
+        </div>
+
+        <nav class="sidebar-nav">
+          <div class="nav-section-label">Analytics</div>
+          <a href="#/overview" class="nav-item active" data-view="overview">
+            <span class="nav-icon">▦</span><span>Overview</span>
+          </a>
+          <a href="#/sessions" class="nav-item" data-view="sessions">
+            <span class="nav-icon">☰</span><span>Sessions</span>
+          </a>
+          <a href="#/errors"   class="nav-item" data-view="errors">
+            <span class="nav-icon">⚠</span><span>Errors</span>
+          </a>
+
+          <div class="nav-section-label" style="margin-top:8px">Models</div>
+          <a href="#/models" class="nav-item" data-view="models">
+            <span class="nav-icon">◉</span><span>Model Stats</span>
+          </a>
+          <a href="#/costs"  class="nav-item" data-view="costs">
+            <span class="nav-icon">$</span><span>Costs</span>
+          </a>
+
+          <div class="nav-section-label" style="margin-top:8px">Activity</div>
+          <a href="#/flow"     class="nav-item" data-view="flow">
+            <span class="nav-icon">⑃</span><span>Task Flow</span>
+          </a>
+          <a href="#/timeline" class="nav-item" data-view="timeline">
+            <span class="nav-icon">→</span><span>Timeline</span>
+          </a>
+          <a href="#/tools"    class="nav-item" data-view="tools">
+            <span class="nav-icon">⚙</span><span>Tools</span>
+          </a>
+          <a href="#/activity" class="nav-item" data-view="activity">
+            <span class="nav-icon">◌</span><span>Activity Intel</span>
+          </a>
+
+          <div class="nav-section-label" style="margin-top:8px">Testing</div>
+          <a href="#/baselines" class="nav-item" data-view="baselines">
+            <span class="nav-icon">⚑</span><span>Baselines</span>
+          </a>
+          <a href="#/test" class="nav-item" data-view="test">
+            <span class="nav-icon">✓</span><span>Session Test</span>
+          </a>
+        </nav>
+
+        <div class="sidebar-footer">
+          <button id="refresh-btn" class="refresh-btn">
+            <span class="refresh-icon">↻</span>
+            <span id="refresh-label">Refresh Data</span>
+          </button>
+          <div id="refresh-status" class="refresh-status"></div>
+          <div id="refresh-hint" style="font-size:10px;color:var(--text-3);text-align:center;margin-top:3px">
+            Only scans new/changed tasks
           </div>
         </div>
-      </div>
-
-      <nav class="sidebar-nav">
-        <div class="nav-section-label">Analytics</div>
-        <a href="#/overview" class="nav-item active" data-view="overview">
-          <span class="nav-icon">▦</span><span>Overview</span>
-        </a>
-        <a href="#/sessions" class="nav-item" data-view="sessions">
-          <span class="nav-icon">☰</span><span>Sessions</span>
-        </a>
-        <a href="#/errors"   class="nav-item" data-view="errors">
-          <span class="nav-icon">⚠</span><span>Errors</span>
-        </a>
-
-        <div class="nav-section-label" style="margin-top:8px">Models</div>
-        <a href="#/models" class="nav-item" data-view="models">
-          <span class="nav-icon">◉</span><span>Model Stats</span>
-        </a>
-        <a href="#/costs"  class="nav-item" data-view="costs">
-          <span class="nav-icon">$</span><span>Costs</span>
-        </a>
-
-        <div class="nav-section-label" style="margin-top:8px">Activity</div>
-        <a href="#/flow"     class="nav-item" data-view="flow">
-          <span class="nav-icon">⑃</span><span>Task Flow</span>
-        </a>
-        <a href="#/timeline" class="nav-item" data-view="timeline">
-          <span class="nav-icon">→</span><span>Timeline</span>
-        </a>
-        <a href="#/tools"    class="nav-item" data-view="tools">
-          <span class="nav-icon">⚙</span><span>Tools</span>
-        </a>
-        <a href="#/activity" class="nav-item" data-view="activity">
-          <span class="nav-icon">◌</span><span>Activity Intel</span>
-        </a>
-
-        <div class="nav-section-label" style="margin-top:8px">Testing</div>
-        <a href="#/baselines" class="nav-item" data-view="baselines">
-          <span class="nav-icon">⚑</span><span>Baselines</span>
-        </a>
-        <a href="#/test" class="nav-item" data-view="test">
-          <span class="nav-icon">✓</span><span>Session Test</span>
-        </a>
-      </nav>
-
-      <div class="sidebar-footer">
-        <button id="refresh-btn" class="refresh-btn">
-          <span class="refresh-icon">↻</span>
-          <span id="refresh-label">Refresh Data</span>
-        </button>
-        <div id="refresh-status" class="refresh-status"></div>
-        <div id="refresh-hint" style="font-size:10px;color:var(--text-3);text-align:center;margin-top:3px">
-          Only scans new/changed tasks
-        </div>
-      </div>
-    </aside>
+        <div class="sidebar-resize-handle" id="sidebar-resize-handle"></div>
+      </aside>
+    </div>
 
     <!-- Main Content -->
     <main id="main">
