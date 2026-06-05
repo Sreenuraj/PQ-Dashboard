@@ -61,7 +61,7 @@ module.exports = (db) => {
     // Always group by model_id only — one row per model.
     const agentList = agent ? String(agent).split(',').map(s => s.trim()).filter(Boolean) : [];
     if (agentList.length) {
-      allConditions.push(`tm.mode IN (${agentList.map(() => '?').join(',')})`);
+      allConditions.push(`dm.mode IN (${agentList.map(() => '?').join(',')})`);
       allParams.push(...agentList);
     }
     const whereClause = allConditions.length ? `WHERE ${allConditions.join(' AND ')}` : '';
