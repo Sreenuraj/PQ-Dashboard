@@ -570,7 +570,19 @@ function bindTableEvents() {
     menu.style.left = `${e.clientX}px`;
     menu.style.top = `${e.clientY}px`;
 
-    // Option 1: Filter by path
+    // Option 1: Replay Request
+    const replayOption = document.createElement('div');
+    replayOption.className = 'network-context-menu-item';
+    replayOption.innerHTML = `🔁 <span>Replay Request</span>`;
+    replayOption.addEventListener('click', async () => {
+      try {
+        await api.networkReplay(record.id);
+      } catch (err) {
+        console.error('Failed to replay request:', err.message);
+      }
+    });
+
+    // Option 2: Filter by path
     const pathOption = document.createElement('div');
     pathOption.className = 'network-context-menu-item';
     pathOption.innerHTML = `🔍 <span>Filter by path: <b>${escHtml(record.path)}</b></span>`;
@@ -583,7 +595,7 @@ function bindTableEvents() {
       }
     });
 
-    // Option 2: Filter by host
+    // Option 3: Filter by host
     const hostOption = document.createElement('div');
     hostOption.className = 'network-context-menu-item';
     hostOption.innerHTML = `🌐 <span>Filter by host: <b>${escHtml(record.host)}</b></span>`;
@@ -596,7 +608,7 @@ function bindTableEvents() {
       }
     });
 
-    // Option 3: Copy URL
+    // Option 4: Copy URL
     const copyOption = document.createElement('div');
     copyOption.className = 'network-context-menu-item';
     copyOption.innerHTML = `📋 <span>Copy URL</span>`;
@@ -604,6 +616,8 @@ function bindTableEvents() {
       navigator.clipboard.writeText(record.url);
     });
 
+    menu.appendChild(replayOption);
+    menu.appendChild(document.createElement('div')).className = 'network-context-menu-divider';
     menu.appendChild(pathOption);
     menu.appendChild(hostOption);
     menu.appendChild(document.createElement('div')).className = 'network-context-menu-divider';
@@ -721,7 +735,10 @@ function renderTable() {
 function renderRow(r) {
   return `
     <td class="mono" style="color:var(--text-3);font-size:10px">${r.id}</td>
-    <td><span class="badge ${methodClass(r.method)}">${escHtml(r.method)}</span></td>
+    <td>
+      <span class="badge ${methodClass(r.method)}">${escHtml(r.method)}</span>
+      ${r.isReplay ? `<span class="badge grey" style="font-size:8px;padding:1px 3px;margin-left:4px" title="Replayed request (Replayed from #${r.replayedFromId})">REPLAY</span>` : ''}
+    </td>
     <td class="network-url-cell" title="${escHtml(r.url)}">
       <span class="mono">${escHtml(truncateUrl(r.url))}</span>
     </td>

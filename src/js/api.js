@@ -83,6 +83,7 @@ export const api = {
   networkRequests: (p={}) => get('/network/requests', p),
   networkRequest:  (id)   => get(`/network/requests/${id}`),
   networkClear:    ()     => post('/network/clear'),
+  networkReplay:   (id)   => post(`/network/replay/${id}`),
 };
 
 // Phase 4: cached metric defs (fetched once per page-load; consumed by MetricTooltip)

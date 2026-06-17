@@ -4,6 +4,7 @@
  */
 
 const express = require('express');
+const { broadcast } = require('../proxy/ws');
 
 module.exports = (getStore, getStatus, getClientCount) => {
   const router = express.Router();
@@ -39,6 +40,108 @@ module.exports = (getStore, getStatus, getClientCount) => {
     const record = store.getById(req.params.id);
     if (!record) return res.status(404).json({ error: 'Request not found' });
     res.json(record);
+  });
+
+  // POST /api/network/replay/:id — replay a request
+  router.post('/network/replay/:id', async (req, res) => {
+    const store = getStore();
+    if (!store) return res.status(404).json({ error: 'Store not initialized' });
+
+    const originalRecord = store.getById(req.params.id);
+    if (!originalRecord) return res.status(404).json({ error: 'Request not found' });
+
+    try {
+      const startTime = Date.now();
+      const headers = { ...originalRecord.requestHeaders };
+      
+      // Remove connection-specific headers
+      delete headers['host'];
+      delete headers['connection'];
+      delete headers['content-length'];
+      delete headers['accept-encoding'];
+
+      const fetchOptions = {
+        method: originalRecord.method,
+        headers,
+      };
+
+      if (originalRecord.method !== 'GET' && originalRecord.method !== 'HEAD' && originalRecord.requestBody) {
+        fetchOptions.body = originalRecord.requestBody;
+      }
+
+      const response = await fetch(originalRecord.url, fetchOptions);
+      const duration = Date.now() - startTime;
+      
+      const arrayBuffer = await response.arrayBuffer();
+      const rawResBody = Buffer.from(arrayBuffer);
+      const resHeaders = {};
+      response.headers.forEach((val, key) => {
+        resHeaders[key] = val;
+      });
+
+      let responseBody = '';
+      const maxBodySize = 100 * 1024;
+      try {
+        responseBody = rawResBody.length > maxBodySize
+          ? rawResBody.slice(0, maxBodySize).toString('utf-8') + '\n... [truncated]'
+          : rawResBody.toString('utf-8');
+      } catch (e) {
+        responseBody = '[binary data]';
+      }
+
+      const responseSize = rawResBody.length;
+
+      const record = {
+        timestamp: new Date().toISOString(),
+        method: originalRecord.method,
+        url: originalRecord.url,
+        host: originalRecord.host,
+        path: originalRecord.path,
+        requestHeaders: { ...headers },
+        requestBody: originalRecord.requestBody,
+        statusCode: response.status,
+        responseHeaders: resHeaders,
+        responseBody,
+        duration,
+        size: responseSize,
+        error: null,
+        tag: originalRecord.tag,
+        isReplay: true,
+        replayedFromId: originalRecord.id,
+      };
+
+      store.add(record);
+      broadcast(record);
+
+      res.json({ success: true, record });
+    } catch (err) {
+      console.error('[Proxy Replay Error]', err.message);
+      
+      const duration = Date.now() - startTime;
+      const record = {
+        timestamp: new Date().toISOString(),
+        method: originalRecord.method,
+        url: originalRecord.url,
+        host: originalRecord.host,
+        path: originalRecord.path,
+        requestHeaders: {},
+        requestBody: originalRecord.requestBody,
+        statusCode: 0,
+        responseHeaders: {},
+        responseBody: '',
+        duration,
+        size: 0,
+        error: err.message || 'Unknown replay error',
+        tag: originalRecord.tag,
+        isReplay: true,
+        replayedFromId: originalRecord.id,
+      };
+
+      store.add(record);
+      broadcast(record);
+
+      res.status(500).json({ error: err.message, record });
+    }
   });
 
   // POST /api/network/clear — flush buffer
