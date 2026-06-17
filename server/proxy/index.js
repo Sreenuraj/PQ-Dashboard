@@ -89,6 +89,51 @@ function decodeBody(buffer, headers) {
   }
 }
 
+const mocksPath = path.resolve('./data/network-mocks.json');
+let mockRules = [];
+
+function loadMockRules() {
+  try {
+    if (fs.existsSync(mocksPath)) {
+      mockRules = JSON.parse(fs.readFileSync(mocksPath, 'utf8'));
+    } else {
+      mockRules = [];
+    }
+  } catch (e) {
+    mockRules = [];
+  }
+}
+
+function saveMockRules() {
+  try {
+    fs.mkdirSync(path.dirname(mocksPath), { recursive: true });
+    fs.writeFileSync(mocksPath, JSON.stringify(mockRules, null, 2), 'utf8');
+  } catch (e) {
+    console.error('[Proxy Mocks] Failed to save rules:', e.message);
+  }
+}
+
+function getMockRules() {
+  return mockRules;
+}
+
+function addMockRule(rule) {
+  const existingIdx = mockRules.findIndex(r => r.id === rule.id);
+  if (existingIdx !== -1) {
+    mockRules[existingIdx] = rule;
+  } else {
+    mockRules.push(rule);
+  }
+  saveMockRules();
+  return rule;
+}
+
+function deleteMockRule(id) {
+  mockRules = mockRules.filter(r => r.id !== id);
+  saveMockRules();
+  return true;
+}
+
 let store = null;
 let proxyServer = null;
 let isRunning = false;
@@ -107,6 +152,8 @@ function startProxy(config = {}) {
 
   // Ensure certs directory exists
   fs.mkdirSync(certsDir, { recursive: true });
+
+  loadMockRules();
 
   store = new NetworkStore(bufferSize);
   proxyServer = new Proxy();
@@ -145,6 +192,63 @@ function startProxy(config = {}) {
     const host = ctx.clientToProxyRequest.headers.host || '';
     const url = `${ctx.isSSL ? 'https' : 'http'}://${host}${ctx.clientToProxyRequest.url}`;
     const method = ctx.clientToProxyRequest.method;
+
+    // Check if there's a matching mock rule
+    const rule = mockRules.find(r => {
+      if (!r.enabled) return false;
+      if (r.method && r.method !== method) return false;
+      return url.toLowerCase().includes(r.urlPattern.toLowerCase());
+    });
+
+    if (rule) {
+      const requestChunks = [];
+      ctx.clientToProxyRequest.on('data', (chunk) => {
+        requestChunks.push(chunk);
+      });
+      ctx.clientToProxyRequest.on('end', () => {
+        const delay = rule.delay || 0;
+        setTimeout(() => {
+          const rawReqBody = Buffer.concat(requestChunks);
+          const requestBody = decodeBody(rawReqBody, ctx.clientToProxyRequest.headers);
+          
+          const statusCode = parseInt(rule.statusCode || 200, 10);
+          const responseBody = rule.responseBody || '';
+          const responseHeaders = {
+            'content-type': 'application/json; charset=utf-8',
+            'x-mock-rule-id': rule.id,
+            'content-length': Buffer.byteLength(responseBody)
+          };
+          
+          ctx.proxyToClientResponse.writeHead(statusCode, responseHeaders);
+          ctx.proxyToClientResponse.end(responseBody);
+          
+          const duration = Date.now() - startTime + delay;
+          const record = {
+            timestamp: new Date().toISOString(),
+            method,
+            url,
+            host: host.replace(/:\d+$/, ''),
+            path: ctx.clientToProxyRequest.url,
+            requestHeaders: { ...ctx.clientToProxyRequest.headers },
+            requestBody,
+            statusCode,
+            responseHeaders,
+            responseBody,
+            duration,
+            size: Buffer.byteLength(responseBody),
+            error: null,
+            tag: tagForHost(host),
+            isMocked: true,
+            mockRuleId: rule.id
+          };
+          
+          store.add(record);
+          broadcast(record);
+        }, delay);
+      });
+      ctx.clientToProxyRequest.resume();
+      return;
+    }
 
     // Collect request body chunks
     const requestChunks = [];
@@ -276,4 +380,4 @@ function getStore() {
   return store;
 }
 
-module.exports = { startProxy, getProxyStatus, getStore };
+module.exports = { startProxy, getProxyStatus, getStore, getMockRules, addMockRule, deleteMockRule };

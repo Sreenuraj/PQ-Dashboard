@@ -2192,3 +2192,223 @@ html[data-theme="light"] .oneshot-bar-bg {
   background: var(--border);
   margin: 4px 0;
 }
+
+/* ── Mock Rules manager styling ── */
+.network-mocks-panel {
+  background: var(--bg-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-sm);
+  margin-top: 10px;
+}
+.mock-rule-row {
+  transition: border-color var(--transition), background var(--transition);
+}
+.mock-rule-row:hover {
+  border-color: var(--border-2) !important;
+  background: var(--bg-hover) !important;
+}
+.mock-toggle-btn {
+  user-select: none;
+}
+
+/* ── Compare Banner ── */
+.network-compare-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--accent);
+  background: var(--accent-glow) !important;
+  animation: slideDown 0.2s ease;
+}
+@keyframes slideDown {
+  from { transform: translateY(-5px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+/* ── Diff Comparison Modal ── */
+.network-diff-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2000;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  animation: fadeIn 0.15s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.network-diff-modal-content {
+  background: var(--bg-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-md);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+  width: 95vw;
+  height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: modalScaleUp 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes modalScaleUp {
+  from { transform: scale(0.97); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.network-diff-modal-header {
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.network-diff-modal-tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.network-diff-tab {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--text-3);
+  font-size: 12.5px;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.network-diff-tab:hover {
+  color: var(--text-2);
+}
+
+.network-diff-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.network-diff-modal-subheader {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  background: var(--bg-3);
+  border-bottom: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--text-2);
+  padding: 10px 20px;
+  gap: 2px;
+}
+
+.diff-header-left, .diff-header-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.network-diff-modal-body {
+  flex: 1;
+  padding: 16px;
+  overflow: hidden;
+  background: var(--bg-1);
+}
+
+.network-diff-container {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: var(--border-2);
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-2);
+}
+
+.network-diff-pane {
+  background: var(--bg-1);
+  overflow-y: scroll;
+  overflow-x: auto;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  scrollbar-width: thin;
+}
+
+.network-diff-pane::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.network-diff-pane::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 99px;
+}
+
+.diff-line {
+  display: flex;
+  line-height: 20px;
+  min-height: 20px;
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  white-space: pre;
+}
+
+.diff-line-num {
+  width: 42px;
+  min-width: 42px;
+  text-align: right;
+  padding-right: 12px;
+  color: var(--text-3);
+  background: var(--bg-2);
+  border-right: 1px solid var(--border);
+  user-select: none;
+}
+
+.diff-line-text {
+  flex: 1;
+  padding-left: 10px;
+}
+
+.diff-line-unchanged {
+  color: var(--text-2);
+}
+
+.diff-line-removed {
+  background: rgba(239, 68, 68, 0.15);
+  color: #fca5a5;
+}
+.diff-line-removed .diff-line-num {
+  background: rgba(239, 68, 68, 0.25);
+  color: #ef4444;
+}
+
+.diff-line-added {
+  background: rgba(16, 185, 129, 0.15);
+  color: #86efac;
+}
+.diff-line-added .diff-line-num {
+  background: rgba(16, 185, 129, 0.25);
+  color: #10b981;
+}
+
+.diff-line-empty {
+  background: var(--bg-2);
+  opacity: 0.5;
+}
+.diff-line-empty .diff-line-num {
+  border-right-color: transparent;
+}

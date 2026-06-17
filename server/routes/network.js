@@ -6,7 +6,7 @@
 const express = require('express');
 const { broadcast } = require('../proxy/ws');
 
-module.exports = (getStore, getStatus, getClientCount) => {
+module.exports = (getStore, getStatus, getClientCount, getMockRules, addMockRule, deleteMockRule) => {
   const router = express.Router();
 
   // GET /api/network/status — proxy status
@@ -193,6 +193,30 @@ module.exports = (getStore, getStatus, getClientCount) => {
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Content-Disposition', `attachment; filename="pq-network-${Date.now()}.har"`);
     res.json(har);
+  });
+
+  // GET /api/network/mocks — get all mock rules
+  router.get('/network/mocks', (req, res) => {
+    if (typeof getMockRules !== 'function') return res.status(501).json({ error: 'Mocks not supported' });
+    res.json(getMockRules());
+  });
+
+  // POST /api/network/mocks — create/update a mock rule
+  router.post('/network/mocks', (req, res) => {
+    if (typeof addMockRule !== 'function') return res.status(501).json({ error: 'Mocks not supported' });
+    const rule = req.body;
+    if (!rule.id || !rule.urlPattern) {
+      return res.status(400).json({ error: 'id and urlPattern are required' });
+    }
+    const saved = addMockRule(rule);
+    res.json({ success: true, rule: saved });
+  });
+
+  // DELETE /api/network/mocks/:id — delete a mock rule
+  router.delete('/network/mocks/:id', (req, res) => {
+    if (typeof deleteMockRule !== 'function') return res.status(501).json({ error: 'Mocks not supported' });
+    const deleted = deleteMockRule(req.params.id);
+    res.json({ success: deleted });
   });
 
   return router;

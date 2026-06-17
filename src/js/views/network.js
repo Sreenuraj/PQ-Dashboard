@@ -79,10 +79,213 @@ function syntaxHighlight(json) {
 
 function truncateUrl(url, maxLen = 80) {
   if (!url) return '';
-  // Remove protocol
   let clean = url.replace(/^https?:\/\//, '');
   if (clean.length <= maxLen) return clean;
   return clean.slice(0, maxLen) + '…';
+}
+
+function getParsedOrRawBody(bodyStr) {
+  if (!bodyStr) return null;
+  try {
+    return JSON.parse(bodyStr);
+  } catch {
+    return bodyStr;
+  }
+}
+
+function generateCurl(r) {
+  let cmd = `curl -X ${r.method} "${r.url}"`;
+  
+  if (r.requestHeaders) {
+    Object.entries(r.requestHeaders).forEach(([name, val]) => {
+      const safeVal = String(val).replace(/"/g, '\\"');
+      cmd += ` \\\n  -H "${name}: ${safeVal}"`;
+    });
+  }
+  
+  if (r.requestBody && r.method !== 'GET' && r.method !== 'HEAD') {
+    let parsed = getParsedOrRawBody(r.requestBody);
+    let bodyData = typeof parsed === 'object' ? JSON.stringify(parsed) : parsed;
+    const safeBody = String(bodyData).replace(/"/g, '\\"');
+    cmd += ` \\\n  -d "${safeBody}"`;
+  }
+  
+  return cmd;
+}
+
+function generateNodeFetch(r) {
+  const headers = { ...r.requestHeaders };
+  delete headers['host'];
+  delete headers['connection'];
+  delete headers['content-length'];
+  delete headers['accept-encoding'];
+
+  let code = `const response = await fetch("${r.url}", {\n`;
+  code += `  method: "${r.method}",\n`;
+  code += `  headers: ${JSON.stringify(headers, null, 2).replace(/\n/g, '\n  ')}`;
+  
+  if (r.requestBody && r.method !== 'GET' && r.method !== 'HEAD') {
+    let parsed = getParsedOrRawBody(r.requestBody);
+    const bodyStr = typeof parsed === 'object' ? JSON.stringify(parsed, null, 2) : `\`${parsed}\``;
+    code += `,\n  body: ${bodyStr.replace(/\n/g, '\n  ')}`;
+  }
+  code += `\n});\nconst data = await response.json();\nconsole.log(data);`;
+  return code;
+}
+
+function generateBrowserFetch(r) {
+  const headers = { ...r.requestHeaders };
+  delete headers['host'];
+  delete headers['connection'];
+  
+  let code = `fetch("${r.url}", {\n`;
+  code += `  method: "${r.method}",\n`;
+  code += `  headers: ${JSON.stringify(headers, null, 2).replace(/\n/g, '\n  ')}`;
+  
+  if (r.requestBody && r.method !== 'GET' && r.method !== 'HEAD') {
+    let parsed = getParsedOrRawBody(r.requestBody);
+    const bodyStr = typeof parsed === 'object' ? JSON.stringify(parsed, null, 2) : `\`${parsed}\``;
+    code += `,\n  body: ${bodyStr.replace(/\n/g, '\n  ')}`;
+  }
+  code += `\n})\n.then(res => res.json())\n.then(data => console.log(data));`;
+  return code;
+}
+
+function sortObjectKeys(obj) {
+  if (typeof obj !== 'object' || obj === null) return obj;
+  if (Array.isArray(obj)) return obj.map(sortObjectKeys);
+  const sorted = {};
+  Object.keys(obj).sort().forEach(k => {
+    sorted[k] = sortObjectKeys(obj[k]);
+  });
+  return sorted;
+}
+
+function getPrettified(val) {
+  if (!val) return '';
+  try {
+    const obj = JSON.parse(val);
+    return JSON.stringify(obj, null, 2);
+  } catch {
+    return val;
+  }
+}
+
+function diffLines(lines1, lines2) {
+  const n = lines1.length;
+  const m = lines2.length;
+  const dp = Array.from({ length: n + 1 }, () => Array(m + 1).fill(0));
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      if (lines1[i - 1] === lines2[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+  }
+
+  let i = n;
+  let j = m;
+  const diff = [];
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && lines1[i - 1] === lines2[j - 1]) {
+      diff.unshift({ type: 'unchanged', left: lines1[i - 1], right: lines2[j - 1] });
+      i--;
+      j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      diff.unshift({ type: 'added', left: null, right: lines2[j - 1] });
+      j--;
+    } else {
+      diff.unshift({ type: 'removed', left: lines1[i - 1], right: null });
+      i--;
+    }
+  }
+  return diff;
+}
+
+function calculateUsageAndCost(r) {
+  if (!r.responseBody) return null;
+
+  let reqJson = null;
+  let resJson = null;
+  
+  try { reqJson = JSON.parse(r.requestBody); } catch {}
+  try { resJson = JSON.parse(r.responseBody); } catch {}
+  
+  if (!resJson) return null;
+
+  // Extract model name
+  const model = reqJson?.model || resJson?.model || '';
+  if (!model) return null;
+
+  // Extract token counts
+  let inputTokens = 0;
+  let outputTokens = 0;
+  
+  if (resJson.usage) {
+    inputTokens = resJson.usage.prompt_tokens || resJson.usage.input_tokens || 0;
+    outputTokens = resJson.usage.completion_tokens || resJson.usage.output_tokens || 0;
+  } else if (resJson.usageMetadata) {
+    inputTokens = resJson.usageMetadata.promptTokenCount || 0;
+    outputTokens = resJson.usageMetadata.candidatesTokenCount || 0;
+  }
+
+  const totalTokens = inputTokens + outputTokens;
+  if (totalTokens === 0) return null;
+
+  // Simple pricing database (Rates per 1M tokens in USD)
+  let inputRate = 1.0; // fallback $1.00 / 1M
+  let outputRate = 3.0; // fallback $3.00 / 1M
+  const m = model.toLowerCase();
+
+  if (m.includes('gpt-4o-mini')) {
+    inputRate = 0.15;
+    outputRate = 0.60;
+  } else if (m.includes('gpt-4o')) {
+    inputRate = 5.00;
+    outputRate = 15.00;
+  } else if (m.includes('o1-mini')) {
+    inputRate = 3.00;
+    outputRate = 12.00;
+  } else if (m.includes('o1-')) {
+    inputRate = 15.00;
+    outputRate = 60.00;
+  } else if (m.includes('gpt-4')) {
+    inputRate = 10.00;
+    outputRate = 30.00;
+  } else if (m.includes('gpt-3.5')) {
+    inputRate = 0.50;
+    outputRate = 1.50;
+  } else if (m.includes('claude-3-5-sonnet') || m.includes('claude-3.5-sonnet')) {
+    inputRate = 3.00;
+    outputRate = 15.00;
+  } else if (m.includes('claude-3-opus')) {
+    inputRate = 15.00;
+    outputRate = 75.00;
+  } else if (m.includes('claude-3-haiku')) {
+    inputRate = 0.25;
+    outputRate = 1.25;
+  } else if (m.includes('gemini-1.5-flash')) {
+    inputRate = 0.075;
+    outputRate = 0.30;
+  } else if (m.includes('gemini-1.5-pro')) {
+    inputRate = 1.25;
+    outputRate = 5.00;
+  } else if (m.includes('deepseek')) {
+    inputRate = 0.14;
+    outputRate = 0.28;
+  }
+
+  const cost = (inputTokens * inputRate / 1000000) + (outputTokens * outputRate / 1000000);
+
+  return {
+    model,
+    inputTokens,
+    outputTokens,
+    totalTokens,
+    cost
+  };
 }
 
 // ── State ──
@@ -92,6 +295,8 @@ let requests = [];
 let selectedRequest = null;
 let activeFilters = { host: 'all', method: '', status: '', search: '', limit: 'all' };
 let activeDetailTab = 'headers';
+let mockRulesState = [];
+let compareBaseRequest = null;
 
 // ── WebSocket ──
 function connectWebSocket(onMessage) {
@@ -143,6 +348,323 @@ function updateStatusDot(connected) {
   if (label) {
     label.textContent = connected ? 'Connected' : 'Disconnected';
   }
+}
+
+async function loadMockRulesState() {
+  try {
+    mockRulesState = await api.networkMocks();
+    renderMocksList();
+  } catch (err) {
+    console.error('Failed to load mock rules:', err);
+  }
+}
+
+function renderMocksList() {
+  const listEl = document.getElementById('mock-rules-list');
+  if (!listEl) return;
+
+  if (mockRulesState.length === 0) {
+    listEl.innerHTML = `
+      <div style="padding: 20px; text-align: center; color: var(--text-3); font-size: 11px;">
+        No mock rules defined. Click "+ Add Rule" to create one.
+      </div>
+    `;
+    return;
+  }
+
+  listEl.innerHTML = mockRulesState.map(rule => {
+    return `
+      <div class="mock-rule-row" data-rule-id="${rule.id}" style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: var(--bg-3); border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 6px;">
+        <div style="display: flex; flex-direction: column; gap: 4px; flex: 1; overflow: hidden; margin-right: 12px;">
+          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+            <span class="badge ${rule.enabled ? 'green' : 'grey'} mock-toggle-btn" style="font-size: 9px; cursor: pointer;" title="Click to toggle rule">
+              ${rule.enabled ? 'Active' : 'Disabled'}
+            </span>
+            ${rule.method ? `<span class="badge blue" style="font-size: 9px;">${escHtml(rule.method)}</span>` : '<span class="badge grey" style="font-size: 9px;">ANY</span>'}
+            <span class="mono" style="font-size: 11px; font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 250px;" title="${escHtml(rule.urlPattern)}">
+              ${escHtml(rule.urlPattern)}
+            </span>
+          </div>
+          <div style="font-size: 10px; color: var(--text-3);">
+            Returns Status: <strong style="color:var(--text-2)">${rule.statusCode || 200}</strong> 
+            ${rule.delay ? `| Delay: <strong style="color:var(--text-2)">${rule.delay}ms</strong>` : ''}
+          </div>
+        </div>
+        <div style="display: flex; gap: 6px; align-items: center;">
+          <button class="action-btn secondary mock-edit-btn" style="padding: 2px 6px; min-height: auto; font-size: 10px;">Edit</button>
+          <button class="action-btn secondary mock-delete-btn" style="padding: 2px 6px; min-height: auto; font-size: 10px; border-color: var(--red); color: var(--red);">Delete</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function updateCompareBanner() {
+  const banner = document.getElementById('network-compare-banner');
+  const baseIdEl = document.getElementById('compare-base-id');
+  const baseUrlEl = document.getElementById('compare-base-url');
+
+  if (!banner) return;
+
+  if (compareBaseRequest) {
+    baseIdEl.textContent = compareBaseRequest.id;
+    baseUrlEl.textContent = truncateUrl(compareBaseRequest.url, 50);
+    banner.style.display = 'flex';
+  } else {
+    banner.style.display = 'none';
+  }
+}
+
+function openCompareModal(baseReq, compareReq) {
+  const diffModal = document.getElementById('network-diff-modal');
+  if (!diffModal) return;
+
+  document.getElementById('diff-base-info').textContent = `#${baseReq.id} - ${baseReq.method} ${truncateUrl(baseReq.url, 40)}`;
+  document.getElementById('diff-compare-info').textContent = `#${compareReq.id} - ${compareReq.method} ${truncateUrl(compareReq.url, 40)}`;
+
+  // Default to request body tab
+  document.querySelectorAll('.network-diff-tab').forEach(btn => {
+    if (btn.dataset.diffTab === 'request') {
+      btn.classList.add('active');
+    } else {
+      btn.classList.remove('active');
+    }
+  });
+
+  diffModal.style.display = 'flex';
+  renderDiffContent(baseReq, compareReq, 'request');
+}
+
+function renderDiffContent(baseReq, compareReq, tab) {
+  const leftPane = document.getElementById('diff-pane-left');
+  const rightPane = document.getElementById('diff-pane-right');
+  if (!leftPane || !rightPane) return;
+
+  let baseStr = '';
+  let compareStr = '';
+
+  if (tab === 'request') {
+    baseStr = getPrettified(baseReq.requestBody);
+    compareStr = getPrettified(compareReq.requestBody);
+  } else if (tab === 'response') {
+    baseStr = getPrettified(baseReq.responseBody);
+    compareStr = getPrettified(compareReq.responseBody);
+  } else if (tab === 'headers') {
+    const headers1 = {
+      request: baseReq.requestHeaders || {},
+      response: baseReq.responseHeaders || {}
+    };
+    const headers2 = {
+      request: compareReq.requestHeaders || {},
+      response: compareReq.responseHeaders || {}
+    };
+    const sorted1 = sortObjectKeys(headers1);
+    const sorted2 = sortObjectKeys(headers2);
+    baseStr = JSON.stringify(sorted1, null, 2);
+    compareStr = JSON.stringify(sorted2, null, 2);
+  }
+
+  const lines1 = baseStr.split('\n');
+  const lines2 = compareStr.split('\n');
+  const diff = diffLines(lines1, lines2);
+
+  let leftHtml = '';
+  let rightHtml = '';
+
+  let leftLineNum = 1;
+  let rightLineNum = 1;
+
+  diff.forEach(item => {
+    if (item.type === 'unchanged') {
+      leftHtml += `
+        <div class="diff-line diff-line-unchanged">
+          <span class="diff-line-num">${leftLineNum++}</span>
+          <span class="diff-line-text">${escHtml(item.left)}</span>
+        </div>
+      `;
+      rightHtml += `
+        <div class="diff-line diff-line-unchanged">
+          <span class="diff-line-num">${rightLineNum++}</span>
+          <span class="diff-line-text">${escHtml(item.right)}</span>
+        </div>
+      `;
+    } else if (item.type === 'removed') {
+      leftHtml += `
+        <div class="diff-line diff-line-removed">
+          <span class="diff-line-num">${leftLineNum++}</span>
+          <span class="diff-line-text">${escHtml(item.left)}</span>
+        </div>
+      `;
+      rightHtml += `
+        <div class="diff-line diff-line-empty">
+          <span class="diff-line-num"></span>
+          <span class="diff-line-text"></span>
+        </div>
+      `;
+    } else if (item.type === 'added') {
+      leftHtml += `
+        <div class="diff-line diff-line-empty">
+          <span class="diff-line-num"></span>
+          <span class="diff-line-text"></span>
+        </div>
+      `;
+      rightHtml += `
+        <div class="diff-line diff-line-added">
+          <span class="diff-line-num">${rightLineNum++}</span>
+          <span class="diff-line-text">${escHtml(item.right)}</span>
+        </div>
+      `;
+    }
+  });
+
+  leftPane.innerHTML = leftHtml;
+  rightPane.innerHTML = rightHtml;
+  leftPane.scrollTop = 0;
+  rightPane.scrollTop = 0;
+}
+
+function bindMockAndDiffEvents() {
+  // --- Mock Rules Panel ---
+  const mocksBtn = document.getElementById('network-mocks-btn');
+  const mocksPanel = document.getElementById('network-mocks-panel');
+  const addMockBtn = document.getElementById('add-mock-rule-btn');
+  const formContainer = document.getElementById('mock-rules-form-container');
+  const cancelMockBtn = document.getElementById('cancel-mock-rule-btn');
+  const saveMockBtn = document.getElementById('save-mock-rule-btn');
+  const listEl = document.getElementById('mock-rules-list');
+
+  // Toggle Panel
+  mocksBtn?.addEventListener('click', () => {
+    const isHidden = mocksPanel.style.display === 'none';
+    mocksPanel.style.display = isHidden ? '' : 'none';
+    if (isHidden) {
+      loadMockRulesState();
+    }
+  });
+
+  // Toggle Form
+  addMockBtn?.addEventListener('click', () => {
+    const isHidden = formContainer.style.display === 'none';
+    if (isHidden) {
+      document.getElementById('mock-form-id').value = '';
+      document.getElementById('mock-form-method').value = '';
+      document.getElementById('mock-form-pattern').value = '';
+      document.getElementById('mock-form-status').value = '200';
+      document.getElementById('mock-form-delay').value = '0';
+      document.getElementById('mock-form-body').value = '';
+      document.getElementById('mock-form-enabled').checked = true;
+      formContainer.style.display = '';
+    } else {
+      formContainer.style.display = 'none';
+    }
+  });
+
+  // Cancel Form
+  cancelMockBtn?.addEventListener('click', () => {
+    formContainer.style.display = 'none';
+  });
+
+  // Save Rule
+  saveMockBtn?.addEventListener('click', async () => {
+    const id = document.getElementById('mock-form-id').value || ('mock_' + Date.now());
+    const method = document.getElementById('mock-form-method').value;
+    const urlPattern = document.getElementById('mock-form-pattern').value.trim();
+    const statusCode = parseInt(document.getElementById('mock-form-status').value, 10) || 200;
+    const delay = parseInt(document.getElementById('mock-form-delay').value, 10) || 0;
+    const responseBody = document.getElementById('mock-form-body').value;
+    const enabled = document.getElementById('mock-form-enabled').checked;
+
+    if (!urlPattern) {
+      alert('URL Pattern is required');
+      return;
+    }
+
+    const rule = { id, method, urlPattern, statusCode, delay, responseBody, enabled };
+    try {
+      await api.networkSaveMock(rule);
+      formContainer.style.display = 'none';
+      await loadMockRulesState();
+    } catch (err) {
+      console.error('Failed to save mock rule:', err);
+      alert('Failed to save mock rule: ' + err.message);
+    }
+  });
+
+  // List Actions via Event Delegation
+  listEl?.addEventListener('click', async (e) => {
+    const row = e.target.closest('.mock-rule-row');
+    if (!row) return;
+    const ruleId = row.dataset.ruleId;
+    const rule = mockRulesState.find(r => r.id === ruleId);
+    if (!rule) return;
+
+    if (e.target.classList.contains('mock-toggle-btn')) {
+      rule.enabled = !rule.enabled;
+      try {
+        await api.networkSaveMock(rule);
+        await loadMockRulesState();
+      } catch (err) {
+        console.error('Failed to toggle mock rule:', err);
+      }
+    } else if (e.target.classList.contains('mock-edit-btn')) {
+      document.getElementById('mock-form-id').value = rule.id;
+      document.getElementById('mock-form-method').value = rule.method || '';
+      document.getElementById('mock-form-pattern').value = rule.urlPattern || '';
+      document.getElementById('mock-form-status').value = rule.statusCode || '200';
+      document.getElementById('mock-form-delay').value = rule.delay || '0';
+      document.getElementById('mock-form-body').value = rule.responseBody || '';
+      document.getElementById('mock-form-enabled').checked = rule.enabled;
+      formContainer.style.display = '';
+    } else if (e.target.classList.contains('mock-delete-btn')) {
+      if (confirm('Are you sure you want to delete this mock rule?')) {
+        try {
+          await api.networkDeleteMock(ruleId);
+          await loadMockRulesState();
+        } catch (err) {
+          console.error('Failed to delete mock rule:', err);
+        }
+      }
+    }
+  });
+
+  // --- Diff Comparison Modal ---
+  const diffModal = document.getElementById('network-diff-modal');
+  const closeDiffBtn = document.getElementById('close-diff-modal-btn');
+  const clearCompareBtn = document.getElementById('clear-compare-btn');
+
+  // Clear base request selection
+  clearCompareBtn?.addEventListener('click', () => {
+    compareBaseRequest = null;
+    updateCompareBanner();
+  });
+
+  // Close Diff Modal
+  closeDiffBtn?.addEventListener('click', () => {
+    diffModal.style.display = 'none';
+  });
+
+  // Diff Tabs
+  document.querySelector('.network-diff-modal-tabs')?.addEventListener('click', (e) => {
+    const tabBtn = e.target.closest('.network-diff-tab');
+    if (!tabBtn) return;
+
+    document.querySelectorAll('.network-diff-tab').forEach(btn => btn.classList.remove('active'));
+    tabBtn.classList.add('active');
+
+    const activeDiffTab = tabBtn.dataset.diffTab;
+    const baseText = document.getElementById('diff-base-info').textContent;
+    const compareText = document.getElementById('diff-compare-info').textContent;
+    
+    const baseId = parseInt(baseText.match(/#(\d+)/)?.[1] || 0);
+    const compareId = parseInt(compareText.match(/#(\d+)/)?.[1] || 0);
+
+    const baseReq = requests.find(r => r.id === baseId);
+    const compareReq = requests.find(r => r.id === compareId);
+
+    if (baseReq && compareReq) {
+      renderDiffContent(baseReq, compareReq, activeDiffTab);
+    }
+  });
 }
 
 // ── Render ──
@@ -281,6 +803,7 @@ export async function renderNetwork(container) {
             </button>
             <button id="network-clear-btn" class="network-control-btn" title="Clear">🗑</button>
             <button id="network-export-btn" class="network-control-btn" title="Export HAR">📥</button>
+            <button id="network-mocks-btn" class="network-control-btn" title="Mock Rules" style="font-size: 13px;">⚙️</button>
             <div class="network-toolbar-divider"></div>
             <div class="network-status-indicator">
               <span id="network-status-dot" class="network-status-dot disconnected"></span>
@@ -328,9 +851,67 @@ export async function renderNetwork(container) {
       </div>
     </div>
 
+    <!-- Mock Rules Manager Panel (hidden by default) -->
+    <div id="network-mocks-panel" class="panel network-mocks-panel" style="display: none; border-top: 2px solid var(--accent); margin-bottom: 14px;">
+      <div class="panel-title" style="padding: 8px 14px;">
+        <span>⚙️ Mock Rules Manager — Intercept and hijack proxy requests</span>
+        <button id="add-mock-rule-btn" class="action-btn primary" style="padding: 2px 8px; min-height: auto; font-size: 10px;">+ Add Rule</button>
+      </div>
+      <div class="panel-body" style="padding: 12px 14px;">
+        <div id="mock-rules-form-container" style="display: none; margin-bottom: 12px; padding: 12px; background: var(--bg-3); border-radius: var(--radius-sm); border: 1px solid var(--border);">
+          <h4 style="margin-bottom: 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-2);">Add / Edit Mock Rule</h4>
+          <input type="hidden" id="mock-form-id" />
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 10px;">
+            <div>
+              <label class="mono" style="font-size: 10px; color: var(--text-3); display: block; margin-bottom: 4px;">Method</label>
+              <select id="mock-form-method" class="filter-select" style="width: 100%;">
+                <option value="">ANY</option>
+                <option value="GET">GET</option>
+                <option value="POST">POST</option>
+                <option value="PUT">PUT</option>
+                <option value="DELETE">DELETE</option>
+              </select>
+            </div>
+            <div style="grid-column: span 2;">
+              <label class="mono" style="font-size: 10px; color: var(--text-3); display: block; margin-bottom: 4px;">URL Pattern (Match Substring)</label>
+              <input type="text" id="mock-form-pattern" class="filter-input" placeholder="e.g. api.openai.com/v1" style="width: 100%;" />
+            </div>
+            <div>
+              <label class="mono" style="font-size: 10px; color: var(--text-3); display: block; margin-bottom: 4px;">Status Code</label>
+              <input type="number" id="mock-form-status" class="filter-input" value="200" placeholder="e.g. 200, 429" style="width: 100%;" />
+            </div>
+            <div>
+              <label class="mono" style="font-size: 10px; color: var(--text-3); display: block; margin-bottom: 4px;">Delay (ms)</label>
+              <input type="number" id="mock-form-delay" class="filter-input" value="0" placeholder="e.g. 1500" style="width: 100%;" />
+            </div>
+            <div style="display: flex; align-items: center; margin-top: 18px;">
+              <label style="cursor: pointer; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2);">
+                <input type="checkbox" id="mock-form-enabled" checked /> Enabled
+              </label>
+            </div>
+          </div>
+          <div style="margin-bottom: 10px;">
+            <label class="mono" style="font-size: 10px; color: var(--text-3); display: block; margin-bottom: 4px;">Mock Response Body (JSON / Text)</label>
+            <textarea id="mock-form-body" class="filter-input mono" placeholder='e.g. { "error": "rate limit exceeded" }' style="width: 100%; height: 80px; font-size: 11px; font-family: var(--font-mono); resize: vertical;"></textarea>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <button id="save-mock-rule-btn" class="action-btn primary" style="padding: 4px 12px; min-height: auto; font-size: 11px;">Save Rule</button>
+            <button id="cancel-mock-rule-btn" class="action-btn secondary" style="padding: 4px 12px; min-height: auto; font-size: 11px;">Cancel</button>
+          </div>
+        </div>
+        <div id="mock-rules-list" class="network-kv-table" style="max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px;">
+          <!-- Mock rules render here -->
+        </div>
+      </div>
+    </div>
+
     <!-- Request Table + Detail Split -->
     <div class="network-content">
       <div class="panel network-table-panel">
+        <div id="network-compare-banner" class="network-compare-banner" style="display:none; align-items:center; justify-content:space-between; padding:8px 12px; background:var(--accent-glow); border-bottom:1px solid var(--accent); font-size:12px; color:var(--text); border-radius: var(--radius-sm) var(--radius-sm) 0 0;">
+          <span>📊 Comparing with Request <strong>#<span id="compare-base-id"></span></strong>: <span id="compare-base-url" class="mono" style="font-size:11px"></span></span>
+          <button id="clear-compare-btn" class="action-btn secondary" style="padding:2px 8px; min-height:auto; font-size:10px">Clear</button>
+        </div>
         <div class="table-wrap">
           <table class="data-table network-table" id="network-request-table">
             <thead>
@@ -375,6 +956,37 @@ export async function renderNetwork(container) {
         <div id="network-detail-body" class="network-detail-body"></div>
       </div>
     </div>
+
+    <!-- Diff Comparison Modal -->
+    <div id="network-diff-modal" class="network-diff-modal" style="display:none;">
+      <div class="network-diff-modal-content">
+        <div class="network-diff-modal-header">
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <h3 style="margin:0; font-size:15px; color:var(--text)">Compare Requests</h3>
+            <div class="network-diff-modal-tabs">
+              <button class="network-diff-tab active" data-diff-tab="request">Request Body</button>
+              <button class="network-diff-tab" data-diff-tab="response">Response Body</button>
+              <button class="network-diff-tab" data-diff-tab="headers">Headers</button>
+            </div>
+          </div>
+          <button id="close-diff-modal-btn" class="network-control-btn" style="font-size:14px">✕</button>
+        </div>
+        <div class="network-diff-modal-subheader">
+          <div class="diff-header-left">
+            <strong>Base Request:</strong> <span id="diff-base-info" class="mono" style="font-size:11px"></span>
+          </div>
+          <div class="diff-header-right">
+            <strong>Compare Request:</strong> <span id="diff-compare-info" class="mono" style="font-size:11px"></span>
+          </div>
+        </div>
+        <div class="network-diff-modal-body">
+          <div class="network-diff-container">
+            <div class="network-diff-pane" id="diff-pane-left"></div>
+            <div class="network-diff-pane" id="diff-pane-right"></div>
+          </div>
+        </div>
+      </div>
+    </div>
   `;
 
   // ── Bind Events ──
@@ -382,6 +994,9 @@ export async function renderNetwork(container) {
   bindToolbarEvents(status);
   bindChipEvents();
   bindTableEvents();
+  bindMockAndDiffEvents();
+  updateCompareBanner();
+  loadMockRulesState();
 
   // Connect WebSocket and start receiving
   connectWebSocket((record) => {
@@ -658,12 +1273,64 @@ function bindTableEvents() {
       navigator.clipboard.writeText(record.url);
     });
 
+    // Option 5: Copy as cURL
+    const copyCurlOption = document.createElement('div');
+    copyCurlOption.className = 'network-context-menu-item';
+    copyCurlOption.innerHTML = `💻 <span>Copy as cURL</span>`;
+    copyCurlOption.addEventListener('click', () => {
+      navigator.clipboard.writeText(generateCurl(record));
+    });
+
+    // Option 6: Copy as Node Fetch
+    const copyNodeFetchOption = document.createElement('div');
+    copyNodeFetchOption.className = 'network-context-menu-item';
+    copyNodeFetchOption.innerHTML = `🟢 <span>Copy as Node Fetch</span>`;
+    copyNodeFetchOption.addEventListener('click', () => {
+      navigator.clipboard.writeText(generateNodeFetch(record));
+    });
+
+    // Option 7: Copy as Browser Fetch
+    const copyBrowserFetchOption = document.createElement('div');
+    copyBrowserFetchOption.className = 'network-context-menu-item';
+    copyBrowserFetchOption.innerHTML = `🌐 <span>Copy as Browser Fetch</span>`;
+    copyBrowserFetchOption.addEventListener('click', () => {
+      navigator.clipboard.writeText(generateBrowserFetch(record));
+    });
+
+    // Option 8: Select for Comparison
+    const selectCompareOption = document.createElement('div');
+    selectCompareOption.className = 'network-context-menu-item';
+    selectCompareOption.innerHTML = `📊 <span>Select for Comparison</span>`;
+    selectCompareOption.addEventListener('click', () => {
+      compareBaseRequest = record;
+      updateCompareBanner();
+    });
+
+    // Option 9: Compare with Selected
+    let compareOption = null;
+    if (compareBaseRequest && compareBaseRequest.id !== record.id) {
+      compareOption = document.createElement('div');
+      compareOption.className = 'network-context-menu-item';
+      compareOption.innerHTML = `⚔️ <span>Compare with #${compareBaseRequest.id}</span>`;
+      compareOption.addEventListener('click', () => {
+        openCompareModal(compareBaseRequest, record);
+      });
+    }
+
     menu.appendChild(replayOption);
     menu.appendChild(document.createElement('div')).className = 'network-context-menu-divider';
     menu.appendChild(pathOption);
     menu.appendChild(hostOption);
     menu.appendChild(document.createElement('div')).className = 'network-context-menu-divider';
     menu.appendChild(copyOption);
+    menu.appendChild(copyCurlOption);
+    menu.appendChild(copyNodeFetchOption);
+    menu.appendChild(copyBrowserFetchOption);
+    menu.appendChild(document.createElement('div')).className = 'network-context-menu-divider';
+    menu.appendChild(selectCompareOption);
+    if (compareOption) {
+      menu.appendChild(compareOption);
+    }
 
     document.body.appendChild(menu);
 
@@ -849,6 +1516,7 @@ function renderDetailContent(record) {
 }
 
 function renderHeadersTab(r) {
+  const usage = calculateUsageAndCost(r);
   return `
     <div class="network-detail-section">
       <h4 class="network-detail-section-title">General</h4>
@@ -858,6 +1526,11 @@ function renderHeadersTab(r) {
         <div class="network-kv-row"><span class="network-kv-key">Status Code</span><span class="network-kv-val"><span class="badge ${statusClass(r.statusCode)}">${r.statusCode || 'Error'}</span>${r.error ? ` <span style="color:var(--red);font-size:11px">${escHtml(r.error)}</span>` : ''}</span></div>
         <div class="network-kv-row"><span class="network-kv-key">Host</span><span class="network-kv-val mono">${escHtml(r.host)}</span></div>
         <div class="network-kv-row"><span class="network-kv-key">Tag</span><span class="network-kv-val"><span class="badge ${tagColorClass(r.tag)}">${escHtml(tagLabel(r.tag))}</span></span></div>
+        ${usage ? `
+          <div class="network-kv-row"><span class="network-kv-key">LLM Model</span><span class="network-kv-val mono">${escHtml(usage.model)}</span></div>
+          <div class="network-kv-row"><span class="network-kv-key">Tokens Usage</span><span class="network-kv-val mono">${usage.inputTokens.toLocaleString()} input / ${usage.outputTokens.toLocaleString()} output (${usage.totalTokens.toLocaleString()} total)</span></div>
+          <div class="network-kv-row"><span class="network-kv-key">Estimated Cost</span><span class="network-kv-val mono" style="color:var(--green);font-weight:bold">$${usage.cost.toFixed(5)}</span></div>
+        ` : ''}
       </div>
     </div>
     <div class="network-detail-section">

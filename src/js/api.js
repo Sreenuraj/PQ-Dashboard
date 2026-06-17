@@ -84,6 +84,9 @@ export const api = {
   networkRequest:  (id)   => get(`/network/requests/${id}`),
   networkClear:    ()     => post('/network/clear'),
   networkReplay:   (id)   => post(`/network/replay/${id}`),
+  networkMocks:    ()     => get('/network/mocks'),
+  networkSaveMock: (body) => post('/network/mocks', body),
+  networkDeleteMock:(id)  => del(`/network/mocks/${id}`),
 };
 
 // Phase 4: cached metric defs (fetched once per page-load; consumed by MetricTooltip)
