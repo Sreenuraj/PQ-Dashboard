@@ -122,7 +122,11 @@ A built-in MITM proxy that captures live HTTP/HTTPS network traffic from the Pos
 - **Chrome DevTools–style UI** — Record/Pause, Clear, Export HAR, filter by domain/method/status, row limit dropdown selector (Last 5, Last 10, Last 15, All), search by URL.
 - **Vertical Scrolling & Sticky Headers** — Gracefully handles overflow with a dedicated scrollable table body container and sticky positioning for table headers.
 - **Zlib Payload Decompression** — Automatically detects and decompresses payloads encoded with `Gzip`, `Deflate`, or `Brotli` (br) on the fly, rendering readable JSON text instead of binary gibberish.
-- **Right-Click Context Menu** — Right-click on any request to filter by path/host, copy the URL, or replay the request.
+- **Right-Click Context Menu** — Right-click on any request to filter by path/host, copy the URL, replay the request, copy code snippets, or perform side-by-side payload comparisons.
+- **Copy Code Snippets** — Instantly generate and copy request snippets formatted as shell **cURL**, **Node.js Fetch**, or standard **Browser Fetch**.
+- **LLM Token & Cost Counter** — Automatically parses prompt and response payloads to extract token usage from OpenAI, Anthropic, and Google Gemini metadata, calculating estimated USD cost using pricing rate sheets.
+- **Mock Interception & Delay Simulator** — Hijack matching proxy request patterns to return custom status codes, response bodies, and mock delays directly from the local proxy, with rule management through a collapsible front-end panel.
+- **Side-by-Side Payload Diff Tool** — Select a baseline request and visually compare request/response payloads or headers side-by-side in a modal overlay with synchronized scrolling.
 - **Request Replay Option** — Replay any captured request with a single click. The request executes directly from the dashboard server and shows up instantly in the dashboard list with a `REPLAY` badge.
 - **Request Detail Panel** — Inspect headers, request body, response body (syntax-highlighted JSON), and timing.
 - **In-Page Setup Guide** — Step-by-step instructions for configuring VS Code's proxy settings.
@@ -296,6 +300,9 @@ PQ-Dashboard/
 | `POST /api/network/replay/:id` | Replay a captured request and log/broadcast the result. |
 | `POST /api/network/clear` | Clear the captured request buffer. |
 | `GET /api/network/export` | Export all buffered requests as HAR file. |
+| `GET /api/network/mocks` | Fetch all active and inactive mock rules. |
+| `POST /api/network/mocks` | Create or update a mock rule. |
+| `DELETE /api/network/mocks/:id` | Delete a mock rule by its unique ID. |
 
 ---
 
