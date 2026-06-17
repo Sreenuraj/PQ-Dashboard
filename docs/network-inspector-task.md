@@ -172,3 +172,35 @@ VS Code (with PostQode)
                               │  Network Inspector Tab │
                               └───────────────────────┘
 ```
+
+---
+
+## Phase 2 Roadmap — Advanced Observability & Mocking
+
+The following roadmap outlines plans to expand the Network Inspector into a comprehensive observability, testing, and simulation suite:
+
+### 1. Request Interception & Mocking Rules
+- **Mock Responses:** Create a rules builder (via config or a dashboard UI) to intercept specific API calls (e.g., matching `*api.openai.com/v1/chat/completions`) and return custom mock JSON responses.
+- **Error Simulation:** Simulate API failures (e.g., HTTP 500, HTTP 429 Rate Limits) or inject network delays (latency) to test the robustness of VS Code extension error handling.
+
+### 2. Token Counting & Cost Estimation
+- **Parse Payloads:** Extract token counts (input/completion tokens) directly from the API response bodies of known LLM providers.
+- **Cost Benchmarks:** Calculate real-time financial cost (in USD) using dynamic model rate sheets, rendering cost summaries per-request and per-session.
+
+### 3. Curl & Fetch Code Generator
+- **Copy Actions:** Expand right-click context menu options to generate copyable code snippets:
+  - **Copy as cURL**
+  - **Copy as Fetch (NodeJS)**
+  - **Copy as Fetch (Browser)**
+
+### 4. Side-by-Side Prompt/Response Diff Tool
+- **Payload Diffing:** Allow selecting any two request entries and running a visual diff comparison (line-by-side or inline) comparing prompt content (system instructions, user messages, parameters like temperature) and response text.
+
+### 5. Latency & TTFB Benchmarks
+- **Performance Analytics:** Add benchmark charts tracking Average TTFB (Time to First Byte), throughput, and bandwidth categorized by AI provider or specific models.
+
+### 6. Network Throttling Simulator
+- **Condition Presets:** Emulate limited bandwidth networks (e.g., Slow 3G, Fast 3G, Offline) to verify extension UI responsiveness.
+
+### 7. Named Session Recordings
+- **Trace Bundling:** Group sequences of captured requests into named sessions, saving or exporting/importing them for sharing or running regression suites.
