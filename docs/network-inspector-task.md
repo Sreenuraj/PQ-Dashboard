@@ -134,6 +134,17 @@ curl http://localhost:3456/api/network/requests | head
 curl http://localhost:3456/api/network/status
 ```
 
+### 6. Verify Latest Enhancements
+
+- **PostQode Domain Tag:** Verify the "PostQode" domain filter chip is present and filters for `api.postqode.ai` requests.
+- **Payload Decompression:** Verify that request and response bodies (specifically from `api.postqode.ai` or other gzip-compressed APIs) are shown as readable JSON text instead of gibberish.
+- **Row Limits & Scrolling:** Click the row limit dropdown in the toolbar. Change it to `Last 5` and verify the table only displays the 5 most recent requests. Change it to `All` and verify that scrollbars appear if the list overflows, with the headers remaining sticky at the top.
+- **Right-Click Context Menu:** Right-click on any row in the request table. Verify that the custom menu appears with the options to:
+  - **Replay Request:** Click this option and verify that the replayed request is executed and appears live at the top of the table marked with a grey `REPLAY` badge.
+  - **Filter by path:** Verify it populates the search bar and filters the list.
+  - **Filter by host:** Verify it populates the search bar and filters the list.
+  - **Copy URL:** Verify it copies the full URL to the clipboard.
+
 ---
 
 ## Architecture

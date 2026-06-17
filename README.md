@@ -118,8 +118,12 @@ A built-in MITM proxy that captures live HTTP/HTTPS network traffic from the Pos
 
 - **Built-in Proxy** — Runs on port `3457` alongside the dashboard server. No external tools required.
 - **Live Streaming** — Requests appear in real-time via WebSocket as PostQode makes API calls.
-- **AI Provider Tagging** — Automatically tags requests by provider (OpenAI, Anthropic, Google, Groq, etc.).
-- **Chrome DevTools–style UI** — Record/Pause, Clear, Export HAR, filter by domain/method/status, search by URL.
+- **AI Provider Tagging** — Automatically tags requests by provider (PostQode, OpenAI, Anthropic, Google, Groq, etc.).
+- **Chrome DevTools–style UI** — Record/Pause, Clear, Export HAR, filter by domain/method/status, row limit dropdown selector (Last 5, Last 10, Last 15, All), search by URL.
+- **Vertical Scrolling & Sticky Headers** — Gracefully handles overflow with a dedicated scrollable table body container and sticky positioning for table headers.
+- **Zlib Payload Decompression** — Automatically detects and decompresses payloads encoded with `Gzip`, `Deflate`, or `Brotli` (br) on the fly, rendering readable JSON text instead of binary gibberish.
+- **Right-Click Context Menu** — Right-click on any request to filter by path/host, copy the URL, or replay the request.
+- **Request Replay Option** — Replay any captured request with a single click. The request executes directly from the dashboard server and shows up instantly in the dashboard list with a `REPLAY` badge.
 - **Request Detail Panel** — Inspect headers, request body, response body (syntax-highlighted JSON), and timing.
 - **In-Page Setup Guide** — Step-by-step instructions for configuring VS Code's proxy settings.
 
@@ -289,6 +293,7 @@ PQ-Dashboard/
 | `GET /api/network/status` | Proxy status (running/stopped, port, buffer count, connected clients). |
 | `GET /api/network/requests` | Paginated captured requests. Supports `?host=`, `?method=`, `?status=`, `?search=`. |
 | `GET /api/network/requests/:id` | Full request detail (headers, body, timing). |
+| `POST /api/network/replay/:id` | Replay a captured request and log/broadcast the result. |
 | `POST /api/network/clear` | Clear the captured request buffer. |
 | `GET /api/network/export` | Export all buffered requests as HAR file. |
 
