@@ -13,6 +13,7 @@ import { renderBaselineEditor } from './views/baseline-editor.js';
 import { renderBaselineEnrich } from './views/baseline-enrich.js';
 import { renderTest } from './views/test.js';
 import { renderDeepCompare } from './views/deep-compare.js';
+import { renderNetwork } from './views/network.js';
 import { api }            from './api.js';
 import { getDateRange, initDatePicker } from './components/date-picker.js';
 import { applyChartTheme } from './components/charts.js';
@@ -63,6 +64,7 @@ const routes = {
   'baseline-enrich': (p) => renderBaselineEnrich(container, p.get('id')),
   test:        (p) => renderTest(container, p),
   deepcompare: (p) => renderDeepCompare(container, p),
+  network:     (p) => renderNetwork(container),
 };
 
 function currentView() {

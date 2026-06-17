@@ -78,6 +78,11 @@ export const api = {
   toolsRegistry: ()     => get('/tools/registry'),
   refresh:       ()     => post('/refresh'),
   config:        ()     => get('/config'),
+  // Network Inspector
+  networkStatus:   ()     => get('/network/status'),
+  networkRequests: (p={}) => get('/network/requests', p),
+  networkRequest:  (id)   => get(`/network/requests/${id}`),
+  networkClear:    ()     => post('/network/clear'),
 };
 
 // Phase 4: cached metric defs (fetched once per page-load; consumed by MetricTooltip)

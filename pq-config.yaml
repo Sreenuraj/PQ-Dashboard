@@ -33,3 +33,9 @@ cache:
 server:
   port: 3456
   host: "localhost"
+
+proxy:
+  enabled: true
+  port: 3457
+  buffer_size: 500       # max requests in memory (FIFO eviction)
+  certs_dir: "./data/proxy-certs"

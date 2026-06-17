@@ -56,7 +56,7 @@ The parser already captures the *agent* that handled each chunk of a PostQode se
 
 ### 1.4 Findings from Real Task Files
 
-I examined 9 real task folders under `/Users/sreenuraj/Library/Application Support/Code[-Insiders]/User/globalStorage/postqode.postqode/tasks/` and verified the following:
+I examined 9 real task folders under `<user-home-dir>/Library/Application Support/Code[-Insiders]/User/globalStorage/postqode.postqode/tasks/` and verified the following:
 
 1. **Multi-agent + re-entries are real.** Task `1778148395003` has 4 `model_usage` entries — `web_agent (kimi)`, `plan (opus)`, `plan (kimi)`, `agent (kimi)` — and 451 events split across the 3 agents. The user went into plan, exited (which switched models), went back into plan with a different model, then exited to general.
 2. **`task_models` already preserves the (model, mode) tuple per entry** — even when the same mode appears twice with different models. The `model_id::mode` dedup is correct as-is.

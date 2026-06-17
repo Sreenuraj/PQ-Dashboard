@@ -110,6 +110,28 @@ Six deterministic patterns evaluated natively from log traces:
 | `#/baseline-enrich?id=<id>` | Compare a session against a baseline, merge diffs |
 | `#/test?task=<id>` | Run behavioral tests for a task |
 | `#/deepcompare?tasks=<id1>,<id2>` | Side-by-side comparison with ranked performance index |
+| `#/network` | Live network traffic inspector |
+
+### Network Inspector
+
+A built-in MITM proxy that captures live HTTP/HTTPS network traffic from the PostQode VS Code extension. Since PostQode runs in the Extension Host process (a separate Node.js process), VS Code's Developer Tools Network tab cannot see its traffic. The Network Inspector solves this by routing VS Code through a local proxy.
+
+- **Built-in Proxy** — Runs on port `3457` alongside the dashboard server. No external tools required.
+- **Live Streaming** — Requests appear in real-time via WebSocket as PostQode makes API calls.
+- **AI Provider Tagging** — Automatically tags requests by provider (OpenAI, Anthropic, Google, Groq, etc.).
+- **Chrome DevTools–style UI** — Record/Pause, Clear, Export HAR, filter by domain/method/status, search by URL.
+- **Request Detail Panel** — Inspect headers, request body, response body (syntax-highlighted JSON), and timing.
+- **In-Page Setup Guide** — Step-by-step instructions for configuring VS Code's proxy settings.
+
+#### Setup
+
+1. Start PQ Dashboard (the proxy starts automatically on port `3457`)
+2. In VS Code, set `"http.proxy": "http://localhost:3457"` and `"http.proxyStrictSSL": false`. (Optional: Add `"api.postqode.ai"` to `"http.noProxy"` if you want to bypass the proxy for logins/syncing, but note that if you are using the 'PostQode' API Provider to route AI calls, bypassing it will prevent capturing those requests).
+3. To proxy all HTTPS requests without errors, trust the proxy CA cert globally:
+   - **macOS (Terminal)**: `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "<workspace-path>/data/proxy-certs/certs/ca.pem"` (Or double-click the certificate file and set it to **Always Trust** in Keychain Access).
+   - **Windows (Admin PowerShell)**: `Import-Certificate -FilePath "<workspace-path>/data/proxy-certs/certs/ca.pem" -CertStoreLocation Cert:\LocalMachine\Root`
+   - *Alternative (Terminal)*: Launch VS Code with `NODE_EXTRA_CA_CERTS="<workspace-path>/data/proxy-certs/certs/ca.pem" code` or `NODE_TLS_REJECT_UNAUTHORIZED=0 code`.
+4. Open the **Network** tab in PQ Dashboard → requests appear live
 
 ### Task Investigation & Comparison
 - **Investigation View** — Full observability trace viewer with tool invocations, logic breakdowns, payloads, and live search across all events. Color-coded by active agent.
@@ -166,9 +188,14 @@ PQ-Dashboard/
 │   ├── cache/
 │   │   └── db.js               # SQLite schema, migrations, parser denormalization
 │   ├── parser/                 # Incremental task parser (ui_messages.json → events)
+│   ├── proxy/
+│   │   ├── index.js            # MITM proxy server (HTTP/HTTPS interception)
+│   │   ├── store.js            # In-memory circular buffer for captured requests
+│   │   └── ws.js               # WebSocket server for real-time streaming
 │   ├── routes/
 │   │   ├── analytics.js        # /api/analytics/* (overview, models, agents, errors, etc.)
 │   │   ├── baselines.js        # /api/baselines/*
+│   │   ├── network.js          # /api/network/* (proxy status, captured requests, export)
 │   │   └── tasks.js            # /api/tasks/* (list, detail, evaluate, test)
 │   └── testing/                # Behavioral test runner (TIA/BCV/MTV/BSE/ERC/CEC)
 ├── src/                        # Vite frontend
@@ -255,6 +282,16 @@ PQ-Dashboard/
 | `GET/PUT/DELETE /api/baselines/:id` | CRUD operations on baselines. |
 | `POST /api/baselines/:id/enrich` | Enrich baseline from another session's trace. |
 
+### Network Inspector
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/network/status` | Proxy status (running/stopped, port, buffer count, connected clients). |
+| `GET /api/network/requests` | Paginated captured requests. Supports `?host=`, `?method=`, `?status=`, `?search=`. |
+| `GET /api/network/requests/:id` | Full request detail (headers, body, timing). |
+| `POST /api/network/clear` | Clear the captured request buffer. |
+| `GET /api/network/export` | Export all buffered requests as HAR file. |
+
 ---
 
 ## Troubleshooting
@@ -265,3 +302,6 @@ PQ-Dashboard/
 | EADDRINUSE error | Ports 3456/5173 are in use. Run `pkill -f "node server/index.js"` and `pkill -f "vite"`. |
 | Stale data after schema change | Delete `data/dashboard.db` and restart the server to trigger a fresh parse. |
 | Agent data missing | Agent metadata is computed at parse time. If sessions were parsed before agent support was added, delete the DB and re-parse. |
+| Network tab shows no requests | Ensure VS Code has `http.proxy` set to `http://localhost:3457`, `http.proxyStrictSSL` is `false`, and `http.noProxy` includes `"localhost"` and `"127.0.0.1"`. Restart VS Code after changing proxy settings. |
+| Network proxy won't start | Check if port 3457 is already in use: `lsof -ti:3457`. Kill any conflicting process. |
+| HTTPS requests fail through proxy | Set `"http.proxyStrictSSL": false` and add `"localhost"`/`"127.0.0.1"` to `"http.noProxy"` in VS Code settings, or add the CA cert from `data/proxy-certs/` to your system keychain. |

@@ -1,10 +1,13 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const http = require('http');
 const { loadConfig, saveConfig } = require('./config');
 const { runParser } = require('./parser/index');
 const { getDB } = require('./cache/db');
 const { loadModelRegistry, getAllModels, getModelInfo } = require('./model-registry');
+const { startProxy, getProxyStatus, getStore } = require('./proxy/index');
+const { initWebSocket, getClientCount } = require('./proxy/ws');
 
 const app = express();
 app.use(cors());
@@ -20,7 +23,11 @@ const analyticsRouter = require('./routes/analytics')(db);
 const baselinesRouter = require('./routes/baselines')(db);
 const testingRouter = require('./routes/testing')(db);
 
+// Network Inspector routes
+const networkRouter = require('./routes/network')(getStore, getProxyStatus, getClientCount);
+
 app.use('/api', testingRouter);
+app.use('/api', networkRouter);
 app.use('/api/tasks', tasksRouter);
 app.use('/api/analytics', analyticsRouter);
 app.use('/api/baselines', baselinesRouter);
@@ -68,7 +75,12 @@ app.get('/{*path}', (req, res) => {
 });
 
 const { port } = config.server;
-app.listen(port, '0.0.0.0', async () => {
+const server = http.createServer(app);
+
+// Attach WebSocket server for real-time network streaming
+initWebSocket(server);
+
+server.listen(port, '0.0.0.0', async () => {
   console.log(`\n🚀 PQ Dashboard server running at http://localhost:${port}\n`);
   console.log('Loading model registry...');
   loadModelRegistry(config.sources);
@@ -79,5 +91,19 @@ app.listen(port, '0.0.0.0', async () => {
     console.log(`✅ Parse complete: ${result.processed} new, ${result.skipped} cached\n`);
   } finally {
     parsing = false;
+  }
+
+  // Start network proxy
+  const proxyConfig = config.proxy || {};
+  if (proxyConfig.enabled !== false) {
+    try {
+      startProxy({
+        port: proxyConfig.port || 3457,
+        buffer_size: proxyConfig.buffer_size || 500,
+        certs_dir: proxyConfig.certs_dir || './data/proxy-certs',
+      });
+    } catch (e) {
+      console.error('⚠ Network proxy failed to start:', e.message);
+    }
   }
 });
