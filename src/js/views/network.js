@@ -378,6 +378,7 @@ export async function renderNetwork(container) {
   `;
 
   // ── Bind Events ──
+  renderChips();
   bindToolbarEvents(status);
   bindChipEvents();
   bindTableEvents();
@@ -433,6 +434,7 @@ function bindToolbarEvents(status) {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => {
       activeFilters.search = e.target.value;
+      renderChips();
       renderTable();
     }, 200);
   });
@@ -517,15 +519,55 @@ function showSetup() {
   if (showBtn) showBtn.remove();
 }
 
+function renderChips() {
+  const container = document.getElementById('network-domain-chips');
+  if (!container) return;
+
+  const defaultChips = [
+    { tag: 'all', label: 'All' },
+    { tag: 'postqode', label: 'PostQode' },
+    { tag: 'openai', label: 'OpenAI' },
+    { tag: 'anthropic', label: 'Anthropic' },
+    { tag: 'google', label: 'Google' },
+    { tag: 'copilot', label: 'Copilot' },
+    { tag: 'github', label: 'GitHub' },
+    { tag: 'other', label: 'Other' }
+  ];
+
+  let html = defaultChips.map(c => {
+    const isActive = activeFilters.host === c.tag;
+    return `<button class="network-chip ${isActive ? 'active' : ''}" data-tag="${c.tag}">${escHtml(c.label)}</button>`;
+  }).join('');
+
+  if (activeFilters.search) {
+    html += `
+      <button class="network-chip active custom-filter-chip" title="Click to clear filter" style="border-color:var(--accent);background:var(--accent-glow);color:var(--text);display:flex;align-items:center;gap:6px">
+        <span>Filter: "${escHtml(activeFilters.search)}"</span>
+        <span style="font-weight:bold;color:var(--text-3);cursor:pointer;padding:0 2px">&times;</span>
+      </button>
+    `;
+  }
+
+  container.innerHTML = html;
+}
+
 // ── Domain Chip Events ──
 function bindChipEvents() {
   document.getElementById('network-domain-chips')?.addEventListener('click', (e) => {
     const chip = e.target.closest('.network-chip');
     if (!chip) return;
-    // Toggle active
-    document.querySelectorAll('.network-chip').forEach(c => c.classList.remove('active'));
-    chip.classList.add('active');
+
+    if (chip.classList.contains('custom-filter-chip')) {
+      const searchInput = document.getElementById('network-search');
+      if (searchInput) searchInput.value = '';
+      activeFilters.search = '';
+      renderChips();
+      renderTable();
+      return;
+    }
+
     activeFilters.host = chip.dataset.tag || 'all';
+    renderChips();
     renderTable();
   });
 }
@@ -721,11 +763,18 @@ function renderTable() {
   // Newest first
   let sorted = [...filtered].reverse();
 
-  // Apply row limit
-  if (activeFilters.limit && activeFilters.limit !== 'all') {
-    const lim = parseInt(activeFilters.limit, 10);
-    if (!isNaN(lim)) {
-      sorted = sorted.slice(0, lim);
+  // Set dynamic max-height on the container wrapper based on selected limit
+  const tableWrap = document.querySelector('.network-table-panel .table-wrap');
+  if (tableWrap) {
+    if (activeFilters.limit && activeFilters.limit !== 'all') {
+      const lim = parseInt(activeFilters.limit, 10);
+      if (!isNaN(lim)) {
+        // Header height is ~32px, each row is ~35px.
+        const calculatedHeight = 32 + (lim * 35);
+        tableWrap.style.maxHeight = `${calculatedHeight}px`;
+      }
+    } else {
+      tableWrap.style.maxHeight = '380px'; // default fallback max-height
     }
   }
 
