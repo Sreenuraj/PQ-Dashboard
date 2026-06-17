@@ -62,11 +62,20 @@ export function initDatePicker(containerId) {
 
   // Move wrapper into the new view's top-bar
   const container = document.getElementById(containerId);
+  let hasTopBar = false;
   if (container) {
     const topBar = container.querySelector('.top-bar');
-    if (topBar) topBar.appendChild(wrapper);
+    if (topBar) {
+      topBar.appendChild(wrapper);
+      hasTopBar = true;
+    }
   }
-  wrapper.style.display = 'flex';
+
+  if (hasTopBar) {
+    wrapper.style.display = 'flex';
+  } else {
+    wrapper.style.display = 'none';
+  }
 
   // Keep label in sync with current selection
   label.textContent = getCurrentRangeLabel();
