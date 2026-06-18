@@ -8,6 +8,19 @@ const { WebSocketServer } = require('ws');
 let wss = null;
 const clients = new Set();
 
+// Lazy-loaded intercept functions to avoid circular dependency with proxy/index.js
+let _interceptFns = null;
+function getInterceptFns() {
+  if (!_interceptFns) {
+    const proxy = require('./index');
+    _interceptFns = {
+      resolveInterceptedRequest: proxy.resolveInterceptedRequest,
+      forwardAllPending: proxy.forwardAllPending,
+    };
+  }
+  return _interceptFns;
+}
+
 /**
  * Initialize WebSocket server attached to an HTTP server.
  * @param {http.Server} server - The HTTP server to attach to
@@ -35,6 +48,24 @@ function initWebSocket(server) {
             client.paused = false;
             ws.send(JSON.stringify({ type: 'status', paused: false }));
             break;
+          case 'intercept_forward': {
+            const fns = getInterceptFns();
+            const ok = fns.resolveInterceptedRequest(msg.interceptId, 'forward', msg.data || null);
+            ws.send(JSON.stringify({ type: 'intercept_ack', interceptId: msg.interceptId, action: 'forward', success: ok }));
+            break;
+          }
+          case 'intercept_drop': {
+            const fns = getInterceptFns();
+            const ok = fns.resolveInterceptedRequest(msg.interceptId, 'drop', null);
+            ws.send(JSON.stringify({ type: 'intercept_ack', interceptId: msg.interceptId, action: 'drop', success: ok }));
+            break;
+          }
+          case 'intercept_forward_all': {
+            const fns = getInterceptFns();
+            const count = fns.forwardAllPending();
+            ws.send(JSON.stringify({ type: 'intercept_ack', action: 'forward_all', count }));
+            break;
+          }
           default:
             break;
         }

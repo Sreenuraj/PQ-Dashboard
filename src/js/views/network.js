@@ -298,6 +298,13 @@ let activeDetailTab = 'headers';
 let mockRulesState = [];
 let compareBaseRequest = null;
 
+// ── Intercept State ──
+let interceptEnabled = false;
+let interceptFilters = [];
+let pendingIntercepts = [];  // { id, method, url, host, path, requestHeaders, requestBody, tag, timestamp, elapsed }
+let interceptElapsedTimer = null;
+let editingIntercept = null; // currently editing intercept request
+
 // ── WebSocket ──
 function connectWebSocket(onMessage) {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -314,6 +321,14 @@ function connectWebSocket(onMessage) {
       const msg = JSON.parse(event.data);
       if (msg.type === 'request' && isRecording) {
         onMessage(msg.data);
+      } else if (msg.type === 'intercepted') {
+        handleInterceptedRequest(msg.data);
+      } else if (msg.type === 'intercept_resolved') {
+        handleInterceptResolved(msg.data);
+      } else if (msg.type === 'intercept_timeout') {
+        handleInterceptTimeout(msg.data);
+      } else if (msg.type === 'intercept_state_changed') {
+        handleInterceptStateChanged(msg.data);
       }
     } catch (e) {
       // Ignore malformed messages
@@ -336,6 +351,10 @@ function disconnectWebSocket() {
     ws.onclose = null; // Prevent reconnect
     ws.close();
     ws = null;
+  }
+  if (interceptElapsedTimer) {
+    clearInterval(interceptElapsedTimer);
+    interceptElapsedTimer = null;
   }
 }
 
@@ -804,6 +823,7 @@ export async function renderNetwork(container) {
             <button id="network-clear-btn" class="network-control-btn" title="Clear">🗑</button>
             <button id="network-export-btn" class="network-control-btn" title="Export HAR">📥</button>
             <button id="network-mocks-btn" class="network-control-btn" title="Mock Rules" style="font-size: 13px;">⚙️</button>
+            <button id="network-intercept-btn" class="network-control-btn" title="Request Breakpoints" style="font-size: 13px;">🛑</button>
             <div class="network-toolbar-divider"></div>
             <div class="network-status-indicator">
               <span id="network-status-dot" class="network-status-dot disconnected"></span>
@@ -905,6 +925,31 @@ export async function renderNetwork(container) {
       </div>
     </div>
 
+    <!-- Intercept / Breakpoint Panel (hidden by default) -->
+    <div id="network-intercept-panel" class="panel network-intercept-panel" style="display: none;">
+      <div class="panel-title" style="padding: 8px 14px;">
+        <div class="intercept-header-row">
+          <span>🛑 Request Breakpoints — Intercept, Edit & Forward Requests</span>
+          <label class="intercept-toggle" title="Enable/Disable Intercept Mode">
+            <input type="checkbox" id="intercept-enabled-toggle" />
+            <span class="intercept-toggle-slider"></span>
+          </label>
+          <span id="intercept-pending-count" class="intercept-pending-badge empty">0 Pending</span>
+        </div>
+        <button id="intercept-forward-all-btn" class="intercept-action-btn forward-all" style="display: none;">✅ Forward All</button>
+      </div>
+      <div class="panel-body" style="padding: 12px 14px;">
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+          <input type="text" id="intercept-filter-input" class="filter-input" placeholder="Add URL filter pattern (e.g. api.openai.com)…" style="flex: 1; min-width: 180px;" />
+          <button id="intercept-add-filter-btn" class="action-btn secondary" style="padding: 4px 10px; min-height: auto; font-size: 11px;">+ Add Filter</button>
+        </div>
+        <div id="intercept-filter-chips" class="intercept-filters" style="display: none;"></div>
+        <div id="intercept-pending-queue" class="intercept-pending-queue">
+          <div class="intercept-empty-state">No intercepted requests. Enable intercept mode and send requests through the proxy.</div>
+        </div>
+      </div>
+    </div>
+
     <!-- Request Table + Detail Split -->
     <div class="network-content">
       <div class="panel network-table-panel">
@@ -987,6 +1032,46 @@ export async function renderNetwork(container) {
         </div>
       </div>
     </div>
+
+    <!-- Intercept Edit Modal -->
+    <div id="intercept-edit-modal" class="intercept-edit-modal" style="display: none;">
+      <div class="intercept-edit-content">
+        <div class="intercept-edit-header">
+          <h3>✏️ Edit Intercepted Request <span id="intercept-edit-id" class="mono" style="font-size:11px; color:var(--text-3)"></span></h3>
+          <button id="intercept-edit-close" class="network-control-btn" style="font-size:14px">✕</button>
+        </div>
+        <div class="intercept-edit-body">
+          <div class="intercept-edit-section">
+            <span class="intercept-edit-label">Method & URL</span>
+            <div class="intercept-edit-row">
+              <select id="intercept-edit-method" class="filter-select" style="flex: 0 0 100px;">
+                <option value="GET">GET</option>
+                <option value="POST">POST</option>
+                <option value="PUT">PUT</option>
+                <option value="PATCH">PATCH</option>
+                <option value="DELETE">DELETE</option>
+                <option value="OPTIONS">OPTIONS</option>
+                <option value="HEAD">HEAD</option>
+              </select>
+              <input type="text" id="intercept-edit-url" class="filter-input" placeholder="Request URL" />
+            </div>
+          </div>
+          <div class="intercept-edit-section">
+            <span class="intercept-edit-label">Request Headers</span>
+            <div id="intercept-edit-headers" class="intercept-kv-editor"></div>
+            <button id="intercept-edit-add-header" class="intercept-kv-add">+ Add Header</button>
+          </div>
+          <div class="intercept-edit-section">
+            <span class="intercept-edit-label">Request Body</span>
+            <textarea id="intercept-edit-body" class="intercept-edit-textarea" placeholder="Request body (JSON or text)..."></textarea>
+          </div>
+        </div>
+        <div class="intercept-edit-footer">
+          <button id="intercept-edit-cancel" class="action-btn secondary" style="padding: 6px 14px; min-height: auto; font-size: 12px;">Cancel</button>
+          <button id="intercept-edit-send" class="action-btn primary" style="padding: 6px 14px; min-height: auto; font-size: 12px;">✏️ Send Modified</button>
+        </div>
+      </div>
+    </div>
   `;
 
   // ── Bind Events ──
@@ -995,13 +1080,21 @@ export async function renderNetwork(container) {
   bindChipEvents();
   bindTableEvents();
   bindMockAndDiffEvents();
+  bindInterceptEvents();
   updateCompareBanner();
   loadMockRulesState();
+  loadInterceptState();
 
   // Connect WebSocket and start receiving
   connectWebSocket((record) => {
     addRequest(record);
   });
+
+  // Start elapsed timer for pending intercepts
+  interceptElapsedTimer = setInterval(() => {
+    pendingIntercepts.forEach(p => { p.elapsed = Date.now() - new Date(p.timestamp).getTime(); });
+    renderInterceptPendingQueue();
+  }, 1000);
 
   // Load any existing buffered requests
   try {
@@ -1449,11 +1542,30 @@ function renderTable() {
 }
 
 function renderRow(r) {
+  // Determine intercept badge
+  let interceptBadge = '';
+  if (r.isIntercepted) {
+    if (r.interceptAction === 'drop') {
+      interceptBadge = `<span class="badge dropped" style="margin-left:4px" title="Dropped by breakpoint">DROPPED</span>`;
+    } else if (r.interceptAction === 'edited') {
+      interceptBadge = `<span class="badge intercepted" style="margin-left:4px" title="Edited & forwarded via breakpoint">EDITED</span>`;
+    } else if (r.interceptAction === 'forwarded') {
+      interceptBadge = `<span class="badge intercepted" style="margin-left:4px" title="Forwarded via breakpoint">BP</span>`;
+    }
+  }
+  // Check if this request is currently held in the pending queue
+  const isHeld = pendingIntercepts.some(p => {
+    // Match by URL + timestamp proximity (intercepts don't have the same ID as store records)
+    return false; // Held requests haven't reached the store yet
+  });
+
   return `
     <td class="mono" style="color:var(--text-3);font-size:10px">${r.id}</td>
     <td>
       <span class="badge ${methodClass(r.method)}">${escHtml(r.method)}</span>
       ${r.isReplay ? `<span class="badge grey" style="font-size:8px;padding:1px 3px;margin-left:4px" title="Replayed request (Replayed from #${r.replayedFromId})">REPLAY</span>` : ''}
+      ${r.isMocked ? `<span class="badge purple" style="font-size:8px;padding:1px 3px;margin-left:4px" title="Mocked response">MOCK</span>` : ''}
+      ${interceptBadge}
     </td>
     <td class="network-url-cell" title="${escHtml(r.url)}">
       <span class="mono">${escHtml(truncateUrl(r.url))}</span>
@@ -1600,4 +1712,382 @@ function renderTimingTab(r) {
       </div>
     </div>
   `;
+}
+
+// ── Intercept / Breakpoint Functions ──
+
+async function loadInterceptState() {
+  try {
+    const state = await api.networkIntercept();
+    interceptEnabled = state.enabled;
+    interceptFilters = state.filters || [];
+    pendingIntercepts = state.pending || [];
+    syncInterceptUI();
+    renderInterceptFilterChips();
+    renderInterceptPendingQueue();
+  } catch (err) {
+    console.error('Failed to load intercept state:', err);
+  }
+}
+
+function syncInterceptUI() {
+  const toggle = document.getElementById('intercept-enabled-toggle');
+  if (toggle) toggle.checked = interceptEnabled;
+
+  const toolbarBtn = document.getElementById('network-intercept-btn');
+  if (toolbarBtn) {
+    toolbarBtn.classList.toggle('intercept-active', interceptEnabled);
+  }
+
+  updateInterceptPendingCount();
+}
+
+function updateInterceptPendingCount() {
+  const countEl = document.getElementById('intercept-pending-count');
+  if (countEl) {
+    const count = pendingIntercepts.length;
+    countEl.textContent = `${count} Pending`;
+    countEl.className = `intercept-pending-badge ${count === 0 ? 'empty' : ''}`;
+  }
+
+  const forwardAllBtn = document.getElementById('intercept-forward-all-btn');
+  if (forwardAllBtn) {
+    forwardAllBtn.style.display = pendingIntercepts.length > 0 ? '' : 'none';
+  }
+}
+
+function handleInterceptedRequest(data) {
+  // Add to pending queue
+  const existing = pendingIntercepts.find(p => p.id === data.id);
+  if (!existing) {
+    pendingIntercepts.push({
+      ...data,
+      elapsed: 0,
+    });
+  }
+  updateInterceptPendingCount();
+  renderInterceptPendingQueue();
+}
+
+function handleInterceptResolved(data) {
+  if (data.id === '*') {
+    // Forward all
+    pendingIntercepts = [];
+  } else {
+    pendingIntercepts = pendingIntercepts.filter(p => p.id !== data.id);
+  }
+  updateInterceptPendingCount();
+  renderInterceptPendingQueue();
+}
+
+function handleInterceptTimeout(data) {
+  pendingIntercepts = pendingIntercepts.filter(p => p.id !== data.id);
+  updateInterceptPendingCount();
+  renderInterceptPendingQueue();
+}
+
+function handleInterceptStateChanged(data) {
+  interceptEnabled = data.enabled;
+  interceptFilters = data.filters || [];
+  syncInterceptUI();
+  renderInterceptFilterChips();
+}
+
+function renderInterceptFilterChips() {
+  const container = document.getElementById('intercept-filter-chips');
+  if (!container) return;
+
+  if (interceptFilters.length === 0) {
+    container.style.display = 'none';
+    container.innerHTML = '';
+    return;
+  }
+
+  container.style.display = 'flex';
+  container.innerHTML = `
+    <span style="font-size: 10px; color: var(--text-3); font-weight: 600;">FILTERS:</span>
+    ${interceptFilters.map((f, i) => `
+      <span class="intercept-filter-chip" data-filter-idx="${i}">
+        ${escHtml(f)}
+        <span class="remove-filter" title="Remove filter">&times;</span>
+      </span>
+    `).join('')}
+  `;
+}
+
+function renderInterceptPendingQueue() {
+  const container = document.getElementById('intercept-pending-queue');
+  if (!container) return;
+
+  if (pendingIntercepts.length === 0) {
+    container.innerHTML = `<div class="intercept-empty-state">No intercepted requests. ${interceptEnabled ? 'Waiting for requests through the proxy…' : 'Enable intercept mode and send requests through the proxy.'}</div>`;
+    return;
+  }
+
+  container.innerHTML = pendingIntercepts.map(p => {
+    const elapsedMs = p.elapsed || (Date.now() - new Date(p.timestamp).getTime());
+    const elapsedSec = Math.floor(elapsedMs / 1000);
+    const isWarning = elapsedSec > 240; // > 4 minutes
+    const elapsedStr = elapsedSec < 60
+      ? `${elapsedSec}s`
+      : `${Math.floor(elapsedSec / 60)}m ${elapsedSec % 60}s`;
+
+    return `
+      <div class="intercept-pending-row ${isWarning ? 'timing-warning' : ''}" data-intercept-id="${escHtml(p.id)}">
+        <div class="intercept-req-info">
+          <div class="intercept-req-summary">
+            <span class="badge ${methodClass(p.method)}" style="font-size:9px">${escHtml(p.method)}</span>
+            <span class="badge ${tagColorClass(p.tag)}" style="font-size:8px">${escHtml(tagLabel(p.tag))}</span>
+            <span class="intercept-req-url" title="${escHtml(p.url)}">${escHtml(truncateUrl(p.url, 60))}</span>
+          </div>
+          <div class="intercept-req-meta">${escHtml(p.host)} · ${fmtTime(p.timestamp)}</div>
+        </div>
+        <span class="intercept-elapsed ${isWarning ? 'warning' : ''}">${elapsedStr}</span>
+        <div class="intercept-actions">
+          <button class="intercept-action-btn forward" data-action="forward" title="Forward request as-is">✅</button>
+          <button class="intercept-action-btn edit" data-action="edit" title="Edit and send">✏️</button>
+          <button class="intercept-action-btn drop" data-action="drop" title="Drop request">❌</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function openInterceptEditModal(interceptReq) {
+  editingIntercept = interceptReq;
+  const modal = document.getElementById('intercept-edit-modal');
+  if (!modal) return;
+
+  document.getElementById('intercept-edit-id').textContent = interceptReq.id.slice(0, 8) + '…';
+  document.getElementById('intercept-edit-method').value = interceptReq.method || 'GET';
+  document.getElementById('intercept-edit-url').value = interceptReq.url || '';
+
+  // Populate headers
+  const headersContainer = document.getElementById('intercept-edit-headers');
+  const headers = interceptReq.requestHeaders || {};
+  // Filter out internal/proxy headers
+  const filteredHeaders = Object.entries(headers).filter(([k]) =>
+    !['host', 'connection', 'proxy-connection', 'proxy-authorization'].includes(k.toLowerCase())
+  );
+
+  headersContainer.innerHTML = filteredHeaders.map(([k, v], i) => `
+    <div class="intercept-kv-row" data-header-idx="${i}">
+      <input type="text" class="filter-input intercept-header-key" value="${escHtml(k)}" placeholder="Header name" />
+      <input type="text" class="filter-input intercept-header-val" value="${escHtml(typeof v === 'string' ? v : JSON.stringify(v))}" placeholder="Value" />
+      <button class="intercept-kv-remove" title="Remove header">&times;</button>
+    </div>
+  `).join('');
+
+  // Populate body
+  const bodyEl = document.getElementById('intercept-edit-body');
+  bodyEl.value = prettyJson(interceptReq.requestBody || '');
+
+  modal.style.display = 'flex';
+}
+
+function closeInterceptEditModal() {
+  editingIntercept = null;
+  const modal = document.getElementById('intercept-edit-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+function getEditedRequestData() {
+  const method = document.getElementById('intercept-edit-method').value;
+  const url = document.getElementById('intercept-edit-url').value;
+
+  // Collect headers
+  const headers = {};
+  document.querySelectorAll('#intercept-edit-headers .intercept-kv-row').forEach(row => {
+    const key = row.querySelector('.intercept-header-key')?.value?.trim();
+    const val = row.querySelector('.intercept-header-val')?.value || '';
+    if (key) headers[key] = val;
+  });
+
+  const body = document.getElementById('intercept-edit-body').value;
+
+  return { method, url, headers, body };
+}
+
+function bindInterceptEvents() {
+  const interceptBtn = document.getElementById('network-intercept-btn');
+  const interceptPanel = document.getElementById('network-intercept-panel');
+  const toggle = document.getElementById('intercept-enabled-toggle');
+  const filterInput = document.getElementById('intercept-filter-input');
+  const addFilterBtn = document.getElementById('intercept-add-filter-btn');
+  const forwardAllBtn = document.getElementById('intercept-forward-all-btn');
+  const filterChips = document.getElementById('intercept-filter-chips');
+  const pendingQueue = document.getElementById('intercept-pending-queue');
+
+  // Toggle panel visibility
+  interceptBtn?.addEventListener('click', () => {
+    const isHidden = interceptPanel.style.display === 'none';
+    interceptPanel.style.display = isHidden ? '' : 'none';
+    if (isHidden) {
+      loadInterceptState();
+    }
+  });
+
+  // Toggle intercept on/off
+  toggle?.addEventListener('change', async () => {
+    try {
+      await api.networkSetIntercept({ enabled: toggle.checked, filters: interceptFilters });
+      interceptEnabled = toggle.checked;
+      syncInterceptUI();
+    } catch (err) {
+      console.error('Failed to set intercept state:', err);
+      toggle.checked = !toggle.checked;
+    }
+  });
+
+  // Add URL filter
+  function addFilter() {
+    const val = filterInput?.value?.trim();
+    if (!val) return;
+    if (interceptFilters.includes(val)) {
+      filterInput.value = '';
+      return;
+    }
+    interceptFilters.push(val);
+    filterInput.value = '';
+    renderInterceptFilterChips();
+    // Persist to server
+    api.networkSetIntercept({ enabled: interceptEnabled, filters: interceptFilters }).catch(console.error);
+  }
+
+  addFilterBtn?.addEventListener('click', addFilter);
+  filterInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') addFilter();
+  });
+
+  // Remove filter chips (event delegation)
+  filterChips?.addEventListener('click', (e) => {
+    const removeBtn = e.target.closest('.remove-filter');
+    if (!removeBtn) return;
+    const chip = removeBtn.closest('.intercept-filter-chip');
+    if (!chip) return;
+    const idx = parseInt(chip.dataset.filterIdx, 10);
+    if (!isNaN(idx) && idx >= 0 && idx < interceptFilters.length) {
+      interceptFilters.splice(idx, 1);
+      renderInterceptFilterChips();
+      api.networkSetIntercept({ enabled: interceptEnabled, filters: interceptFilters }).catch(console.error);
+    }
+  });
+
+  // Forward all
+  forwardAllBtn?.addEventListener('click', async () => {
+    try {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'intercept_forward_all' }));
+      } else {
+        await api.networkInterceptForwardAll();
+      }
+      pendingIntercepts = [];
+      updateInterceptPendingCount();
+      renderInterceptPendingQueue();
+    } catch (err) {
+      console.error('Failed to forward all:', err);
+    }
+  });
+
+  // Pending queue actions (event delegation)
+  pendingQueue?.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.intercept-action-btn');
+    if (!btn) return;
+    const row = btn.closest('.intercept-pending-row');
+    if (!row) return;
+    const interceptId = row.dataset.interceptId;
+    const action = btn.dataset.action;
+    const interceptReq = pendingIntercepts.find(p => p.id === interceptId);
+
+    if (action === 'forward') {
+      try {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'intercept_forward', interceptId }));
+        } else {
+          await api.networkInterceptForward(interceptId, {});
+        }
+      } catch (err) {
+        console.error('Failed to forward request:', err);
+      }
+    } else if (action === 'drop') {
+      try {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'intercept_drop', interceptId }));
+        } else {
+          await api.networkInterceptDrop(interceptId);
+        }
+      } catch (err) {
+        console.error('Failed to drop request:', err);
+      }
+    } else if (action === 'edit') {
+      if (interceptReq) {
+        openInterceptEditModal(interceptReq);
+      }
+    }
+  });
+
+  // Edit modal events
+  const editModal = document.getElementById('intercept-edit-modal');
+  const editClose = document.getElementById('intercept-edit-close');
+  const editCancel = document.getElementById('intercept-edit-cancel');
+  const editSend = document.getElementById('intercept-edit-send');
+  const editAddHeader = document.getElementById('intercept-edit-add-header');
+
+  editClose?.addEventListener('click', closeInterceptEditModal);
+  editCancel?.addEventListener('click', closeInterceptEditModal);
+
+  // Add header row
+  editAddHeader?.addEventListener('click', () => {
+    const container = document.getElementById('intercept-edit-headers');
+    if (!container) return;
+    const idx = container.children.length;
+    const row = document.createElement('div');
+    row.className = 'intercept-kv-row';
+    row.dataset.headerIdx = idx;
+    row.innerHTML = `
+      <input type="text" class="filter-input intercept-header-key" value="" placeholder="Header name" />
+      <input type="text" class="filter-input intercept-header-val" value="" placeholder="Value" />
+      <button class="intercept-kv-remove" title="Remove header">&times;</button>
+    `;
+    container.appendChild(row);
+  });
+
+  // Remove header row (event delegation on headers container)
+  document.getElementById('intercept-edit-headers')?.addEventListener('click', (e) => {
+    if (e.target.classList.contains('intercept-kv-remove')) {
+      e.target.closest('.intercept-kv-row')?.remove();
+    }
+  });
+
+  // Send modified request
+  editSend?.addEventListener('click', async () => {
+    if (!editingIntercept) return;
+    const modifiedData = getEditedRequestData();
+    const interceptId = editingIntercept.id;
+
+    try {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'intercept_forward', interceptId, data: modifiedData }));
+      } else {
+        await api.networkInterceptForward(interceptId, modifiedData);
+      }
+      closeInterceptEditModal();
+    } catch (err) {
+      console.error('Failed to send modified request:', err);
+    }
+  });
+
+  // Close modal on background click
+  editModal?.addEventListener('click', (e) => {
+    if (e.target === editModal) {
+      closeInterceptEditModal();
+    }
+  });
+
+  // Close modal on Escape key
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && editingIntercept) {
+      closeInterceptEditModal();
+    }
+  });
 }

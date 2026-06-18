@@ -87,6 +87,12 @@ export const api = {
   networkMocks:    ()     => get('/network/mocks'),
   networkSaveMock: (body) => post('/network/mocks', body),
   networkDeleteMock:(id)  => del(`/network/mocks/${id}`),
+  // Intercept / Breakpoints
+  networkIntercept:       () => get('/network/intercept'),
+  networkSetIntercept:    (body) => put('/network/intercept', body),
+  networkInterceptForward:(id, body) => post(`/network/intercept/${id}/forward`, body),
+  networkInterceptDrop:   (id) => post(`/network/intercept/${id}/drop`),
+  networkInterceptForwardAll: () => post('/network/intercept/forward-all'),
 };
 
 // Phase 4: cached metric defs (fetched once per page-load; consumed by MetricTooltip)

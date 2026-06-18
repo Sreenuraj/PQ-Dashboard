@@ -6,7 +6,7 @@ const { loadConfig, saveConfig } = require('./config');
 const { runParser } = require('./parser/index');
 const { getDB } = require('./cache/db');
 const { loadModelRegistry, getAllModels, getModelInfo } = require('./model-registry');
-const { startProxy, getProxyStatus, getStore, getMockRules, addMockRule, deleteMockRule } = require('./proxy/index');
+const { startProxy, getProxyStatus, getStore, getMockRules, addMockRule, deleteMockRule, getInterceptState, setInterceptState, resolveInterceptedRequest, forwardAllPending } = require('./proxy/index');
 const { initWebSocket, getClientCount } = require('./proxy/ws');
 
 const app = express();
@@ -24,7 +24,7 @@ const baselinesRouter = require('./routes/baselines')(db);
 const testingRouter = require('./routes/testing')(db);
 
 // Network Inspector routes
-const networkRouter = require('./routes/network')(getStore, getProxyStatus, getClientCount, getMockRules, addMockRule, deleteMockRule);
+const networkRouter = require('./routes/network')(getStore, getProxyStatus, getClientCount, getMockRules, addMockRule, deleteMockRule, getInterceptState, setInterceptState, resolveInterceptedRequest, forwardAllPending);
 
 app.use('/api', testingRouter);
 app.use('/api', networkRouter);

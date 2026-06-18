@@ -126,6 +126,7 @@ A built-in MITM proxy that captures live HTTP/HTTPS network traffic from the Pos
 - **Copy Code Snippets** — Instantly generate and copy request snippets formatted as shell **cURL**, **Node.js Fetch**, or standard **Browser Fetch**.
 - **LLM Token & Cost Counter** — Automatically parses prompt and response payloads to extract token usage from OpenAI, Anthropic, and Google Gemini metadata, calculating estimated USD cost using pricing rate sheets.
 - **Mock Interception & Delay Simulator** — Hijack matching proxy request patterns to return custom status codes, response bodies, and mock delays directly from the local proxy, with rule management through a collapsible front-end panel.
+- **Request Breakpoints** — Intercept mode that pauses each proxied request for manual review. Users can forward the request as-is, edit the method/URL/headers/body and send modified, or drop it entirely. Features include URL pattern filtering (intercept only matching requests), a live pending queue with elapsed timers, bulk "Forward All" action, and a 5-minute auto-timeout safety net. Intercepted requests display `EDITED`, `DROPPED`, or `BP` badges in the request table.
 - **Side-by-Side Payload Diff Tool** — Select a baseline request and visually compare request/response payloads or headers side-by-side in a modal overlay with synchronized scrolling.
 - **Request Replay Option** — Replay any captured request with a single click. The request executes directly from the dashboard server and shows up instantly in the dashboard list with a `REPLAY` badge.
 - **Request Detail Panel** — Inspect headers, request body, response body (syntax-highlighted JSON), and timing.
@@ -303,6 +304,11 @@ PQ-Dashboard/
 | `GET /api/network/mocks` | Fetch all active and inactive mock rules. |
 | `POST /api/network/mocks` | Create or update a mock rule. |
 | `DELETE /api/network/mocks/:id` | Delete a mock rule by its unique ID. |
+| `GET /api/network/intercept` | Get intercept state (enabled, filters, pending requests). |
+| `PUT /api/network/intercept` | Set intercept mode enabled/disabled and URL filters. |
+| `POST /api/network/intercept/:id/forward` | Forward an intercepted request (optionally with modified method/url/headers/body). |
+| `POST /api/network/intercept/:id/drop` | Drop/cancel an intercepted request. |
+| `POST /api/network/intercept/forward-all` | Release all pending intercepted requests at once. |
 
 ---
 
@@ -317,3 +323,5 @@ PQ-Dashboard/
 | Network tab shows no requests | Ensure VS Code has `http.proxy` set to `http://localhost:3457`, `http.proxyStrictSSL` is `false`, and `http.noProxy` includes `"localhost"` and `"127.0.0.1"`. Restart VS Code after changing proxy settings. |
 | Network proxy won't start | Check if port 3457 is already in use: `lsof -ti:3457`. Kill any conflicting process. |
 | HTTPS requests fail through proxy | Set `"http.proxyStrictSSL": false` and add `"localhost"`/`"127.0.0.1"` to `"http.noProxy"` in VS Code settings, or add the CA cert from `data/proxy-certs/` to your system keychain. |
+| Intercepted request times out | Intercepted requests auto-drop after 5 minutes. Forward or edit them within that window. The client making the request may also have a shorter timeout. |
+| Intercept mode not catching requests | Ensure the intercept toggle is enabled (🛑 button). If you have URL filters set, the request URL must match one of them. |

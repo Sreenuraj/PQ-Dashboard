@@ -1,8 +1,9 @@
 # Network Inspector — Task Tracker
 
-> **Branch:** `feature/network-inspector`  
+> **Branch:** `feature/request-breakpoints`  
 > **Status:** ✅ Implementation Complete — Ready for Testing  
-> **Created:** 2026-06-17
+> **Created:** 2026-06-17  
+> **Updated:** 2026-06-18 — Added Request Breakpoints feature
 
 ---
 
@@ -145,33 +146,62 @@ curl http://localhost:3456/api/network/status
   - **Filter by host:** Verify it populates the search bar and filters the list.
   - **Copy URL:** Verify it copies the full URL to the clipboard.
 
+## Files Modified (Request Breakpoints)
+
+| File | Changes |
+|------|---------|
+| `server/proxy/index.js` | Added intercept/breakpoint system: pending queue, timeout handling, filter matching, resolve/drop/forward-all |
+| `server/proxy/ws.js` | Added WebSocket handlers for `intercept_forward`, `intercept_drop`, `intercept_forward_all` |
+| `server/routes/network.js` | Added REST endpoints: `GET/PUT /intercept`, `POST /intercept/:id/forward`, `POST /intercept/:id/drop`, `POST /intercept/forward-all` |
+| `server/index.js` | Wired intercept functions into router |
+| `src/js/api.js` | Added `networkIntercept`, `networkSetIntercept`, `networkInterceptForward`, `networkInterceptDrop`, `networkInterceptForwardAll` |
+| `src/js/views/network.js` | Added breakpoint panel, pending queue, edit modal, WebSocket integration, intercept badges in table |
+| `src/css/index.css` | Added ~450 lines of intercept panel, pending queue, edit modal, toggle switch, and badge styles |
+| `README.md` | Added breakpoint feature docs and API reference |
+| `docs/network-inspector-task.md` | This file — updated with breakpoint docs |
+
 ---
 
-## Architecture
+## How to Test — Request Breakpoints
 
+### 1. Enable Intercept Mode
+
+Navigate to `http://localhost:5173/#/network` and click the 🛑 button in the toolbar. Toggle the **Enable Intercept Mode** switch.
+
+### 2. Intercept a Request
+
+```bash
+# Send a request through the proxy
+curl -x http://localhost:3457 http://httpbin.org/get
 ```
-VS Code (with PostQode)
-  │
-  │  http.proxy = http://localhost:3457
-  ▼
-┌──────────────────────┐     ┌───────────────────────┐
-│  MITM Proxy (:3457)  │────▶│  In-Memory Store      │
-│  http-mitm-proxy     │     │  (500 req circular)   │
-└──────────────────────┘     └───────────┬───────────┘
-  │                                      │
-  │ forwards to actual servers           │ broadcast
-  ▼                                      ▼
-┌──────────────────────┐     ┌───────────────────────┐
-│  api.openai.com      │     │  WebSocket (/ws/net)   │
-│  api.anthropic.com   │     │  + REST API (/api/net) │
-│  etc.                │     └───────────┬───────────┘
-└──────────────────────┘                 │
-                                         ▼
-                              ┌───────────────────────┐
-                              │  Dashboard Frontend    │
-                              │  Network Inspector Tab │
-                              └───────────────────────┘
-```
+
+The request should appear in the **Pending Queue** inside the breakpoint panel with a live timer.
+
+### 3. Test Forward
+
+Click ✅ on a pending request to forward it as-is. The response should appear in the main request table.
+
+### 4. Test Edit & Send
+
+1. Click ✏️ on a pending request to open the edit modal
+2. Modify the URL, headers, or body
+3. Click "Send Modified" — the modified request should be forwarded and appear in the table with an `EDITED` badge
+
+### 5. Test Drop
+
+Click ❌ on a pending request. The request should be dropped and appear in the table with a `DROPPED` badge and status code `499`.
+
+### 6. Test Forward All
+
+When multiple requests are pending, click "Forward All" to release all at once.
+
+### 7. Test URL Filters
+
+Add a URL filter pattern (e.g. `httpbin.org`). Only matching requests should be intercepted; non-matching requests should pass through normally.
+
+### 8. Test Timeout
+
+Enable intercept mode, send a request, and wait 5 minutes. The request should auto-drop with a timeout event.
 
 ---
 
@@ -179,9 +209,10 @@ VS Code (with PostQode)
 
 The following roadmap outlines plans to expand the Network Inspector into a comprehensive observability, testing, and simulation suite:
 
-### 1. Request Interception & Mocking Rules
-- **Mock Responses:** Create a rules builder (via config or a dashboard UI) to intercept specific API calls (e.g., matching `*api.openai.com/v1/chat/completions`) and return custom mock JSON responses.
-- **Error Simulation:** Simulate API failures (e.g., HTTP 500, HTTP 429 Rate Limits) or inject network delays (latency) to test the robustness of VS Code extension error handling.
+### 1. ~~Request Interception & Mocking Rules~~ ✅ Complete
+- **Mock Responses:** ✅ Rules builder UI to intercept specific API calls and return custom mock JSON responses.
+- **Error Simulation:** ✅ Simulate API failures (HTTP 500, HTTP 429 Rate Limits) or inject network delays.
+- **Request Breakpoints:** ✅ Intercept mode that pauses each request for user review — forward, edit & send, or drop. URL pattern filtering and bulk forward-all support.
 
 ### 2. Token Counting & Cost Estimation
 - **Parse Payloads:** Extract token counts (input/completion tokens) directly from the API response bodies of known LLM providers.

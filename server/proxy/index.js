@@ -23,6 +23,7 @@ const fs = require('fs');
 const zlib = require('zlib');
 const { NetworkStore } = require('./store');
 const { broadcast } = require('./ws');
+const { randomUUID } = require('crypto');
 
 // Known AI API domain tags
 const DOMAIN_TAGS = {
@@ -134,6 +135,74 @@ function deleteMockRule(id) {
   return true;
 }
 
+// ── Intercept / Breakpoint System ──
+let interceptEnabled = false;
+let interceptFilters = [];   // URL pattern substrings; empty = intercept all
+const INTERCEPT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+// Map<interceptId, { resolve, ctx, requestData, timestamp, timer }>
+const pendingIntercepts = new Map();
+
+function getInterceptState() {
+  const pending = [];
+  for (const [id, entry] of pendingIntercepts) {
+    pending.push({ id, ...entry.requestData, elapsed: Date.now() - entry.timestamp });
+  }
+  return {
+    enabled: interceptEnabled,
+    filters: interceptFilters,
+    pendingCount: pendingIntercepts.size,
+    pending,
+  };
+}
+
+function setInterceptState(enabled, filters) {
+  interceptEnabled = !!enabled;
+  if (Array.isArray(filters)) {
+    interceptFilters = filters.filter(f => typeof f === 'string' && f.trim().length > 0);
+  }
+  broadcast({ type: 'intercept_state_changed', data: { enabled: interceptEnabled, filters: interceptFilters } });
+  return { enabled: interceptEnabled, filters: interceptFilters };
+}
+
+function matchesInterceptFilters(url) {
+  if (interceptFilters.length === 0) return true; // no filters = intercept everything
+  const lower = url.toLowerCase();
+  return interceptFilters.some(f => lower.includes(f.toLowerCase()));
+}
+
+function resolveInterceptedRequest(id, action, modifiedData) {
+  const entry = pendingIntercepts.get(id);
+  if (!entry) return false;
+  clearTimeout(entry.timer);
+  pendingIntercepts.delete(id);
+  entry.resolve({ action, modifiedData: modifiedData || null });
+  broadcast({ type: 'intercept_resolved', data: { id, action } });
+  return true;
+}
+
+function forwardAllPending() {
+  let count = 0;
+  for (const [id, entry] of pendingIntercepts) {
+    clearTimeout(entry.timer);
+    entry.resolve({ action: 'forward', modifiedData: null });
+    count++;
+  }
+  pendingIntercepts.clear();
+  if (count > 0) {
+    broadcast({ type: 'intercept_resolved', data: { id: '*', action: 'forward_all', count } });
+  }
+  return count;
+}
+
+function getPendingRequests() {
+  const result = [];
+  for (const [id, entry] of pendingIntercepts) {
+    result.push({ id, ...entry.requestData, elapsed: Date.now() - entry.timestamp });
+  }
+  return result;
+}
+
 let store = null;
 let proxyServer = null;
 let isRunning = false;
@@ -192,6 +261,182 @@ function startProxy(config = {}) {
     const host = ctx.clientToProxyRequest.headers.host || '';
     const url = `${ctx.isSSL ? 'https' : 'http'}://${host}${ctx.clientToProxyRequest.url}`;
     const method = ctx.clientToProxyRequest.method;
+
+    // ── Intercept / Breakpoint Check ──
+    if (interceptEnabled && matchesInterceptFilters(url)) {
+      const requestChunks = [];
+      ctx.clientToProxyRequest.on('data', (chunk) => {
+        requestChunks.push(chunk);
+      });
+      ctx.clientToProxyRequest.on('end', () => {
+        const rawReqBody = Buffer.concat(requestChunks);
+        const requestBody = decodeBody(rawReqBody, ctx.clientToProxyRequest.headers);
+        const interceptId = randomUUID();
+
+        const requestData = {
+          method,
+          url,
+          host: host.replace(/:\d+$/, ''),
+          path: ctx.clientToProxyRequest.url,
+          requestHeaders: { ...ctx.clientToProxyRequest.headers },
+          requestBody,
+          tag: tagForHost(host),
+          timestamp: new Date().toISOString(),
+        };
+
+        // Create a Promise that pauses the proxy flow
+        const interceptPromise = new Promise((resolve) => {
+          const timer = setTimeout(() => {
+            // Auto-drop after timeout
+            if (pendingIntercepts.has(interceptId)) {
+              pendingIntercepts.delete(interceptId);
+              resolve({ action: 'drop', modifiedData: null });
+              broadcast({ type: 'intercept_timeout', data: { id: interceptId } });
+            }
+          }, INTERCEPT_TIMEOUT_MS);
+
+          pendingIntercepts.set(interceptId, { resolve, ctx, requestData, timestamp: Date.now(), timer });
+        });
+
+        // Broadcast the intercepted request to the dashboard
+        broadcast({ type: 'intercepted', data: { id: interceptId, ...requestData } });
+
+        // Wait for user action
+        interceptPromise.then(({ action, modifiedData }) => {
+          if (action === 'drop') {
+            // Respond with 499 Client Closed / Dropped
+            try {
+              ctx.proxyToClientResponse.writeHead(499, { 'x-intercepted': 'dropped' });
+              ctx.proxyToClientResponse.end('Request dropped by Network Inspector breakpoint');
+            } catch (e) { /* client may have already disconnected */ }
+
+            const record = {
+              timestamp: new Date().toISOString(),
+              method,
+              url,
+              host: host.replace(/:\d+$/, ''),
+              path: ctx.clientToProxyRequest.url,
+              requestHeaders: { ...ctx.clientToProxyRequest.headers },
+              requestBody,
+              statusCode: 499,
+              responseHeaders: {},
+              responseBody: 'Dropped by breakpoint',
+              duration: Date.now() - startTime,
+              size: 0,
+              error: 'Dropped by breakpoint',
+              tag: tagForHost(host),
+              isIntercepted: true,
+              interceptAction: 'drop',
+            };
+            store.add(record);
+            broadcast(record);
+            return;
+          }
+
+          // action === 'forward' — possibly with modifications
+          if (modifiedData) {
+            // Apply modifications to the proxy context
+            if (modifiedData.url && modifiedData.url !== url) {
+              try {
+                const parsed = new URL(modifiedData.url);
+                ctx.proxyToServerRequestOptions.host = parsed.hostname;
+                ctx.proxyToServerRequestOptions.port = parsed.port || (parsed.protocol === 'https:' ? 443 : 80);
+                ctx.proxyToServerRequestOptions.path = parsed.pathname + parsed.search;
+                ctx.proxyToServerRequestOptions.headers.host = parsed.host;
+              } catch (e) { /* keep original if URL parse fails */ }
+            }
+            if (modifiedData.method) {
+              ctx.proxyToServerRequestOptions.method = modifiedData.method;
+            }
+            if (modifiedData.headers && typeof modifiedData.headers === 'object') {
+              ctx.proxyToServerRequestOptions.headers = { ...ctx.proxyToServerRequestOptions.headers, ...modifiedData.headers };
+            }
+          }
+
+          // Now proceed with the normal proxy flow (collect response, store, broadcast)
+          const actualMethod = modifiedData?.method || method;
+          const actualUrl = modifiedData?.url || url;
+          const actualReqBody = modifiedData?.body != null ? modifiedData.body : requestBody;
+
+          const responseChunks = [];
+          ctx.onResponseData(function (ctx, chunk, cb) {
+            responseChunks.push(chunk);
+            return cb(null, chunk);
+          });
+
+          ctx.onResponseEnd(function (ctx, cb) {
+            const duration = Date.now() - startTime;
+            const statusCode = ctx.serverToProxyResponse?.statusCode || 0;
+            let responseBody = '';
+            try {
+              const rawResBody = Buffer.concat(responseChunks);
+              responseBody = decodeBody(rawResBody, ctx.serverToProxyResponse?.headers);
+            } catch (e) {
+              responseBody = '[binary data]';
+            }
+            const responseSize = responseChunks.reduce((sum, c) => sum + c.length, 0);
+
+            const record = {
+              timestamp: new Date().toISOString(),
+              method: actualMethod,
+              url: actualUrl,
+              host: (modifiedData?.url ? new URL(modifiedData.url).hostname : host).replace(/:\d+$/, ''),
+              path: ctx.clientToProxyRequest.url,
+              requestHeaders: modifiedData?.headers || { ...ctx.clientToProxyRequest.headers },
+              requestBody: actualReqBody,
+              statusCode,
+              responseHeaders: ctx.serverToProxyResponse?.headers ? { ...ctx.serverToProxyResponse.headers } : {},
+              responseBody,
+              duration,
+              size: responseSize,
+              error: null,
+              tag: tagForHost(host),
+              isIntercepted: true,
+              interceptAction: modifiedData ? 'edited' : 'forwarded',
+            };
+
+            store.add(record);
+            broadcast(record);
+            return cb();
+          });
+
+          ctx.onError(function (ctx, err) {
+            const duration = Date.now() - startTime;
+            const record = {
+              timestamp: new Date().toISOString(),
+              method: actualMethod,
+              url: actualUrl,
+              host: host.replace(/:\d+$/, ''),
+              path: ctx.clientToProxyRequest.url,
+              requestHeaders: {},
+              requestBody: actualReqBody,
+              statusCode: 0,
+              responseHeaders: {},
+              responseBody: '',
+              duration,
+              size: 0,
+              error: err.message || 'Unknown error',
+              tag: tagForHost(host),
+              isIntercepted: true,
+              interceptAction: 'error',
+            };
+            store.add(record);
+            broadcast(record);
+          });
+
+          // If modified body was provided, we need to write it to the server request
+          if (modifiedData?.body != null) {
+            const bodyBuf = Buffer.from(modifiedData.body, 'utf-8');
+            ctx.proxyToServerRequestOptions.headers['content-length'] = bodyBuf.length;
+            ctx.addRequestFilter(require('http-mitm-proxy').gunzip);
+          }
+
+          callback();
+        });
+      });
+      ctx.clientToProxyRequest.resume();
+      return; // Don't call callback() here — we call it inside the promise .then()
+    }
 
     // Check if there's a matching mock rule
     const rule = mockRules.find(r => {
@@ -380,4 +625,8 @@ function getStore() {
   return store;
 }
 
-module.exports = { startProxy, getProxyStatus, getStore, getMockRules, addMockRule, deleteMockRule };
+module.exports = {
+  startProxy, getProxyStatus, getStore,
+  getMockRules, addMockRule, deleteMockRule,
+  getInterceptState, setInterceptState, resolveInterceptedRequest, forwardAllPending, getPendingRequests,
+};

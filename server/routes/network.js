@@ -6,7 +6,7 @@
 const express = require('express');
 const { broadcast } = require('../proxy/ws');
 
-module.exports = (getStore, getStatus, getClientCount, getMockRules, addMockRule, deleteMockRule) => {
+module.exports = (getStore, getStatus, getClientCount, getMockRules, addMockRule, deleteMockRule, getInterceptState, setInterceptState, resolveInterceptedRequest, forwardAllPending) => {
   const router = express.Router();
 
   // GET /api/network/status — proxy status
@@ -217,6 +217,47 @@ module.exports = (getStore, getStatus, getClientCount, getMockRules, addMockRule
     if (typeof deleteMockRule !== 'function') return res.status(501).json({ error: 'Mocks not supported' });
     const deleted = deleteMockRule(req.params.id);
     res.json({ success: deleted });
+  });
+
+  // ── Intercept / Breakpoint Endpoints ──
+
+  // GET /api/network/intercept — get intercept state + pending requests
+  router.get('/network/intercept', (req, res) => {
+    if (typeof getInterceptState !== 'function') return res.status(501).json({ error: 'Intercept not supported' });
+    res.json(getInterceptState());
+  });
+
+  // PUT /api/network/intercept — set intercept enabled/filters
+  router.put('/network/intercept', (req, res) => {
+    if (typeof setInterceptState !== 'function') return res.status(501).json({ error: 'Intercept not supported' });
+    const { enabled, filters } = req.body;
+    const state = setInterceptState(enabled, filters);
+    res.json({ success: true, ...state });
+  });
+
+  // POST /api/network/intercept/:id/forward — forward a pending request (optionally with modifications)
+  router.post('/network/intercept/:id/forward', (req, res) => {
+    if (typeof resolveInterceptedRequest !== 'function') return res.status(501).json({ error: 'Intercept not supported' });
+    const modifiedData = req.body || null;
+    const hasModifications = modifiedData && Object.keys(modifiedData).length > 0;
+    const ok = resolveInterceptedRequest(req.params.id, 'forward', hasModifications ? modifiedData : null);
+    if (!ok) return res.status(404).json({ error: 'Intercepted request not found or already resolved' });
+    res.json({ success: true });
+  });
+
+  // POST /api/network/intercept/:id/drop — drop a pending request
+  router.post('/network/intercept/:id/drop', (req, res) => {
+    if (typeof resolveInterceptedRequest !== 'function') return res.status(501).json({ error: 'Intercept not supported' });
+    const ok = resolveInterceptedRequest(req.params.id, 'drop', null);
+    if (!ok) return res.status(404).json({ error: 'Intercepted request not found or already resolved' });
+    res.json({ success: true });
+  });
+
+  // POST /api/network/intercept/forward-all — release all pending requests
+  router.post('/network/intercept/forward-all', (req, res) => {
+    if (typeof forwardAllPending !== 'function') return res.status(501).json({ error: 'Intercept not supported' });
+    const count = forwardAllPending();
+    res.json({ success: true, count });
   });
 
   return router;
