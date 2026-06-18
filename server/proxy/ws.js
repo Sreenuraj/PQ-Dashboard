@@ -105,10 +105,27 @@ function broadcast(record) {
 }
 
 /**
+ * Broadcast a raw message object to all connected, non-paused clients.
+ * @param {Object} msgObj - The message object to serialize and send
+ */
+function broadcastMessage(msgObj) {
+  const msg = JSON.stringify(msgObj);
+  for (const client of clients) {
+    if (!client.paused && client.ws.readyState === client.ws.OPEN) {
+      try {
+        client.ws.send(msg);
+      } catch (e) {
+        // Client will be cleaned up on close
+      }
+    }
+  }
+}
+
+/**
  * Get the count of connected clients.
  */
 function getClientCount() {
   return clients.size;
 }
 
-module.exports = { initWebSocket, broadcast, getClientCount };
+module.exports = { initWebSocket, broadcast, broadcastMessage, getClientCount };

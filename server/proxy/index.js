@@ -22,8 +22,9 @@ const path = require('path');
 const fs = require('fs');
 const zlib = require('zlib');
 const { NetworkStore } = require('./store');
-const { broadcast } = require('./ws');
+const { broadcast, broadcastMessage } = require('./ws');
 const { randomUUID } = require('crypto');
+const { Readable } = require('stream');
 
 // Known AI API domain tags
 const DOMAIN_TAGS = {
@@ -161,7 +162,10 @@ function setInterceptState(enabled, filters) {
   if (Array.isArray(filters)) {
     interceptFilters = filters.filter(f => typeof f === 'string' && f.trim().length > 0);
   }
-  broadcast({ type: 'intercept_state_changed', data: { enabled: interceptEnabled, filters: interceptFilters } });
+  if (!interceptEnabled) {
+    forwardAllPending();
+  }
+  broadcastMessage({ type: 'intercept_state_changed', data: { enabled: interceptEnabled, filters: interceptFilters } });
   return { enabled: interceptEnabled, filters: interceptFilters };
 }
 
@@ -177,7 +181,7 @@ function resolveInterceptedRequest(id, action, modifiedData) {
   clearTimeout(entry.timer);
   pendingIntercepts.delete(id);
   entry.resolve({ action, modifiedData: modifiedData || null });
-  broadcast({ type: 'intercept_resolved', data: { id, action } });
+  broadcastMessage({ type: 'intercept_resolved', data: { id, action } });
   return true;
 }
 
@@ -190,7 +194,7 @@ function forwardAllPending() {
   }
   pendingIntercepts.clear();
   if (count > 0) {
-    broadcast({ type: 'intercept_resolved', data: { id: '*', action: 'forward_all', count } });
+    broadcastMessage({ type: 'intercept_resolved', data: { id: '*', action: 'forward_all', count } });
   }
   return count;
 }
@@ -291,7 +295,7 @@ function startProxy(config = {}) {
             if (pendingIntercepts.has(interceptId)) {
               pendingIntercepts.delete(interceptId);
               resolve({ action: 'drop', modifiedData: null });
-              broadcast({ type: 'intercept_timeout', data: { id: interceptId } });
+              broadcastMessage({ type: 'intercept_timeout', data: { id: interceptId } });
             }
           }, INTERCEPT_TIMEOUT_MS);
 
@@ -299,7 +303,7 @@ function startProxy(config = {}) {
         });
 
         // Broadcast the intercepted request to the dashboard
-        broadcast({ type: 'intercepted', data: { id: interceptId, ...requestData } });
+        broadcastMessage({ type: 'intercepted', data: { id: interceptId, ...requestData } });
 
         // Wait for user action
         interceptPromise.then(({ action, modifiedData }) => {
@@ -424,12 +428,23 @@ function startProxy(config = {}) {
             broadcast(record);
           });
 
-          // If modified body was provided, we need to write it to the server request
-          if (modifiedData?.body != null) {
-            const bodyBuf = Buffer.from(modifiedData.body, 'utf-8');
+          // Override request stream piping to stream the uncompressed request body buffer
+          const bodyBuf = Buffer.from(actualReqBody, 'utf-8');
+
+          if (ctx.proxyToServerRequestOptions && ctx.proxyToServerRequestOptions.headers) {
             ctx.proxyToServerRequestOptions.headers['content-length'] = bodyBuf.length;
-            ctx.addRequestFilter(require('http-mitm-proxy').gunzip);
+            delete ctx.proxyToServerRequestOptions.headers['content-encoding'];
+            delete ctx.proxyToServerRequestOptions.headers['transfer-encoding'];
           }
+
+          ctx.clientToProxyRequest.pipe = function (dest, options) {
+            const bodyStream = new Readable();
+            bodyStream._read = function () {
+              this.push(bodyBuf);
+              this.push(null);
+            };
+            return bodyStream.pipe(dest, options);
+          };
 
           callback();
         });
