@@ -212,16 +212,100 @@ let proxyServer = null;
 let isRunning = false;
 let proxyPort = 3457;
 let certsDir = '';
+let proxyDb = null; // injected from server/index.js if available
+
+const CHAT_API_RE = /\/chat\/completions|\/v1\/messages/i;
+const SYSTEM_PROMPT_DRIFT_MS = 2 * 60 * 1000; // 2-minute task correlation window
+
+/**
+ * Extracts the system prompt text from a parsed chat/completions request body.
+ * Handles Anthropic (top-level `system`) and OpenAI (messages[0].role==='system') formats.
+ */
+function extractSystemTextFromParsed(parsed) {
+  if (!parsed) return null;
+
+  // Anthropic format: { system: string | [{type:'text',text:'...'}] }
+  if (typeof parsed.system === 'string' && parsed.system.length > 0) return parsed.system;
+  if (Array.isArray(parsed.system)) {
+    const t = parsed.system.map(b => b.text || '').join('\n').trim();
+    if (t) return t;
+  }
+
+  // OpenAI format: messages[0].role === 'system'
+  if (Array.isArray(parsed.messages) && parsed.messages[0]?.role === 'system') {
+    const c = parsed.messages[0].content;
+    if (typeof c === 'string') return c;
+    if (Array.isArray(c)) return c.map(b => b.text || '').join('\n').trim();
+  }
+
+  return null;
+}
+
+/**
+ * Correlates a captured chat/completions request with the nearest task in the
+ * DB by timestamp, then persists the system prompt text if not already stored.
+ * @param {string} requestBody - raw request body string
+ * @param {number} capturedTs   - epoch ms when the proxy captured this request
+ * @param {string|null} modelId - model ID from parsed request (x-model or body.model)
+ */
+function extractAndPersistSystemPrompt(requestBody, capturedTs, modelId) {
+  if (!proxyDb) return; // DB not wired in — skip silently
+
+  let parsed;
+  try { parsed = JSON.parse(requestBody); } catch { return; }
+
+  const systemText = extractSystemTextFromParsed(parsed);
+  if (!systemText) return;
+
+  // Find the nearest api_req_started event within the drift window.
+  // events.ts is stored in milliseconds (same as Date.now()).
+  try {
+    const row = proxyDb.prepare(`
+      SELECT task_id FROM events
+      WHERE type = 'say' AND sub_type = 'api_req_started'
+        AND ts BETWEEN ? AND ?
+      ORDER BY ABS(ts - ?) ASC
+      LIMIT 1
+    `).get(
+      capturedTs - SYSTEM_PROMPT_DRIFT_MS,
+      capturedTs + SYSTEM_PROMPT_DRIFT_MS,
+      capturedTs
+    );
+
+    if (!row) return; // No nearby task found — can't correlate
+
+    const taskId = row.task_id;
+    const modelIdFromBody = parsed.model || modelId || null;
+    const approxTokens = Math.round(systemText.length / 4); // rough 4-char-per-token estimate
+
+    // Only store once per task (INSERT OR IGNORE on the unique task_id constraint).
+    // If the system prompt evolves mid-task (rare), we keep the first capture.
+    const existing = proxyDb.prepare(
+      'SELECT id FROM task_system_prompts WHERE task_id = ? LIMIT 1'
+    ).get(taskId);
+
+    if (!existing) {
+      proxyDb.prepare(`
+        INSERT INTO task_system_prompts (task_id, captured_at_ts, model_id, system_text, approx_tokens, source)
+        VALUES (?, ?, ?, ?, ?, 'proxy')
+      `).run(taskId, capturedTs, modelIdFromBody, systemText, approxTokens);
+    }
+  } catch (e) {
+    // Non-fatal — the dashboard still works without the system prompt row
+    console.warn('[proxy] system-prompt persist error:', e.message);
+  }
+}
 
 /**
  * Start the MITM proxy server.
- * @param {Object} config - { port, buffer_size }
+ * @param {Object} config - { port, buffer_size, db? }
  * @returns {{ store: NetworkStore }}
  */
 function startProxy(config = {}) {
   proxyPort = config.port || 3457;
   const bufferSize = config.buffer_size || 500;
   certsDir = path.resolve(config.certs_dir || './data/proxy-certs');
+  if (config.db) proxyDb = config.db; // wire in DB for system-prompt persistence
 
   // Ensure certs directory exists
   fs.mkdirSync(certsDir, { recursive: true });
@@ -569,6 +653,26 @@ function startProxy(config = {}) {
 
       store.add(record);
       broadcast(record);
+
+      // ── System-prompt persistence hook ──
+      // Only run for AI chat/completions endpoints (POST), non-error responses.
+      // Fire-and-forget: any errors inside are caught and logged, not thrown.
+      if (
+        method === 'POST' &&
+        CHAT_API_RE.test(url) &&
+        statusCode >= 200 && statusCode < 300 &&
+        requestBody && requestBody.length > 0
+      ) {
+        const capturedTs = new Date(record.timestamp).getTime();
+        // Model ID hint from response body (Anthropic/OpenAI both include it)
+        let modelHint = null;
+        try {
+          const resJson = JSON.parse(responseBody);
+          modelHint = resJson.model || null;
+        } catch {}
+        // Run async so we never block the proxy callback
+        setImmediate(() => extractAndPersistSystemPrompt(requestBody, capturedTs, modelHint));
+      }
 
       return callback();
     });

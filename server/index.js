@@ -109,6 +109,7 @@ server.listen(port, '0.0.0.0', async () => {
         port: proxyConfig.port || 3457,
         buffer_size: proxyConfig.buffer_size || 500,
         certs_dir: proxyConfig.certs_dir || './data/proxy-certs',
+        db, // wire in DB so proxy can persist captured system prompts
       });
     } catch (e) {
       console.error('⚠ Network proxy failed to start:', e.message);

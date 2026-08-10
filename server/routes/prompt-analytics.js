@@ -8,6 +8,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { getModelInfo } = require('../model-registry');
 
 function resolvePath(p) {
   return p.replace(/^~/, os.homedir());
@@ -453,9 +454,20 @@ module.exports = (db, config, getStore) => {
 
     const openrouterCache = loadOpenRouterModelsCache();
 
+    // ── Load persisted system prompt for this task (captured by proxy) ──
+    let systemPromptCapture = null;
+    try {
+      const spRow = db.prepare(
+        'SELECT system_text, approx_tokens, model_id, captured_at_ts FROM task_system_prompts WHERE task_id = ? LIMIT 1'
+      ).get(taskId);
+      if (spRow) systemPromptCapture = spRow;
+    } catch (e) { /* table may not exist on older DBs — safe to ignore */ }
+
+    const systemPromptTokens = systemPromptCapture?.approx_tokens || 0;
+    const systemPromptAvailable = !!systemPromptCapture;
+
     const apiCalls = [];
     let prevRequestSize = 0;
-    let detectedModelId = null;
 
     for (let i = 0; i < uiMessages.length; i++) {
       const msg = uiMessages[i];
@@ -480,7 +492,17 @@ module.exports = (db, config, getStore) => {
 
       const sizeDelta = apiCalls.length === 0 ? 0 : (requestSize - prevRequestSize);
       const mId = msg.modelInfo?.modelId || data.model || null;
-      if (mId && !detectedModelId) detectedModelId = mId;
+
+      // ── Per-call context window utilization ──
+      // Looks up the model's context window from the registry and computes how
+      // much of it was used: (uncached input + cache reads + system prompt tokens) / context window
+      // Falls back gracefully when model or context window info is unavailable.
+      const modelInfo = getModelInfo(mId);
+      const contextWindowSize = modelInfo?.contextWindow || null;
+      const totalTokensInContext = (data.tokensIn || 0) + (data.cacheReads || 0) + systemPromptTokens;
+      const contextUtilizationPct = contextWindowSize
+        ? Math.min(100, (totalTokensInContext / contextWindowSize) * 100)
+        : null;
 
       apiCalls.push({
         index: apiCalls.length,
@@ -500,11 +522,19 @@ module.exports = (db, config, getStore) => {
         requestText: data.request || null,
         modelId: mId,
         providerId: msg.modelInfo?.providerId || null,
+        // Context window fields
+        contextWindowSize,
+        systemPromptTokens,
+        totalTokensInContext,
+        contextUtilizationPct,
       });
 
 
       if (requestSize > 0) prevRequestSize = requestSize;
     }
+
+    // detectedModelId = first model seen (used for pricing lookup below)
+    const detectedModelId = apiCalls.find(c => c.modelId)?.modelId || null;
 
     const matchedPricing = getModelCachePricing(detectedModelId, openrouterCache);
 
@@ -625,7 +655,10 @@ module.exports = (db, config, getStore) => {
       },
       reductionEvents,
       totalMessages: apiHistory.length,
-      systemPromptNote: 'The system prompt (tool definitions, core instructions) is generated in-memory by the extension at request time and is not persisted to any task file, so it cannot be shown here. Only user/assistant turns from api_conversation_history.json are reconstructed.',
+      systemPromptCapture, // null if proxy never captured it for this task
+      systemPromptNote: systemPromptAvailable
+        ? `System prompt captured by the Network Inspector proxy (${systemPromptCapture.approx_tokens?.toLocaleString() || '?'} est. tokens). Included in context window utilization calculation.`
+        : 'The system prompt (tool definitions, core instructions) is generated in-memory by the extension at request time and is not persisted to any task file, so it cannot be shown here. Only user/assistant turns from api_conversation_history.json are reconstructed. Enable and use the Network Inspector proxy to capture and persist it.',
     });
   });
 

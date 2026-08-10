@@ -60,6 +60,21 @@ function initSchema(db) {
       ts INTEGER
     );
 
+    -- Stores system prompts captured from the proxy for each task.
+    -- The system prompt is generated in-memory by the extension and is NEVER
+    -- written to any task file on disk — this is the only way to persist it.
+    -- One canonical row per task (INSERT OR IGNORE on first capture).
+    CREATE TABLE IF NOT EXISTS task_system_prompts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id TEXT NOT NULL,
+      captured_at_ts INTEGER,
+      model_id TEXT,
+      system_text TEXT,
+      approx_tokens INTEGER,
+      source TEXT DEFAULT 'proxy'
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_sysprompt ON task_system_prompts(task_id);
+
     CREATE TABLE IF NOT EXISTS events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       task_id TEXT,

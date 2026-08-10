@@ -50,6 +50,7 @@ let chartSeries = {
   requestSize: true,
   cacheReads: true,
   cacheWrites: true,
+  contextWindow: true,
 };
 
 // ── Main Render ──
@@ -243,6 +244,9 @@ function renderAnalytics(contentEl) {
           <button class="pa-legend-chip ${chartSeries.cacheWrites ? 'active' : ''}" data-series="cacheWrites">
             <span class="pa-legend-color" style="background:#f59e0b"></span> Cache Writes
           </button>
+          <button class="pa-legend-chip ${chartSeries.contextWindow ? 'active' : ''}" data-series="contextWindow">
+            <span class="pa-legend-color" style="background:#a78bfa"></span> Context Window %
+          </button>
         </div>
       </div>
       <div class="panel-body">
@@ -250,6 +254,7 @@ function renderAnalytics(contentEl) {
           <canvas id="pa-timeline-chart"></canvas>
           <div id="pa-chart-tooltip" class="pa-chart-tooltip" style="display:none;pointer-events:none;z-index:100;position:absolute"></div>
         </div>
+        <div id="pa-chart-swimlane"></div>
       </div>
     </div>
 
@@ -286,6 +291,7 @@ function renderAnalytics(contentEl) {
 
   bindAnalyticsEvents(calls);
   drawTimelineChart(calls);
+  renderModelSwimlane(calls, document.getElementById('pa-chart-swimlane'));
 
   renderReductionSequenceFeed(document.getElementById('pa-comparison-body'), events);
   renderCacheObservabilityPanel(document.getElementById('pa-cache-body'), calls);
@@ -1196,6 +1202,76 @@ function bindSynchronizedScroll(container) {
   });
 }
 
+// ── Context window % swimlane strip under chart ──
+function renderModelSwimlane(calls, container) {
+  if (!container || !calls || calls.length === 0) {
+    if (container) container.innerHTML = '';
+    return;
+  }
+
+  // Find unique models in order of first appearance
+  const segments = [];
+  let segStart = 0;
+  let segModel = calls[0].modelId;
+
+  for (let i = 1; i <= calls.length; i++) {
+    const model = i < calls.length ? calls[i].modelId : null;
+    if (model !== segModel || i === calls.length) {
+      segments.push({ modelId: segModel, from: segStart, to: i - 1, count: i - segStart });
+      segStart = i;
+      segModel = model;
+    }
+  }
+
+  const hasMultiple = segments.length > 1 || !segments[0]?.modelId;
+  if (!hasMultiple && segments[0]?.modelId) {
+    // Only one model — show a compact single-line info instead of a full strip
+    container.innerHTML = `
+      <div style="font-size:10px;color:var(--text-3);padding:4px 0 0;text-align:center">
+        🤖 Model: <span style="color:var(--text-2);font-family:monospace">${escHtml(segments[0].modelId)}</span>
+        — Context Window: <span style="color:#a78bfa;font-weight:bold">${calls[0].contextWindowSize ? (calls[0].contextWindowSize / 1000).toFixed(0) + 'K tokens' : 'unknown'}</span>
+      </div>
+    `;
+    return;
+  }
+
+  const MODEL_COLORS = ['#38bdf8','#f59e0b','#10b981','#e879f9','#f87171','#a78bfa','#34d399'];
+  const modelColorMap = {};
+  let colorIdx = 0;
+  for (const seg of segments) {
+    if (seg.modelId && !modelColorMap[seg.modelId]) {
+      modelColorMap[seg.modelId] = MODEL_COLORS[colorIdx++ % MODEL_COLORS.length];
+    }
+  }
+
+  container.innerHTML = `
+    <div style="margin-top:6px;border-radius:4px;overflow:hidden;border:1px solid var(--border)">
+      <div style="display:flex;height:20px">
+        ${segments.map(seg => {
+          const color = seg.modelId ? modelColorMap[seg.modelId] : 'var(--border)';
+          const pct = (seg.count / calls.length * 100).toFixed(1);
+          const label = seg.modelId ? seg.modelId.split('/').pop() : 'unknown';
+          const cw = seg.modelId ? calls[seg.from]?.contextWindowSize : null;
+          const cwLabel = cw ? `${(cw / 1000).toFixed(0)}K ctx` : '';
+          return `
+            <div style="flex:${seg.count};background:${color}22;border-right:1px solid var(--border);display:flex;align-items:center;justify-content:center;overflow:hidden;min-width:0" title="Model: ${escHtml(seg.modelId || 'unknown')} | Calls ${seg.from + 1}–${seg.to + 1} (${pct}%) | Context Window: ${cwLabel || 'unknown'}">
+              <span style="font-size:9px;color:${color};font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">
+                ${escHtml(label)} ${cwLabel ? `(${cwLabel})` : ''}
+              </span>
+            </div>`;
+        }).join('')}
+      </div>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
+      ${segments.map(seg => {
+        if (!seg.modelId) return '';
+        const color = modelColorMap[seg.modelId] || '#888';
+        return `<span style="font-size:9.5px;color:${color}">■ ${escHtml(seg.modelId)}</span>`;
+      }).join('')}
+    </div>
+  `;
+}
+
 // ── Timeline Canvas Drawing ──
 function drawTimelineChart(calls) {
   const canvas = document.getElementById('pa-timeline-chart');
@@ -1227,11 +1303,18 @@ function drawTimelineChart(calls) {
   const sizes = calls.map(c => c.requestSize);
   const cacheReads = calls.map(c => c.cacheReads);
   const cacheWrites = calls.map(c => c.cacheWrites);
+  const ctxPcts = calls.map(c => c.contextUtilizationPct); // null when unknown
+  const hasCtxData = chartSeries.contextWindow && ctxPcts.some(p => p != null);
+
   const maxSize = Math.max(...sizes, 1);
   const maxCache = Math.max(...cacheReads, ...cacheWrites, 1);
 
   const yScale = chartH / maxSize;
   const yCacheScale = chartH / maxCache;
+
+  // Right-Y axis label area (for context window %) if the series is active
+  const padRight = hasCtxData ? 50 : pad.right;
+  const chartWeff = w - pad.left - padRight;
 
   ctx.strokeStyle = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
   ctx.lineWidth = 1;
@@ -1239,10 +1322,11 @@ function drawTimelineChart(calls) {
     const y = pad.top + (chartH / 5) * i;
     ctx.beginPath();
     ctx.moveTo(pad.left, y);
-    ctx.lineTo(w - pad.right, y);
+    ctx.lineTo(w - padRight, y);
     ctx.stroke();
   }
 
+  // Left Y-axis labels (request size / cache tokens)
   ctx.fillStyle = isDark ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.5)';
   ctx.font = '10px Inter, sans-serif';
   ctx.textAlign = 'right';
@@ -1252,7 +1336,34 @@ function drawTimelineChart(calls) {
     ctx.fillText(fmtBytes(val), pad.left - 8, y + 3);
   }
 
-  const colWidth = chartW / calls.length;
+  // Right Y-axis labels (context window %)
+  if (hasCtxData) {
+    ctx.fillStyle = '#a78bfa';
+    ctx.textAlign = 'left';
+    for (let i = 0; i <= 5; i++) {
+      const y = pad.top + (chartH / 5) * i;
+      const val = 100 - 20 * i;
+      ctx.fillText(val + '%', w - padRight + 6, y + 3);
+    }
+    // 80% warning threshold line
+    const warn80Y = pad.top + chartH * (1 - 0.8);
+    ctx.save();
+    ctx.strokeStyle = 'rgba(239,68,68,0.35)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(pad.left, warn80Y);
+    ctx.lineTo(w - padRight, warn80Y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(239,68,68,0.6)';
+    ctx.font = '9px Inter, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('80%', w - padRight + 6, warn80Y + 3);
+    ctx.restore();
+  }
+
+  const colWidth = chartWeff / calls.length;
   const barWidth = Math.max(3, Math.min(20, colWidth - 2));
 
   const points = [];
@@ -1264,8 +1375,10 @@ function drawTimelineChart(calls) {
 
     const readY = pad.top + chartH - (cacheReads[i] * yCacheScale);
     const writeY = pad.top + chartH - (cacheWrites[i] * yCacheScale);
+    const ctxPct = ctxPcts[i]; // may be null
+    const ctxY = ctxPct != null ? pad.top + chartH * (1 - ctxPct / 100) : null;
 
-    points.push({ x, barY, barH, readY, writeY, call: calls[i], index: i });
+    points.push({ x, barY, barH, readY, writeY, ctxY, ctxPct, call: calls[i], index: i });
 
     if (hoveredCallIndex === i) {
       ctx.fillStyle = isDark ? 'rgba(56, 189, 248, 0.15)' : 'rgba(14, 165, 233, 0.12)';
@@ -1299,6 +1412,7 @@ function drawTimelineChart(calls) {
     const step = Math.max(1, Math.floor(calls.length / 15));
     if (i % step === 0 || i === calls.length - 1) {
       ctx.fillStyle = isDark ? 'rgba(255,255,255,0.4)' : 'rgba(0,0,0,0.4)';
+      ctx.font = '10px Inter, sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(String(i + 1), x, h - pad.bottom + 16);
     }
@@ -1360,6 +1474,38 @@ function drawTimelineChart(calls) {
     }
   }
 
+  // ── Context window % line ──
+  // Drawn last so it sits on top of bars. Uses right Y-axis (0–100%).
+  // Color-coded: purple < 50%, amber 50–80%, red ≥ 80%.
+  if (hasCtxData) {
+    // Draw line segments, coloring each segment by the utilization level
+    for (let i = 0; i < points.length; i++) {
+      const pt = points[i];
+      if (pt.ctxY == null) continue;
+      const nextPt = i + 1 < points.length ? points[i + 1] : null;
+
+      // Color for this point
+      const pct = pt.ctxPct || 0;
+      const lineColor = pct >= 80 ? '#ef4444' : pct >= 50 ? '#f59e0b' : '#a78bfa';
+
+      // Draw segment to next valid point
+      if (nextPt && nextPt.ctxY != null) {
+        ctx.beginPath();
+        ctx.strokeStyle = lineColor;
+        ctx.lineWidth = 2;
+        ctx.moveTo(pt.x, Math.max(pt.ctxY, pad.top));
+        ctx.lineTo(nextPt.x, Math.max(nextPt.ctxY, pad.top));
+        ctx.stroke();
+      }
+
+      // Dot at each data point
+      ctx.fillStyle = lineColor;
+      ctx.beginPath();
+      ctx.arc(pt.x, Math.max(pt.ctxY, pad.top), hoveredCallIndex === i ? 5 : 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
   ctx.fillStyle = isDark ? 'rgba(255,255,255,0.4)' : 'rgba(0,0,0,0.4)';
   ctx.font = '11px Inter, sans-serif';
   ctx.textAlign = 'center';
@@ -1367,7 +1513,7 @@ function drawTimelineChart(calls) {
 
   canvas._chartPoints = points;
   canvas._barWidth = barWidth;
-  canvas._chartMeta = { chartW, padLeft: pad.left, padTop: pad.top, chartH };
+  canvas._chartMeta = { chartW: chartWeff, padLeft: pad.left, padTop: pad.top, chartH };
 }
 
 function bindAnalyticsEvents(calls) {
@@ -1464,25 +1610,45 @@ function handleChartHover(e, calls) {
   const c = foundPt.call;
   const prunedStr = c.trimmedFromPrevBytes > 0 ? `✂️ Context Pruned: <strong>${fmtBytes(c.trimmedFromPrevBytes)}</strong>` : 'No context pruning';
 
+  // Context window utilization display
+  let ctxStr = '';
+  if (c.contextUtilizationPct != null && c.contextWindowSize) {
+    const pct = c.contextUtilizationPct.toFixed(1);
+    const total = fmtTokens(c.totalTokensInContext);
+    const limit = fmtTokens(c.contextWindowSize);
+    const pctColor = c.contextUtilizationPct >= 80 ? '#ef4444'
+      : c.contextUtilizationPct >= 50 ? '#f59e0b' : '#a78bfa';
+    ctxStr = `<div style="color:${pctColor};font-size:10.5px;margin-top:2px">🪟 Context Window: <strong>${pct}%</strong> (${total} / ${limit})</div>`;
+  } else if (c.contextWindowSize == null && c.modelId) {
+    ctxStr = `<div style="color:var(--text-3);font-size:10px;margin-top:2px">🪟 Context Window: unknown (model not in registry)</div>`;
+  }
+
+  // Model ID display
+  const modelStr = c.modelId
+    ? `<div style="font-size:10px;color:var(--text-3);margin-top:2px">🤖 ${escHtml(c.modelId)}</div>` : '';
+
   tooltip.style.display = 'block';
 
-  const tooltipWidth = 240;
+  const tooltipWidth = 270;
   if (mouseX > rect.width / 2) {
     tooltip.style.left = `${Math.max(10, mouseX - tooltipWidth - 15)}px`;
   } else {
     tooltip.style.left = `${Math.min(mouseX + 15, rect.width - tooltipWidth - 10)}px`;
   }
-  tooltip.style.top = `${Math.max(10, Math.min(mouseY - 30, rect.height - 120))}px`;
+  tooltip.style.top = `${Math.max(10, Math.min(mouseY - 30, rect.height - 140))}px`;
 
   tooltip.innerHTML = `
-    <div style="font-weight:bold;color:var(--text);margin-bottom:4px;display:flex;justify-space-between">
+    <div style="font-weight:bold;color:var(--text);margin-bottom:4px;display:flex;justify-content:space-between">
       <span>API Call #${foundPt.index + 1}</span>
       <span style="color:var(--text-3);font-weight:normal">${fmtTime(c.ts)}</span>
     </div>
+    ${modelStr}
     <div style="color:#38bdf8;font-weight:600">📦 Total Request Size: <strong>${fmtBytes(c.requestSize)}</strong></div>
+    ${ctxStr}
     <div style="color:var(--green);font-size:10.5px">📖 Cache Reads: <strong>${fmtTokens(c.cacheReads)} tokens</strong></div>
     <div style="color:#f59e0b;font-size:10.5px">✍️ Cache Writes: <strong>${fmtTokens(c.cacheWrites)} tokens</strong></div>
-    <div style="font-size:10px;color:var(--text-2);margin-top:2px">Cost: <strong>${fmtCost(c.cost)}</strong></div>
+    <div style="font-size:10px;color:var(--text-2);margin-top:2px">${prunedStr}</div>
+    <div style="font-size:10px;color:var(--text-2)">Cost: <strong>${fmtCost(c.cost)}</strong></div>
   `;
 }
 
