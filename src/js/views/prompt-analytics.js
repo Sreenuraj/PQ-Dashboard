@@ -37,18 +37,10 @@ function fmtDelta(bytes) {
   return `<span class="pa-delta-down" title="Request size reduced by ${fmtBytes(Math.abs(bytes))}">▼ ${fmtBytes(Math.abs(bytes))}</span>`;
 }
 
-function estimateTokens(bytes) {
-  return Math.round(bytes / 4);
-}
-
-
-
 // ── State ──
 let currentTaskId = null;
 let analyticsData = null;
 
-let callAIndex = null;
-let callBIndex = null;
 let hoveredCallIndex = null;
 let chartCanvas = null;
 
@@ -129,8 +121,6 @@ export async function renderPromptAnalytics(container, params) {
 
 async function loadTaskAnalytics(taskId) {
   currentTaskId = taskId;
-  callAIndex = null;
-  callBIndex = null;
   hoveredCallIndex = null;
 
   const contentEl = document.getElementById('pa-content');
@@ -344,7 +334,6 @@ function renderCacheObservabilityPanel(body, calls) {
   const totalTokensIn = calls.reduce((s, c) => s + c.tokensIn, 0);
   const totalTokensOut = calls.reduce((s, c) => s + c.tokensOut, 0);
 
-  // Model-aware cost calculation
   const costWithoutCache = ((totalReads + totalTokensIn) / 1000000.0) * pricing.uncached + (totalTokensOut / 1000000.0) * 15.00;
   const costWithCache = (totalTokensIn / 1000000.0) * pricing.uncached + (totalReads / 1000000.0) * pricing.cacheRead + (totalWrites / 1000000.0) * pricing.cacheWrite + (totalTokensOut / 1000000.0) * 15.00;
   const costSaved = Math.max(0, costWithoutCache - costWithCache);
@@ -390,7 +379,7 @@ function renderCacheObservabilityPanel(body, calls) {
         <div style="background:var(--bg-3);padding:10px 12px;border-radius:var(--radius-sm);border-left:3px solid #f59e0b">
           <strong style="color:#f59e0b;font-size:11.5px">✍️ What is Cache Write?</strong>
           <p style="color:var(--text-2);margin-top:4px">
-            When you send a request to <strong>${escHtml(pricing.name)}</strong>, the model provider checks for matching prompt prefixes in memory. If new system instructions, tools, or files are added, it writes the prompt prefix into memory as a <strong>KV Cache Breakpoint</strong>.
+            When you send a request to <strong>${escHtml(pricing.name)}</strong>, the model provider checks for matching prompt prefixes in memory. If new system instructions, tools, or files are added, it writes the prompt prefix into memory as a <strong>5-minute KV Cache Breakpoint</strong>.
           </p>
           <div style="color:var(--text-3);font-size:10px;margin-top:4px">
             • <strong>Rate:</strong> $${pricing.cacheWrite.toFixed(2)} / 1M tokens (initial creation charge).
@@ -498,8 +487,6 @@ function bindCacheTableEvents(calls) {
 }
 
 function renderInlinePromptDiff(container, comp, prevIdx, idx) {
-  const call1 = comp.call1;
-  const call2 = comp.call2;
   const trimmedItems = comp.trimmedItems || [];
 
   if (trimmedItems.length === 0) {
@@ -516,7 +503,7 @@ function renderInlinePromptDiff(container, comp, prevIdx, idx) {
       🔍 Prompt Content Comparison (Call #${prevIdx + 1} vs Call #${idx + 1}):
     </div>
     <div style="display:flex;flex-direction:column;gap:10px">
-      ${trimmedItems.map(item => renderSideBySideComparisonCard(item, prevIdx, idx)).join('')}
+      ${trimmedItems.map(item => renderDiffBoxMarkup(item, prevIdx, idx)).join('')}
     </div>
   `;
 
@@ -566,12 +553,6 @@ function renderReductionSequenceFeed(body, events) {
 }
 
 function renderReductionEventCard(ev) {
-  const diff = ev.diffChunks || {};
-  const prefix = diff.prefix || '';
-  const suffix = diff.suffix || '';
-  const removedText = diff.removedText || '(Content removed)';
-  const insertedText = diff.insertedText || '';
-
   let icon = '✂️';
   let catColor = 'var(--green)';
   if (ev.category === 'File Read Truncated') {
@@ -585,27 +566,51 @@ function renderReductionEventCard(ev) {
     catColor = '#f59e0b';
   }
 
+  const item = {
+    index: ev.msgIndex,
+    role: ev.role,
+    before: { size: ev.beforeSize },
+    after: { size: ev.afterSize },
+    diffChunks: ev.diffChunks,
+    bytesSaved: ev.bytesSaved,
+  };
+
+  return renderDiffBoxMarkup(item, ev.prevCallIndex, ev.callIndex, ev.category, ev.targetName, icon, catColor);
+}
+
+function renderDiffBoxMarkup(item, prevCallIdx, callIdx, category, targetName, icon, catColor) {
+  const diff = item.diffChunks || {};
+  const prefix = diff.prefix || '';
+  const suffix = diff.suffix || '';
+  const removedText = diff.removedText || '(Content removed)';
+  const insertedText = diff.insertedText || '';
+
+  const headerLabel = category ? `
+    <span style="background:rgba(255,255,255,0.06);padding:2px 8px;border-radius:12px;font-size:10.5px;font-weight:bold;color:${catColor || 'var(--green)'}">
+      ${icon || '✂️'} ${escHtml(category)}: <span style="color:var(--text)">${escHtml(targetName || '')}</span>
+    </span>
+  ` : '';
+
   return `
-    <div class="pa-sbs-card panel" data-call="${ev.callIndex}" data-target="${escHtml(ev.targetName)}" style="border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-2)">
+    <div class="pa-sbs-card panel" data-call="${callIdx}" data-target="${escHtml(targetName || '')}" style="border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-2)">
       <!-- Card Header -->
       <div style="background:var(--bg-3);padding:10px 14px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)">
         <div style="display:flex;align-items:center;gap:10px">
-          <span style="font-weight:bold;font-size:11.5px;color:var(--text)">Call #${ev.callIndex + 1}</span>
-          <span style="font-size:10px;color:var(--text-3)">msg[${ev.msgIndex}] (${ev.role})</span>
-          <span style="background:rgba(255,255,255,0.06);padding:2px 8px;border-radius:12px;font-size:10.5px;font-weight:bold;color:${catColor}">
-            ${icon} ${escHtml(ev.category)}: <span style="color:var(--text)">${escHtml(ev.targetName)}</span>
-          </span>
+          <strong style="color:var(--text);font-size:12px">msg[${item.index}]</strong>
+          <span style="text-transform:uppercase;font-weight:700;color:var(--accent-2);font-size:10.5px">(${item.role})</span>
+          <span style="color:var(--text-3);font-size:11px">Call #${prevCallIdx + 1} → Call #${callIdx + 1}</span>
+          ${headerLabel}
         </div>
-        <div style="display:flex;align-items:center;gap:12px">
+        <div>
           <span class="mono" style="color:var(--green);font-weight:bold;font-size:12px;background:rgba(34,197,94,0.12);padding:3px 10px;border-radius:var(--radius-sm);border:1px solid rgba(34,197,94,0.3)">
-            ✂️ Saved ${fmtBytes(ev.bytesSaved)} (${fmtBytes(ev.beforeSize)} → ${fmtBytes(ev.afterSize)})
+            ✂️ Saved ${fmtBytes(item.bytesSaved)} (${fmtBytes(item.before?.size || 0)} → ${fmtBytes(item.after?.size || 0)})
           </span>
         </div>
       </div>
 
       <!-- Exact Removed Content Highlight Banner -->
       <div style="background:rgba(239,68,68,0.08);border-bottom:1px solid rgba(239,68,68,0.25);padding:8px 14px;font-size:11px">
-        <span style="color:var(--red);font-weight:bold">✂️ EXACT CONTENT REMOVED FROM CALL #${ev.prevCallIndex + 1} TO CALL #${ev.callIndex + 1}:</span>
+        <span style="color:var(--red);font-weight:bold">✂️ EXACT CONTENT REMOVED FROM CALL #${prevCallIdx + 1}:</span>
         <div class="mono" style="margin-top:4px;background:rgba(239,68,68,0.15);color:var(--red);padding:6px 10px;border-radius:var(--radius-sm);border-left:3px solid var(--red);max-height:90px;overflow-y:auto;white-space:pre-wrap;word-break:break-all">
           ${escHtml(removedText)}
         </div>
@@ -616,8 +621,8 @@ function renderReductionEventCard(ev) {
         <!-- Left Column: Request N-1 -->
         <div style="background:var(--bg-2);padding:10px 12px">
           <div style="font-weight:bold;font-size:10.5px;color:var(--red);margin-bottom:6px;display:flex;justify-content:space-between">
-            <span>🔴 BEFORE in Call #${ev.prevCallIndex + 1} (Original)</span>
-            <span class="mono">${fmtBytes(ev.beforeSize)}</span>
+            <span>🔴 BEFORE in Call #${prevCallIdx + 1} (Original)</span>
+            <span class="mono">${fmtBytes(item.before?.size || 0)}</span>
           </div>
           <div class="mono pa-sbs-left" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border);max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all">
             ${escHtml(prefix)}
@@ -629,71 +634,8 @@ function renderReductionEventCard(ev) {
         <!-- Right Column: Request N -->
         <div style="background:var(--bg-2);padding:10px 12px">
           <div style="font-weight:bold;font-size:10.5px;color:var(--green);margin-bottom:6px;display:flex;justify-content:space-between">
-            <span>🟢 AFTER in Call #${ev.callIndex + 1} (Sent Payload)</span>
-            <span class="mono">${fmtBytes(ev.afterSize)}</span>
-          </div>
-          <div class="mono pa-sbs-right" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border);max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all">
-            ${escHtml(prefix)}
-            ${insertedText ? `<span style="background:rgba(34,197,94,0.25);color:var(--green);font-weight:bold;padding:2px 4px;border-radius:2px">${escHtml(insertedText)}</span>` : ''}
-            ${escHtml(suffix)}
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-function renderSideBySideComparisonCard(item, callAIndex, callBIndex) {
-  const diff = item.diffChunks || {};
-  const prefix = diff.prefix || '';
-  const suffix = diff.suffix || '';
-  const removedText = diff.removedText || '(Whole message removed)';
-  const insertedText = diff.insertedText || '';
-
-  return `
-    <div class="pa-sbs-card panel" style="border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-2)">
-      <!-- Card Header -->
-      <div style="background:var(--bg-3);padding:10px 14px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)">
-        <div>
-          <strong style="color:var(--text);font-size:12px">msg[${item.index}]</strong>
-          <span style="text-transform:uppercase;font-weight:700;color:var(--accent-2);margin-left:6px;font-size:10.5px">(${item.role})</span>
-          <span style="color:var(--text-3);margin-left:10px;font-size:11px">Request #${callAIndex + 1} → Request #${callBIndex + 1}</span>
-        </div>
-        <div style="display:flex;align-items:center;gap:12px">
-          <span class="mono" style="color:var(--green);font-weight:bold;font-size:12px;background:rgba(34,197,94,0.12);padding:3px 10px;border-radius:var(--radius-sm);border:1px solid rgba(34,197,94,0.3)">
-            ✂️ Saved ${fmtBytes(item.bytesSaved)} (${fmtBytes(item.before.size)} → ${fmtBytes(item.after.size)})
-          </span>
-        </div>
-      </div>
-
-      <!-- Isolated Removed Chunk Highlight Banner -->
-      <div style="background:rgba(239,68,68,0.08);border-bottom:1px solid rgba(239,68,68,0.25);padding:8px 14px;font-size:11px">
-        <span style="color:var(--red);font-weight:bold">✂️ EXACT CONTENT REMOVED FROM REQUEST #${callAIndex + 1}:</span>
-        <div class="mono" style="margin-top:4px;background:rgba(239,68,68,0.15);color:var(--red);padding:6px 10px;border-radius:var(--radius-sm);border-left:3px solid var(--red);max-height:90px;overflow-y:auto;white-space:pre-wrap;word-break:break-all">
-          ${escHtml(removedText)}
-        </div>
-      </div>
-
-      <!-- 2-Column Side-by-Side Synchronized Scroll Comparison -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border)">
-        <!-- Left Column: Request A -->
-        <div style="background:var(--bg-2);padding:10px 12px">
-          <div style="font-weight:bold;font-size:10.5px;color:var(--red);margin-bottom:6px;display:flex;justify-content:space-between">
-            <span>🔴 BEFORE in Request #${callAIndex + 1} (Original)</span>
-            <span class="mono">${fmtBytes(item.before.size)}</span>
-          </div>
-          <div class="mono pa-sbs-left" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border);max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all">
-            ${escHtml(prefix)}
-            <span style="background:rgba(239,68,68,0.25);color:var(--red);font-weight:bold;padding:2px 4px;border-radius:2px">${escHtml(removedText)}</span>
-            ${escHtml(suffix)}
-          </div>
-        </div>
-
-        <!-- Right Column: Request B -->
-        <div style="background:var(--bg-2);padding:10px 12px">
-          <div style="font-weight:bold;font-size:10.5px;color:var(--green);margin-bottom:6px;display:flex;justify-content:space-between">
-            <span>🟢 AFTER in Request #${callBIndex + 1} (Sent Payload)</span>
-            <span class="mono">${fmtBytes(item.after.size)}</span>
+            <span>🟢 AFTER in Call #${callIdx + 1} (Sent Payload)</span>
+            <span class="mono">${fmtBytes(item.after?.size || 0)}</span>
           </div>
           <div class="mono pa-sbs-right" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border);max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all">
             ${escHtml(prefix)}
@@ -814,8 +756,6 @@ function drawTimelineChart(calls) {
 
     if (chartSeries.requestSize) {
       const hasHistoricalPruning = calls[i].hasPruning || calls[i].trimmedFromPrevBytes > 100;
-      const isCallA = callAIndex === i;
-      const isCallB = callBIndex === i;
       const isHovered = hoveredCallIndex === i;
 
       const grad = ctx.createLinearGradient(x - barWidth / 2, barY, x - barWidth / 2, pad.top + chartH);
@@ -831,9 +771,9 @@ function drawTimelineChart(calls) {
       ctx.fillStyle = grad;
       ctx.fillRect(x - barWidth / 2, barY, barWidth, barH);
 
-      if (isCallA || isCallB || isHovered) {
-        ctx.strokeStyle = isCallA ? '#f59e0b' : (isCallB ? '#ffffff' : '#38bdf8');
-        ctx.lineWidth = (isCallA || isCallB) ? 2 : 1.5;
+      if (isHovered) {
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 1.5;
         ctx.strokeRect(x - barWidth / 2 - 1, barY - 1, barWidth + 2, barH + 2);
       }
     }
