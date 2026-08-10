@@ -350,7 +350,7 @@ function renderReductionEventCard(ev) {
   }
 
   return `
-    <div class="pa-sbs-card panel" data-call="${ev.callIndex}" style="border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-2)">
+    <div class="pa-sbs-card panel" data-call="${ev.callIndex}" data-target="${escHtml(ev.targetName)}" style="border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-2)">
       <!-- Card Header -->
       <div style="background:var(--bg-3);padding:10px 14px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)">
         <div style="display:flex;align-items:center;gap:10px">
@@ -621,6 +621,27 @@ function bindAnalyticsEvents(calls) {
         chartSeries[seriesKey] = !chartSeries[seriesKey];
         chip.classList.toggle('active', chartSeries[seriesKey]);
         drawTimelineChart(calls);
+      }
+    });
+  });
+
+  document.querySelectorAll('.pa-summary-row').forEach(row => {
+    row.addEventListener('click', () => {
+      const target = row.dataset.target;
+      if (!target) return;
+
+      const cards = document.querySelectorAll('.pa-sbs-card');
+      for (const card of cards) {
+        if (card.dataset.target === target || card.innerText.includes(target) || card.innerHTML.includes(target)) {
+          card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          card.style.outline = '2px solid var(--green)';
+          card.style.boxShadow = '0 0 16px rgba(16, 185, 129, 0.4)';
+          setTimeout(() => {
+            card.style.outline = 'none';
+            card.style.boxShadow = 'none';
+          }, 3000);
+          break;
+        }
       }
     });
   });
