@@ -128,9 +128,6 @@ function computeExactDiffChunks(str1, str2) {
 module.exports = (db, config) => {
   const router = express.Router();
 
-  /**
-   * Resolve a task ID to its filesystem directory path.
-   */
   function resolveTaskPath(taskId) {
     const task = db.prepare('SELECT source FROM tasks WHERE id = ?').get(taskId);
     if (!task) return null;
@@ -143,7 +140,6 @@ module.exports = (db, config) => {
       }
     }
 
-    // Fallback: scan all sources
     for (const src of config.sources) {
       if (!src.enabled) continue;
       const dir = path.join(resolvePath(src.path), taskId);
@@ -155,7 +151,7 @@ module.exports = (db, config) => {
 
   /**
    * GET /api/prompt-analytics/:taskId
-   * Returns full prompt analysis data for a task with context overlays applied.
+   * Returns full prompt analysis data, executive category summaries, and chronological pruning sequence.
    */
   router.get('/prompt-analytics/:taskId', (req, res) => {
     const taskId = req.params.taskId;
@@ -188,7 +184,6 @@ module.exports = (db, config) => {
 
     const apiCalls = [];
     let prevRequestSize = 0;
-    let prevEffectiveMsgs = null;
 
     for (let i = 0; i < uiMessages.length; i++) {
       const msg = uiMessages[i];
@@ -201,22 +196,13 @@ module.exports = (db, config) => {
 
       let requestSize = 0;
       let messageCount = 0;
-      let effectiveMsgs = [];
 
       if (histIdx >= 0 && apiHistory.length > 0) {
-        effectiveMsgs = getEffectiveMessagesAtTs(apiHistory, contextUpdates, msg.ts, histIdx);
+        const effectiveMsgs = getEffectiveMessagesAtTs(apiHistory, contextUpdates, msg.ts, histIdx);
         for (const m of effectiveMsgs) {
           requestSize += JSON.stringify(m?.content || '').length;
         }
         messageCount = effectiveMsgs.length;
-      }
-
-      let trimmedFromPrevBytes = 0;
-      if (prevEffectiveMsgs && prevEffectiveMsgs.length > 0) {
-        const prevCommonMsgsCurr = getEffectiveMessagesAtTs(apiHistory, contextUpdates, msg.ts, prevEffectiveMsgs.length - 1);
-        const prevSizeInPrev = prevEffectiveMsgs.reduce((s, m) => s + JSON.stringify(m?.content || '').length, 0);
-        const prevSizeInCurr = prevCommonMsgsCurr.reduce((s, m) => s + JSON.stringify(m?.content || '').length, 0);
-        trimmedFromPrevBytes = Math.max(0, prevSizeInPrev - prevSizeInCurr);
       }
 
       const sizeDelta = apiCalls.length === 0 ? 0 : (requestSize - prevRequestSize);
@@ -233,25 +219,103 @@ module.exports = (db, config) => {
         messageCount,
         requestSize,
         sizeDelta,
-        trimmedFromPrevBytes,
-        hasPruning: trimmedFromPrevBytes > 100,
+        trimmedFromPrevBytes: 0,
+        hasPruning: false,
         requestText: data.request || null,
         modelId: msg.modelInfo?.modelId || null,
         providerId: msg.modelInfo?.providerId || null,
       });
 
       if (requestSize > 0) prevRequestSize = requestSize;
-      prevEffectiveMsgs = effectiveMsgs;
     }
 
-    const overlayMap = {};
-    for (const update of contextUpdates) {
-      const msgIndex = update[0];
-      if (!overlayMap[msgIndex]) overlayMap[msgIndex] = 0;
-      overlayMap[msgIndex]++;
+    // Chronological Reduction Timeline & Category Tracking across adjacent turns
+    const reductionEvents = [];
+    const filePruningMap = {};
+    const cmdPruningMap = {};
+    let envPruningCount = 0;
+    let envPruningBytes = 0;
+
+    for (let i = 1; i < apiCalls.length; i++) {
+      const callPrev = apiCalls[i - 1];
+      const callCurr = apiCalls[i];
+
+      const msgsPrev = getEffectiveMessagesAtTs(apiHistory, contextUpdates, callPrev.ts, callPrev.historyIndex);
+      const msgsCurr = getEffectiveMessagesAtTs(apiHistory, contextUpdates, callCurr.ts, callPrev.historyIndex);
+
+      let turnSavedBytes = 0;
+
+      for (let mIdx = 0; mIdx < msgsPrev.length; mIdx++) {
+        const sPrev = JSON.stringify(msgsPrev[mIdx]?.content || '').length;
+        const sCurr = JSON.stringify(msgsCurr[mIdx]?.content || '').length;
+        const bytesSaved = sPrev - sCurr;
+
+        if (bytesSaved > 50) {
+          turnSavedBytes += bytesSaved;
+          const contentPrevStr = extractTextContent(msgsPrev[mIdx]?.content);
+          const contentCurrStr = extractTextContent(msgsCurr[mIdx]?.content);
+
+          let category = 'Other Content';
+          let targetName = 'Context Text';
+
+          const fileMatch = contentPrevStr.match(/read_file for '([^']+)'/);
+          if (fileMatch) {
+            category = 'File Read Truncated';
+            targetName = fileMatch[1];
+            if (!filePruningMap[targetName]) filePruningMap[targetName] = { count: 0, bytesSaved: 0 };
+            filePruningMap[targetName].count++;
+            filePruningMap[targetName].bytesSaved += bytesSaved;
+          } else if (contentPrevStr.includes('execute_command for') || contentCurrStr.includes('Tool output truncated')) {
+            category = 'Terminal Output Truncated';
+            const cmdMatch = contentPrevStr.match(/execute_command for '([^']+)'/);
+            targetName = cmdMatch ? cmdMatch[1] : 'Terminal Command Output';
+            if (!cmdPruningMap[targetName]) cmdPruningMap[targetName] = { count: 0, bytesSaved: 0 };
+            cmdPruningMap[targetName].count++;
+            cmdPruningMap[targetName].bytesSaved += bytesSaved;
+          } else if (contentPrevStr.includes('<environment_details>') && contentCurrStr.includes('stale workspace/environment snapshot')) {
+            category = 'Stale Environment Snapshot Removed';
+            targetName = '<environment_details>';
+            envPruningCount++;
+            envPruningBytes += bytesSaved;
+          }
+
+          const diffChunks = computeExactDiffChunks(contentPrevStr, contentCurrStr);
+
+          reductionEvents.push({
+            eventIndex: reductionEvents.length,
+            callIndex: i,
+            prevCallIndex: i - 1,
+            msgIndex: mIdx,
+            role: msgsPrev[mIdx]?.role || 'unknown',
+            category,
+            targetName,
+            beforeSize: sPrev,
+            afterSize: sCurr,
+            bytesSaved,
+            diffChunks,
+            ts: callCurr.ts,
+          });
+        }
+      }
+
+      callCurr.trimmedFromPrevBytes = turnSavedBytes;
+      callCurr.hasPruning = turnSavedBytes > 100;
     }
 
     const taskMeta = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+
+    // Format Executive Category Summaries
+    const fileCategorySummary = Object.keys(filePruningMap).map(f => ({
+      path: f,
+      count: filePruningMap[f].count,
+      bytesSaved: filePruningMap[f].bytesSaved,
+    })).sort((a, b) => b.bytesSaved - a.bytesSaved);
+
+    const cmdCategorySummary = Object.keys(cmdPruningMap).map(c => ({
+      command: c,
+      count: cmdPruningMap[c].count,
+      bytesSaved: cmdPruningMap[c].bytesSaved,
+    })).sort((a, b) => b.bytesSaved - a.bytesSaved);
 
     res.json({
       task: taskMeta ? {
@@ -276,14 +340,18 @@ module.exports = (db, config) => {
         contextHistoryPath: fs.existsSync(ctxHistPath) ? ctxHistPath : null,
       },
       apiCalls,
-      overlayMap,
+      reductionCategories: {
+        truncatedFiles: fileCategorySummary,
+        truncatedCommands: cmdCategorySummary,
+        environmentSnapshots: { count: envPruningCount, bytesSaved: envPruningBytes },
+      },
+      reductionEvents,
       totalMessages: apiHistory.length,
     });
   });
 
   /**
    * GET /api/prompt-analytics/:taskId/compare?call1=5&call2=10
-   * Compares effective prompts of two API calls (with context overlays applied at call timestamps).
    */
   router.get('/prompt-analytics/:taskId/compare', (req, res) => {
     const taskId = req.params.taskId;
@@ -341,11 +409,7 @@ module.exports = (db, config) => {
     const entry2 = apiCallEntries[call2];
 
     const messages1 = getEffectiveMessagesAtTs(apiHistory, contextUpdates, entry1.ts, entry1.historyIndex);
-    const messages2 = getEffectiveMessagesAtTs(apiHistory, contextUpdates, entry2.ts, entry2.historyIndex);
-
-    function hashMessage(msg) {
-      return crypto.createHash('md5').update(JSON.stringify(msg.content || '')).digest('hex');
-    }
+    const messages2 = getEffectiveMessagesAtTs(apiHistory, contextUpdates, entry2.ts, entry1.historyIndex);
 
     function summarizeMessage(msg, idx) {
       const content = msg.content;
@@ -369,40 +433,22 @@ module.exports = (db, config) => {
 
     const trimmedItems = [];
     const addedItems = [];
-    let preservedCount = 0;
-    let preservedSize = 0;
 
-    const maxLen = Math.max(messages1.length, messages2.length);
+    for (let i = 0; i < commonMsgCount; i++) {
+      const sum1 = summarizeMessage(messages1[i], i);
+      const sum2 = summarizeMessage(messages2[i], i);
+      const diffChunks = computeExactDiffChunks(sum1.fullText, sum2.fullText);
+      const saved = sum1.size - sum2.size;
 
-    for (let i = 0; i < maxLen; i++) {
-      const msg1 = i < messages1.length ? messages1[i] : null;
-      const msg2 = i < messages2.length ? messages2[i] : null;
-
-      if (msg1 && msg2) {
-        const hash1 = hashMessage(msg1);
-        const hash2 = hashMessage(msg2);
-
-        if (hash1 === hash2) {
-          const size = JSON.stringify(msg1.content || '').length;
-          preservedCount++;
-          preservedSize += size;
-        } else {
-          const sum1 = summarizeMessage(msg1, i);
-          const sum2 = summarizeMessage(msg2, i);
-          const diffChunks = computeExactDiffChunks(sum1.fullText, sum2.fullText);
-
-          trimmedItems.push({
-            index: i,
-            role: msg1.role,
-            before: sum1,
-            after: sum2,
-            diffChunks,
-            bytesSaved: sum1.size - sum2.size,
-          });
-        }
-      } else if (msg2 && !msg1) {
-        const sum = summarizeMessage(msg2, i);
-        addedItems.push(sum);
+      if (saved > 10) {
+        trimmedItems.push({
+          index: i,
+          role: messages1[i].role,
+          before: sum1,
+          after: sum2,
+          diffChunks,
+          bytesSaved: saved,
+        });
       }
     }
 
@@ -419,8 +465,7 @@ module.exports = (db, config) => {
         percentSaved: commonSizeCall1 > 0 ? ((prunedFromCall1 / commonSizeCall1) * 100).toFixed(1) : '0.0',
       },
       trimmedItems,
-      addedItems,
-      preservedSummary: { count: preservedCount, size: preservedSize },
+      addedItems: [],
     });
   });
 

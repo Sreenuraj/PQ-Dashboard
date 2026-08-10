@@ -2917,7 +2917,10 @@ html[data-theme="light"] .oneshot-bar-bg {
 }
 .pa-legend-chip:hover { opacity: 0.9; }
 .pa-legend-color { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
-.pa-chart-container { position: relative; width: 100%; height: 260px; }
+.pa-summary-row:hover {
+  background: var(--bg-1) !important;
+  outline: 1px solid var(--accent);
+}
 
 .pa-chart-tooltip {
   pointer-events: none !important;

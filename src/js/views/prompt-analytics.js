@@ -44,10 +44,13 @@ function estimateTokens(bytes) {
 // ── State ──
 let currentTaskId = null;
 let analyticsData = null;
-let selectedCallIndex = null;
+
+let callAIndex = null;
+let callBIndex = null;
 let hoveredCallIndex = null;
-let comparisonData = null;
 let chartCanvas = null;
+
+let activeCategoryFilter = 'ALL';
 
 let chartSeries = {
   requestSize: true,
@@ -69,8 +72,8 @@ export async function renderPromptAnalytics(container, params) {
 
   container.innerHTML = `
     <div class="view-header">
-      <h1 class="view-title">🔬 Prompt Analytics & Context Reduction</h1>
-      <p class="view-subtitle">Inspect how historical prompt content is trimmed across API requests</p>
+      <h1 class="view-title">🔬 Prompt Observability & Context Reduction</h1>
+      <p class="view-subtitle">Executive summary and chronological trace of content pruned from LLM context windows</p>
     </div>
 
     <!-- Task Selector -->
@@ -124,9 +127,9 @@ export async function renderPromptAnalytics(container, params) {
 
 async function loadTaskAnalytics(taskId) {
   currentTaskId = taskId;
-  selectedCallIndex = null;
+  callAIndex = null;
+  callBIndex = null;
   hoveredCallIndex = null;
-  comparisonData = null;
 
   const contentEl = document.getElementById('pa-content');
   if (!contentEl) return;
@@ -155,53 +158,89 @@ async function loadTaskAnalytics(taskId) {
     return;
   }
 
-  const calls = analyticsData.apiCalls;
-  const pruneCall = calls.slice().reverse().find(c => c.hasPruning || c.trimmedFromPrevBytes > 1000);
-  selectedCallIndex = pruneCall ? pruneCall.index : calls.length - 1;
-
   renderAnalytics(contentEl);
 }
 
 function renderAnalytics(contentEl) {
   const data = analyticsData;
   const calls = data.apiCalls;
+  const cats = data.reductionCategories || {};
+  const events = data.reductionEvents || [];
 
-  const totalCost = calls.reduce((s, c) => s + c.cost, 0);
-  const totalTokensIn = calls.reduce((s, c) => s + c.tokensIn, 0);
-  const totalTokensOut = calls.reduce((s, c) => s + c.tokensOut, 0);
-  const maxSize = Math.max(...calls.map(c => c.requestSize));
-  const pruningCallsCount = calls.filter(c => c.hasPruning || c.trimmedFromPrevBytes > 100).length;
-  const totalBytesPruned = calls.reduce((s, c) => s + (c.trimmedFromPrevBytes || 0), 0);
+  const fileSaved = (cats.truncatedFiles || []).reduce((s, f) => s + f.bytesSaved, 0);
+  const cmdSaved = (cats.truncatedCommands || []).reduce((s, c) => s + c.bytesSaved, 0);
+  const envSaved = cats.environmentSnapshots?.bytesSaved || 0;
 
   contentEl.innerHTML = `
-    <!-- Summary Cards -->
-    <div class="pa-summary-grid">
-      <div class="pa-card" title="Total chat/completions API requests sent during this task session">
-        <div class="pa-card-label">Total API Calls ℹ️</div>
-        <div class="pa-card-value">${calls.length}</div>
-        <div class="pa-card-sub">${data.totalMessages} messages total</div>
+    <!-- Top Executive Pruning Category Summary Grid -->
+    <div style="margin-bottom:16px">
+      <div style="font-weight:bold;font-size:12.5px;color:var(--text);margin-bottom:10px">
+        📌 Executive Context Reduction Summary — What Was Pruned During Task:
       </div>
-      <div class="pa-card" title="Peak prompt payload size in bytes sent to the model context window">
-        <div class="pa-card-label">Max Request Size ℹ️</div>
-        <div class="pa-card-value">${fmtBytes(maxSize)}</div>
-        <div class="pa-card-sub">~${fmtTokens(estimateTokens(maxSize))} tokens</div>
-      </div>
-      <div class="pa-card" title="Number of requests where context optimization trimmed historical prompt content from previous turns">
-        <div class="pa-card-label">Context Pruning Turns ℹ️</div>
-        <div class="pa-card-value pa-highlight-green">${pruningCallsCount}</div>
-        <div class="pa-card-sub">${fmtBytes(totalBytesPruned)} total pruned</div>
-      </div>
-      <div class="pa-card" title="Total API cost calculated for input and output tokens">
-        <div class="pa-card-label">Total Cost ℹ️</div>
-        <div class="pa-card-value">${fmtCost(totalCost)}</div>
-        <div class="pa-card-sub">${fmtTokens(totalTokensIn)} in / ${fmtTokens(totalTokensOut)} out</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+        <!-- Files Truncated Card -->
+        <div class="panel" style="background:var(--bg-2);border:1px solid var(--border);border-left:4px solid var(--green);padding:12px;border-radius:var(--radius-sm)">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <span style="font-weight:bold;font-size:11.5px;color:var(--green)">📁 File Read Truncations</span>
+            <span class="mono" style="font-size:11px;font-weight:bold;color:var(--green)">-${fmtBytes(fileSaved)}</span>
+          </div>
+          <div style="font-size:10.5px;color:var(--text-3);margin-bottom:8px">
+            ${(cats.truncatedFiles || []).length} unique files truncated in context:
+          </div>
+          <div style="display:flex;flex-direction:column;gap:4px;max-height:120px;overflow-y:auto">
+            ${(cats.truncatedFiles || []).map(f => `
+              <div class="pa-summary-row" title="Full File Path: ${escHtml(f.path)} &#10;Total Pruned: ${fmtBytes(f.bytesSaved)} (${f.count} times)" data-target="${escHtml(f.path)}" style="display:flex;justify-content:space-between;font-size:10px;background:var(--bg-3);padding:4px 8px;border-radius:3px;cursor:pointer;transition:background 0.15s">
+                <span style="color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:190px;font-family:monospace" title="${escHtml(f.path)}">${escHtml(f.path)}</span>
+                <span class="mono" style="color:var(--green);font-weight:bold;margin-left:6px">-${fmtBytes(f.bytesSaved)} (${f.count}x)</span>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+
+        <!-- Terminal Output Card -->
+        <div class="panel" style="background:var(--bg-2);border:1px solid var(--border);border-left:4px solid #38bdf8;padding:12px;border-radius:var(--radius-sm)">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <span style="font-weight:bold;font-size:11.5px;color:#38bdf8">💻 Command Output Truncations</span>
+            <span class="mono" style="font-size:11px;font-weight:bold;color:#38bdf8">-${fmtBytes(cmdSaved)}</span>
+          </div>
+          <div style="font-size:10.5px;color:var(--text-3);margin-bottom:8px">
+            ${(cats.truncatedCommands || []).length} command outputs capped:
+          </div>
+          <div style="display:flex;flex-direction:column;gap:4px;max-height:120px;overflow-y:auto">
+            ${(cats.truncatedCommands || []).map(c => `
+              <div class="pa-summary-row" title="Full Command: ${escHtml(c.command)} &#10;Total Pruned: ${fmtBytes(c.bytesSaved)}" data-target="${escHtml(c.command)}" style="display:flex;justify-content:space-between;font-size:10px;background:var(--bg-3);padding:4px 8px;border-radius:3px;cursor:pointer;transition:background 0.15s">
+                <span style="color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:190px;font-family:monospace" title="${escHtml(c.command)}">${escHtml(c.command)}</span>
+                <span class="mono" style="color:#38bdf8;font-weight:bold;margin-left:6px">-${fmtBytes(c.bytesSaved)}</span>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+
+        <!-- Environment Details Card -->
+        <div class="panel" style="background:var(--bg-2);border:1px solid var(--border);border-left:4px solid #f59e0b;padding:12px;border-radius:var(--radius-sm)">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <span style="font-weight:bold;font-size:11.5px;color:#f59e0b">🌲 Environment Snapshots Pruned</span>
+            <span class="mono" style="font-size:11px;font-weight:bold;color:#f59e0b">-${fmtBytes(envSaved)}</span>
+          </div>
+          <div style="font-size:10.5px;color:var(--text-3);margin-bottom:8px">
+            ${cats.environmentSnapshots?.count || 0} stale workspace snapshots removed to prevent context bloat.
+          </div>
+          <div style="font-size:11px;color:var(--text-2);background:var(--bg-3);padding:8px;border-radius:2px;margin-top:10px">
+            ✓ Keeps latest workspace state while purging historical duplicates.
+          </div>
+        </div>
       </div>
     </div>
 
     <!-- Timeline Chart -->
     <div class="panel pa-chart-panel">
-      <div class="panel-title">
-        <span>📊 Request Size Timeline <span style="font-size:11px;color:var(--text-3);font-weight:normal;margin-left:6px">(Green bars = Context Pruning on previous content | Click any bar to inspect)</span></span>
+      <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <span>📊 Request Size Timeline</span>
+          <span style="font-size:11px;color:var(--text-3);font-weight:normal;margin-left:6px">
+            (Green bars = Context Pruning on previous content | Click any bar to jump to reduction event)
+          </span>
+        </div>
         <div class="pa-chart-legend">
           <button class="pa-legend-chip ${chartSeries.requestSize ? 'active' : ''}" data-series="requestSize">
             <span class="pa-legend-color" style="background:#38bdf8"></span> Request Size (Bars)
@@ -222,14 +261,22 @@ function renderAnalytics(contentEl) {
       </div>
     </div>
 
-    <!-- Context Pruning & Content Comparison Section -->
+    <!-- Chronological Reduction Sequence Feed & Comparison Section -->
     <div id="pa-comparison-section" class="panel pa-comparison-panel-full">
-      <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center">
-        <span id="pa-comp-heading">✂️ Context Reduction Analysis</span>
-        <div id="pa-comp-select-wrapper"></div>
+      <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+        <span>📜 Chronological Context Reduction Sequence (${events.length} total events)</span>
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="display:flex;align-items:center;gap:6px;font-size:11px">
+            <span style="color:var(--text-3)">Category Filter:</span>
+            <button class="action-btn secondary pa-cat-filter ${activeCategoryFilter === 'ALL' ? 'active' : ''}" data-cat="ALL" style="padding:2px 8px;font-size:10.5px">All (${events.length})</button>
+            <button class="action-btn secondary pa-cat-filter ${activeCategoryFilter === 'FILE' ? 'active' : ''}" data-cat="FILE" style="padding:2px 8px;font-size:10.5px">Files (${events.filter(e => e.category === 'File Read Truncated').length})</button>
+            <button class="action-btn secondary pa-cat-filter ${activeCategoryFilter === 'CMD' ? 'active' : ''}" data-cat="CMD" style="padding:2px 8px;font-size:10.5px">Commands (${events.filter(e => e.category === 'Terminal Output Truncated').length})</button>
+            <button class="action-btn secondary pa-cat-filter ${activeCategoryFilter === 'ENV' ? 'active' : ''}" data-cat="ENV" style="padding:2px 8px;font-size:10.5px">Env Snapshots (${events.filter(e => e.category === 'Stale Environment Snapshot Removed').length})</button>
+          </div>
+        </div>
       </div>
       <div id="pa-comparison-body" class="panel-body" style="padding:16px">
-        <div class="loading-state"><div class="spinner"></div><p>Loading pruning analysis...</p></div>
+        <div class="loading-state"><div class="spinner"></div><p>Loading chronological reduction sequence...</p></div>
       </div>
     </div>
   `;
@@ -237,139 +284,127 @@ function renderAnalytics(contentEl) {
   bindAnalyticsEvents(calls);
   drawTimelineChart(calls);
 
-  if (selectedCallIndex !== null) {
-    loadComparisonForCall(selectedCallIndex, calls);
-  }
+  renderReductionSequenceFeed(document.getElementById('pa-comparison-body'), events);
 }
 
-async function loadComparisonForCall(callIndex, calls) {
-  selectedCallIndex = callIndex;
-  const compBody = document.getElementById('pa-comparison-body');
-  const compHeading = document.getElementById('pa-comp-heading');
-  const selectWrapper = document.getElementById('pa-comp-select-wrapper');
+function renderReductionSequenceFeed(body, events) {
+  if (!body) return;
 
-  if (!compBody) return;
-
-  const currentCall = calls[callIndex];
-  const prevIndex = callIndex > 0 ? callIndex - 1 : 0;
-  const prevCall = calls[prevIndex];
-
-  if (compHeading) {
-    compHeading.innerHTML = `✂️ Context Reduction Analysis: <strong style="color:#38bdf8">Call #${callIndex + 1}</strong> vs <strong style="color:var(--text-2)">Call #${prevIndex + 1}</strong>`;
+  let filteredEvents = events;
+  if (activeCategoryFilter === 'FILE') {
+    filteredEvents = events.filter(e => e.category === 'File Read Truncated');
+  } else if (activeCategoryFilter === 'CMD') {
+    filteredEvents = events.filter(e => e.category === 'Terminal Output Truncated');
+  } else if (activeCategoryFilter === 'ENV') {
+    filteredEvents = events.filter(e => e.category === 'Stale Environment Snapshot Removed');
   }
 
-  if (selectWrapper) {
-    selectWrapper.innerHTML = `
-      <div style="display:flex;align-items:center;gap:8px">
-        <label style="font-size:11px;color:var(--text-3)">Jump to Request:</label>
-        <select id="pa-call-jump-select" class="filter-select" style="font-size:11px;padding:2px 8px">
-          ${calls.map((c, i) => `
-            <option value="${i}" ${i === callIndex ? 'selected' : ''}>
-              Call #${i + 1} — ${fmtBytes(c.requestSize)} ${c.hasPruning ? '(✂️ ' + fmtBytes(c.trimmedFromPrevBytes) + ' pruned)' : ''}
-            </option>
-          `).join('')}
-        </select>
+  if (filteredEvents.length === 0) {
+    body.innerHTML = `
+      <div class="empty-state">
+        <p style="color:var(--text-3)">No reduction events match the selected category filter.</p>
       </div>
     `;
-
-    document.getElementById('pa-call-jump-select')?.addEventListener('change', (e) => {
-      const newIdx = parseInt(e.target.value);
-      loadComparisonForCall(newIdx, calls);
-    });
+    return;
   }
-
-  compBody.innerHTML = '<div class="loading-state" style="padding:20px"><div class="spinner"></div><p>Analyzing context reduction...</p></div>';
-
-  try {
-    comparisonData = await api.promptCompare(currentTaskId, prevIndex, callIndex);
-    renderDetailedComparison(compBody, currentCall, prevCall, callIndex, prevIndex);
-  } catch (e) {
-    compBody.innerHTML = `<div class="empty-state"><p style="color:var(--red)">Failed to load comparison: ${escHtml(e.message)}</p></div>`;
-  }
-}
-
-function renderDetailedComparison(body, currentCall, prevCall, callIndex, prevIndex) {
-  const d = comparisonData;
-  if (!d) return;
-
-  const { call1, call2, pruningSummary, trimmedItems, addedItems } = d;
-  const bytesSaved = pruningSummary?.bytesSaved || 0;
-  const percentSaved = pruningSummary?.percentSaved || '0.0';
-
-  const meaningfulTrimmed = trimmedItems.filter(item => item.bytesSaved > 10);
 
   body.innerHTML = `
-    <!-- Top Stats Row -->
-    <div class="pa-comp-stat-grid" style="margin-bottom:16px;background:var(--bg-3);padding:14px;border-radius:var(--radius-sm);border:1px solid var(--border)">
-      <div class="pa-comp-stat">
-        <span class="pa-comp-stat-label">Request #${prevIndex + 1} Total Payload</span>
-        <span class="pa-comp-stat-value">${fmtBytes(call1.requestSize)}</span>
-        <span class="pa-comp-stat-sub">${call1.messageCount} messages</span>
-      </div>
-      <div class="pa-comp-arrow">→</div>
-      <div class="pa-comp-stat">
-        <span class="pa-comp-stat-label">Request #${prevIndex + 1} Content in Request #${callIndex + 1}</span>
-        <span class="pa-comp-stat-value" style="color:${bytesSaved > 0 ? 'var(--green)' : 'var(--text)'}">${fmtBytes(pruningSummary.req1ContentAfterPruning)}</span>
-        <span class="pa-comp-stat-sub">${bytesSaved > 0 ? 'Trimmed by ' + percentSaved + '%' : 'Unmodified'}</span>
-      </div>
-      <div class="pa-comp-stat pa-comp-delta">
-        <span class="pa-comp-stat-label">Bytes Saved by Pruning</span>
-        <span class="pa-comp-stat-value" style="color:var(--green)">
-          ${bytesSaved > 0 ? `✂️ -${fmtBytes(bytesSaved)}` : '±0 B'}
-        </span>
-        <span class="pa-comp-stat-sub">~${estimateTokens(bytesSaved).toLocaleString()} tokens saved</span>
-      </div>
+    <div style="font-size:11px;color:var(--text-3);margin-bottom:12px">
+      Showing <strong>${filteredEvents.length}</strong> context reduction events in chronological order. Click any event card to view the exact side-by-side prompt diff:
     </div>
 
-    <!-- Side-by-Side Comparison Section -->
-    <div style="margin-bottom:20px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-        <span style="font-weight:bold;font-size:12px;color:var(--text)">
-          ✂️ What Was Trimmed / Reduced from Request #${prevIndex + 1}'s Content in Request #${callIndex + 1} (${meaningfulTrimmed.length} items):
-        </span>
-        ${bytesSaved > 0 ? `
-          <span style="font-size:11px;color:var(--green);font-weight:bold">
-            Saved ${fmtBytes(bytesSaved)} (${percentSaved}% reduction on previous prompt payload)
-          </span>
-        ` : ''}
-      </div>
-
-      ${meaningfulTrimmed.length === 0 ? `
-        <div style="background:var(--bg-3);padding:14px;border-radius:var(--radius-sm);border:1px solid var(--border);color:var(--text-3);font-size:11.5px">
-          ✓ No items from Request #${prevIndex + 1}'s content were modified or trimmed in Request #${callIndex + 1}. Previous messages were kept intact.
-        </div>
-      ` : `
-        <div style="display:flex;flex-direction:column;gap:14px">
-          ${meaningfulTrimmed.map(item => renderSideBySideComparisonCard(item, prevIndex, callIndex)).join('')}
-        </div>
-      `}
-    </div>
-
-    <!-- Secondary Section: New Turn Additions in Request N -->
-    <div style="background:var(--bg-3);padding:12px 14px;border-radius:var(--radius-sm);border:1px solid var(--border)">
-      <div style="font-weight:600;font-size:11px;color:var(--text);margin-bottom:8px;display:flex;justify-content:space-between">
-        <span>➕ New Turn Additions in Request #${callIndex + 1} (${addedItems.length} new messages)</span>
-        <span class="mono" style="color:#38bdf8;font-size:10.5px">+${fmtBytes(addedItems.reduce((s, a) => s + a.size, 0))} new content</span>
-      </div>
-      ${addedItems.length === 0 ? `
-        <span style="font-size:11px;color:var(--text-3)">No new messages added in this turn.</span>
-      ` : `
-        <div style="display:flex;flex-direction:column;gap:6px">
-          ${addedItems.map(item => `
-            <div style="background:var(--bg-2);padding:8px 10px;border-radius:var(--radius-sm);border:1px solid var(--border)">
-              <div style="display:flex;justify-content:space-between;align-items:center;font-size:10.5px;margin-bottom:4px">
-                <span style="font-weight:bold;color:#38bdf8">+ msg[${item.index}] <span style="text-transform:uppercase;color:var(--accent-2)">(${item.role})</span></span>
-                <span class="mono" style="color:var(--text-3)">${fmtBytes(item.size)}</span>
-              </div>
-              <code class="pa-diff-code" style="max-height:50px;font-size:10px">${escHtml(item.preview)}</code>
-            </div>
-          `).join('')}
-        </div>
-      `}
+    <div style="display:flex;flex-direction:column;gap:12px">
+      ${filteredEvents.map(ev => renderReductionEventCard(ev)).join('')}
     </div>
   `;
 
   bindSynchronizedScroll(body);
+
+  document.querySelectorAll('.pa-cat-filter').forEach(btn => {
+    btn.addEventListener('click', () => {
+      activeCategoryFilter = btn.dataset.cat;
+      document.querySelectorAll('.pa-cat-filter').forEach(b => b.classList.toggle('active', b === btn));
+      renderReductionSequenceFeed(body, events);
+    });
+  });
+}
+
+function renderReductionEventCard(ev) {
+  const diff = ev.diffChunks || {};
+  const prefix = diff.prefix || '';
+  const suffix = diff.suffix || '';
+  const removedText = diff.removedText || '(Content removed)';
+  const insertedText = diff.insertedText || '';
+
+  let icon = '✂️';
+  let catColor = 'var(--green)';
+  if (ev.category === 'File Read Truncated') {
+    icon = '📁';
+    catColor = 'var(--green)';
+  } else if (ev.category === 'Terminal Output Truncated') {
+    icon = '💻';
+    catColor = '#38bdf8';
+  } else if (ev.category === 'Stale Environment Snapshot Removed') {
+    icon = '🌲';
+    catColor = '#f59e0b';
+  }
+
+  return `
+    <div class="pa-sbs-card panel" data-call="${ev.callIndex}" style="border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-2)">
+      <!-- Card Header -->
+      <div style="background:var(--bg-3);padding:10px 14px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-weight:bold;font-size:11.5px;color:var(--text)">Call #${ev.callIndex + 1}</span>
+          <span style="font-size:10px;color:var(--text-3)">msg[${ev.msgIndex}] (${ev.role})</span>
+          <span style="background:rgba(255,255,255,0.06);padding:2px 8px;border-radius:12px;font-size:10.5px;font-weight:bold;color:${catColor}">
+            ${icon} ${escHtml(ev.category)}: <span style="color:var(--text)">${escHtml(ev.targetName)}</span>
+          </span>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px">
+          <span class="mono" style="color:var(--green);font-weight:bold;font-size:12px;background:rgba(34,197,94,0.12);padding:3px 10px;border-radius:var(--radius-sm);border:1px solid rgba(34,197,94,0.3)">
+            ✂️ Saved ${fmtBytes(ev.bytesSaved)} (${fmtBytes(ev.beforeSize)} → ${fmtBytes(ev.afterSize)})
+          </span>
+        </div>
+      </div>
+
+      <!-- Exact Removed Content Highlight Banner -->
+      <div style="background:rgba(239,68,68,0.08);border-bottom:1px solid rgba(239,68,68,0.25);padding:8px 14px;font-size:11px">
+        <span style="color:var(--red);font-weight:bold">✂️ EXACT CONTENT REMOVED FROM CALL #${ev.prevCallIndex + 1} TO CALL #${ev.callIndex + 1}:</span>
+        <div class="mono" style="margin-top:4px;background:rgba(239,68,68,0.15);color:var(--red);padding:6px 10px;border-radius:var(--radius-sm);border-left:3px solid var(--red);max-height:90px;overflow-y:auto;white-space:pre-wrap;word-break:break-all">
+          ${escHtml(removedText)}
+        </div>
+      </div>
+
+      <!-- 2-Column Side-by-Side Synchronized Scroll Comparison -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border)">
+        <!-- Left Column: Request N-1 -->
+        <div style="background:var(--bg-2);padding:10px 12px">
+          <div style="font-weight:bold;font-size:10.5px;color:var(--red);margin-bottom:6px;display:flex;justify-content:space-between">
+            <span>🔴 BEFORE in Call #${ev.prevCallIndex + 1} (Original)</span>
+            <span class="mono">${fmtBytes(ev.beforeSize)}</span>
+          </div>
+          <div class="mono pa-sbs-left" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border);max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all">
+            ${escHtml(prefix)}
+            <span style="background:rgba(239,68,68,0.25);color:var(--red);font-weight:bold;padding:2px 4px;border-radius:2px">${escHtml(removedText)}</span>
+            ${escHtml(suffix)}
+          </div>
+        </div>
+
+        <!-- Right Column: Request N -->
+        <div style="background:var(--bg-2);padding:10px 12px">
+          <div style="font-weight:bold;font-size:10.5px;color:var(--green);margin-bottom:6px;display:flex;justify-content:space-between">
+            <span>🟢 AFTER in Call #${ev.callIndex + 1} (Sent Payload)</span>
+            <span class="mono">${fmtBytes(ev.afterSize)}</span>
+          </div>
+          <div class="mono pa-sbs-right" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border);max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all">
+            ${escHtml(prefix)}
+            ${insertedText ? `<span style="background:rgba(34,197,94,0.25);color:var(--green);font-weight:bold;padding:2px 4px;border-radius:2px">${escHtml(insertedText)}</span>` : ''}
+            ${escHtml(suffix)}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function bindSynchronizedScroll(container) {
@@ -400,69 +435,6 @@ function bindSynchronizedScroll(container) {
       isSyncingRight = false;
     });
   });
-}
-
-function renderSideBySideComparisonCard(item, prevIndex, callIndex) {
-  const diff = item.diffChunks || {};
-  const prefix = diff.prefix || '';
-  const suffix = diff.suffix || '';
-  const removedText = diff.removedText || '(Whole message removed)';
-  const insertedText = diff.insertedText || '';
-
-  return `
-    <div class="pa-sbs-card panel" style="border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-2)">
-      <!-- Card Header -->
-      <div style="background:var(--bg-3);padding:10px 14px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)">
-        <div>
-          <strong style="color:var(--text);font-size:12px">msg[${item.index}]</strong>
-          <span style="text-transform:uppercase;font-weight:700;color:var(--accent-2);margin-left:6px;font-size:10.5px">(${item.role})</span>
-          <span style="color:var(--text-3);margin-left:10px;font-size:11px">Request #${prevIndex + 1} → Request #${callIndex + 1}</span>
-        </div>
-        <div style="display:flex;align-items:center;gap:12px">
-          <span class="mono" style="color:var(--green);font-weight:bold;font-size:12px;background:rgba(34,197,94,0.12);padding:3px 10px;border-radius:var(--radius-sm);border:1px solid rgba(34,197,94,0.3)">
-            ✂️ Saved ${fmtBytes(item.bytesSaved)} (${fmtBytes(item.before.size)} → ${fmtBytes(item.after.size)})
-          </span>
-        </div>
-      </div>
-
-      <!-- Isolated Removed Chunk Highlight Banner -->
-      <div style="background:rgba(239,68,68,0.08);border-bottom:1px solid rgba(239,68,68,0.25);padding:8px 14px;font-size:11px">
-        <span style="color:var(--red);font-weight:bold">✂️ EXACT CONTENT REMOVED FROM REQUEST #${prevIndex + 1}:</span>
-        <div class="mono" style="margin-top:4px;background:rgba(239,68,68,0.15);color:var(--red);padding:6px 10px;border-radius:var(--radius-sm);border-left:3px solid var(--red);max-height:90px;overflow-y:auto;white-space:pre-wrap;word-break:break-all">
-          ${escHtml(removedText)}
-        </div>
-      </div>
-
-      <!-- 2-Column Side-by-Side Synchronized Scroll Comparison -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border)">
-        <!-- Left Column: Request N-1 -->
-        <div style="background:var(--bg-2);padding:10px 12px">
-          <div style="font-weight:bold;font-size:10.5px;color:var(--red);margin-bottom:6px;display:flex;justify-content:space-between">
-            <span>🔴 BEFORE in Request #${prevIndex + 1} (Original)</span>
-            <span class="mono">${fmtBytes(item.before.size)}</span>
-          </div>
-          <div class="mono pa-sbs-left" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border);max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all">
-            ${escHtml(prefix)}
-            <span style="background:rgba(239,68,68,0.25);color:var(--red);font-weight:bold;padding:2px 4px;border-radius:2px">${escHtml(removedText)}</span>
-            ${escHtml(suffix)}
-          </div>
-        </div>
-
-        <!-- Right Column: Request N -->
-        <div style="background:var(--bg-2);padding:10px 12px">
-          <div style="font-weight:bold;font-size:10.5px;color:var(--green);margin-bottom:6px;display:flex;justify-content:space-between">
-            <span>🟢 AFTER in Request #${callIndex + 1} (Sent Payload)</span>
-            <span class="mono">${fmtBytes(item.after.size)}</span>
-          </div>
-          <div class="mono pa-sbs-right" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border);max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all">
-            ${escHtml(prefix)}
-            ${insertedText ? `<span style="background:rgba(34,197,94,0.25);color:var(--green);font-weight:bold;padding:2px 4px;border-radius:2px">${escHtml(insertedText)}</span>` : ''}
-            ${escHtml(suffix)}
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
 }
 
 // ── Timeline Canvas Drawing ──
@@ -537,13 +509,14 @@ function drawTimelineChart(calls) {
     points.push({ x, barY, barH, readY, writeY, call: calls[i], index: i });
 
     if (hoveredCallIndex === i) {
-      ctx.fillStyle = isDark ? 'rgba(56, 189, 248, 0.12)' : 'rgba(14, 165, 233, 0.1)';
+      ctx.fillStyle = isDark ? 'rgba(56, 189, 248, 0.15)' : 'rgba(14, 165, 233, 0.12)';
       ctx.fillRect(pad.left + i * colWidth, pad.top, colWidth, chartH);
     }
 
     if (chartSeries.requestSize) {
       const hasHistoricalPruning = calls[i].hasPruning || calls[i].trimmedFromPrevBytes > 100;
-      const isSelected = selectedCallIndex === i;
+      const isCallA = callAIndex === i;
+      const isCallB = callBIndex === i;
       const isHovered = hoveredCallIndex === i;
 
       const grad = ctx.createLinearGradient(x - barWidth / 2, barY, x - barWidth / 2, pad.top + chartH);
@@ -559,9 +532,9 @@ function drawTimelineChart(calls) {
       ctx.fillStyle = grad;
       ctx.fillRect(x - barWidth / 2, barY, barWidth, barH);
 
-      if (isSelected || isHovered) {
-        ctx.strokeStyle = isSelected ? '#ffffff' : '#38bdf8';
-        ctx.lineWidth = isSelected ? 2 : 1.5;
+      if (isCallA || isCallB || isHovered) {
+        ctx.strokeStyle = isCallA ? '#f59e0b' : (isCallB ? '#ffffff' : '#38bdf8');
+        ctx.lineWidth = (isCallA || isCallB) ? 2 : 1.5;
         ctx.strokeRect(x - barWidth / 2 - 1, barY - 1, barWidth + 2, barH + 2);
       }
     }
@@ -722,7 +695,7 @@ function handleChartHover(e, calls) {
     <div style="font-size:10.5px;color:var(--green);margin-top:3px">${prunedStr}</div>
     <div style="font-size:10px;color:var(--text-3);margin-top:2px">Net Delta: ${fmtDelta(c.sizeDelta)}</div>
     <div style="font-size:10px;color:var(--text-2);margin-top:2px">Cost: <strong>${fmtCost(c.cost)}</strong></div>
-    <div style="font-size:9.5px;color:var(--accent-2);margin-top:4px;font-weight:bold">👉 Click bar to inspect what was trimmed</div>
+    <div style="font-size:9.5px;color:var(--accent-2);margin-top:4px;font-weight:bold">👉 Click bar to jump to reduction event</div>
   `;
 }
 
@@ -740,7 +713,10 @@ function handleChartClick(e, calls) {
   let colIdx = Math.floor((mouseX - padLeft) / colWidth);
   colIdx = Math.max(0, Math.min(calls.length - 1, colIdx));
 
-  selectedCallIndex = colIdx;
-  drawTimelineChart(calls);
-  loadComparisonForCall(colIdx, calls);
+  const targetCard = document.querySelector(`.pa-sbs-card[data-call="${colIdx}"]`);
+  if (targetCard) {
+    targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    targetCard.style.outline = '2px solid var(--green)';
+    setTimeout(() => { targetCard.style.outline = 'none'; }, 2500);
+  }
 }
