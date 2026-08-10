@@ -26,8 +26,12 @@ const testingRouter = require('./routes/testing')(db);
 // Network Inspector routes
 const networkRouter = require('./routes/network')(getStore, getProxyStatus, getClientCount, getMockRules, addMockRule, deleteMockRule, getInterceptState, setInterceptState, resolveInterceptedRequest, forwardAllPending);
 
+// Prompt Analytics routes
+const promptAnalyticsRouter = require('./routes/prompt-analytics')(db, config);
+
 app.use('/api', testingRouter);
 app.use('/api', networkRouter);
+app.use('/api', promptAnalyticsRouter);
 app.use('/api/tasks', tasksRouter);
 app.use('/api/analytics', analyticsRouter);
 app.use('/api/baselines', baselinesRouter);

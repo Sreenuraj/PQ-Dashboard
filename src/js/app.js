@@ -14,6 +14,7 @@ import { renderBaselineEnrich } from './views/baseline-enrich.js';
 import { renderTest } from './views/test.js';
 import { renderDeepCompare } from './views/deep-compare.js';
 import { renderNetwork } from './views/network.js';
+import { renderPromptAnalytics } from './views/prompt-analytics.js';
 import { api }            from './api.js';
 import { getDateRange, initDatePicker } from './components/date-picker.js';
 import { applyChartTheme } from './components/charts.js';
@@ -65,6 +66,7 @@ const routes = {
   test:        (p) => renderTest(container, p),
   deepcompare: (p) => renderDeepCompare(container, p),
   network:     (p) => renderNetwork(container),
+  'prompt-analytics': (p) => renderPromptAnalytics(container, p),
 };
 
 function currentView() {

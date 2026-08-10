@@ -93,6 +93,10 @@ export const api = {
   networkInterceptForward:(id, body) => post(`/network/intercept/${id}/forward`, body),
   networkInterceptDrop:   (id) => post(`/network/intercept/${id}/drop`),
   networkInterceptForwardAll: () => post('/network/intercept/forward-all'),
+  // Prompt Analytics
+  promptAnalytics:     (taskId) => get(`/prompt-analytics/${taskId}`),
+  promptMessages:      (taskId, from, to) => get(`/prompt-analytics/${taskId}/messages`, { from, to }),
+  promptCompare:       (taskId, call1, call2) => get(`/prompt-analytics/${taskId}/compare`, { call1, call2 }),
 };
 
 // Phase 4: cached metric defs (fetched once per page-load; consumed by MetricTooltip)
