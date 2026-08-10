@@ -41,20 +41,7 @@ function estimateTokens(bytes) {
   return Math.round(bytes / 4);
 }
 
-function getModelPricing(modelId) {
-  const mid = String(modelId || '').toLowerCase();
-  if (mid.includes('haiku')) {
-    return { name: 'Claude 3.5 Haiku', uncached: 0.80, cacheRead: 0.08, cacheWrite: 1.00, discount: '90%' };
-  } else if (mid.includes('gpt-4o-mini')) {
-    return { name: 'OpenAI GPT-4o-mini', uncached: 0.15, cacheRead: 0.075, cacheWrite: 0.15, discount: '50%' };
-  } else if (mid.includes('gpt-4o')) {
-    return { name: 'OpenAI GPT-4o', uncached: 2.50, cacheRead: 1.25, cacheWrite: 2.50, discount: '50%' };
-  } else if (mid.includes('deepseek')) {
-    return { name: 'DeepSeek V3/R1', uncached: 0.14, cacheRead: 0.014, cacheWrite: 0.14, discount: '90%' };
-  }
-  // Default Anthropic Claude 3.5 / 3.7 Sonnet rates
-  return { name: 'Claude 3.5/3.7 Sonnet', uncached: 3.00, cacheRead: 0.30, cacheWrite: 3.75, discount: '90%' };
-}
+
 
 // ── State ──
 let currentTaskId = null;
@@ -341,10 +328,6 @@ function renderCacheObservabilityPanel(body, calls) {
       discount: disc,
       source: 'IDE Cache (openrouter_models.json)',
     };
-  } else {
-    const sampleModel = calls.find(c => c.modelId)?.modelId || 'claude-3-7-sonnet';
-    pricing = getModelPricing(sampleModel);
-    pricing.source = 'Default Rates';
   }
 
   const modelBadge = document.getElementById('pa-cache-model-badge');
