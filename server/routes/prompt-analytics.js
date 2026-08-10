@@ -15,6 +15,51 @@ function resolvePath(p) {
 }
 
 /**
+ * Loads cached openrouter_models.json dynamically from IDE globalStorage cache paths.
+ */
+function loadOpenRouterModelsCache() {
+  const possiblePaths = [
+    path.join(os.homedir(), '.postqode', 'cache', 'openrouter_models.json'),
+    path.join(os.homedir(), 'Library', 'Application Support', 'Code - Insiders', 'User', 'globalStorage', 'postqode.postqode', 'cache', 'openrouter_models.json'),
+    path.join(os.homedir(), 'Library', 'Application Support', 'Code', 'User', 'globalStorage', 'postqode.postqode', 'cache', 'openrouter_models.json'),
+    path.join(os.homedir(), '.config', 'Code', 'User', 'globalStorage', 'postqode.postqode', 'cache', 'openrouter_models.json'),
+  ];
+
+  for (const p of possiblePaths) {
+    if (fs.existsSync(p)) {
+      try {
+        return JSON.parse(fs.readFileSync(p, 'utf8'));
+      } catch (e) {}
+    }
+  }
+  return null;
+}
+
+function getModelCachePricing(modelId, openrouterCache) {
+  if (!modelId || !openrouterCache) return null;
+
+  if (openrouterCache[modelId]) {
+    return { modelKey: modelId, ...openrouterCache[modelId] };
+  }
+
+  const cleanId = String(modelId).toLowerCase();
+  for (const key of Object.keys(openrouterCache)) {
+    const kClean = key.toLowerCase();
+    if (kClean.includes(cleanId) || cleanId.includes(kClean)) {
+      return { modelKey: key, ...openrouterCache[key] };
+    }
+  }
+
+  // Soft fuzzy fallback (e.g. "sonnet" matching "anthropic/claude-sonnet-4.5")
+  if (cleanId.includes('sonnet')) {
+    const sonnetKey = Object.keys(openrouterCache).find(k => k.includes('sonnet') && !k.includes('free'));
+    if (sonnetKey) return { modelKey: sonnetKey, ...openrouterCache[sonnetKey] };
+  }
+
+  return null;
+}
+
+/**
  * Reconstructs effective prompt messages at timestamp `ts` up to `maxMsgIdx`
  * by applying Layer 2 context overlays from context_history.json to raw api_conversation_history.json.
  */
@@ -22,7 +67,6 @@ function getEffectiveMessagesAtTs(rawHistory, contextUpdates, ts, maxMsgIdx) {
   if (maxMsgIdx < 0 || !rawHistory || rawHistory.length === 0) return [];
   
   const limit = Math.min(maxMsgIdx + 1, rawHistory.length);
-  // Deep clone slice of history
   const msgs = JSON.parse(JSON.stringify(rawHistory.slice(0, limit)));
 
   if (!Array.isArray(contextUpdates) || contextUpdates.length === 0) {
@@ -49,11 +93,9 @@ function getEffectiveMessagesAtTs(rawHistory, contextUpdates, ts, maxMsgIdx) {
       const updatesList = blockItem[1];
       if (!Array.isArray(updatesList)) continue;
 
-      // Filter updates up to timestamp ts
       const validUpdates = updatesList.filter(u => Array.isArray(u) && u[0] <= ts);
       if (validUpdates.length === 0) continue;
 
-      // Pick latest update <= ts
       validUpdates.sort((a, b) => b[0] - a[0]);
       const latestUp = validUpdates[0];
       const upType = latestUp[1];
@@ -182,8 +224,11 @@ module.exports = (db, config) => {
       } catch (e) {}
     }
 
+    const openrouterCache = loadOpenRouterModelsCache();
+
     const apiCalls = [];
     let prevRequestSize = 0;
+    let detectedModelId = null;
 
     for (let i = 0; i < uiMessages.length; i++) {
       const msg = uiMessages[i];
@@ -206,6 +251,8 @@ module.exports = (db, config) => {
       }
 
       const sizeDelta = apiCalls.length === 0 ? 0 : (requestSize - prevRequestSize);
+      const mId = msg.modelInfo?.modelId || data.model || null;
+      if (mId && !detectedModelId) detectedModelId = mId;
 
       apiCalls.push({
         index: apiCalls.length,
@@ -222,12 +269,14 @@ module.exports = (db, config) => {
         trimmedFromPrevBytes: 0,
         hasPruning: false,
         requestText: data.request || null,
-        modelId: msg.modelInfo?.modelId || null,
+        modelId: mId,
         providerId: msg.modelInfo?.providerId || null,
       });
 
       if (requestSize > 0) prevRequestSize = requestSize;
     }
+
+    const matchedPricing = getModelCachePricing(detectedModelId, openrouterCache);
 
     // Chronological Reduction Timeline & Category Tracking across adjacent turns
     const reductionEvents = [];
@@ -304,7 +353,6 @@ module.exports = (db, config) => {
 
     const taskMeta = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
 
-    // Format Executive Category Summaries
     const fileCategorySummary = Object.keys(filePruningMap).map(f => ({
       path: f,
       count: filePruningMap[f].count,
@@ -340,6 +388,7 @@ module.exports = (db, config) => {
         contextHistoryPath: fs.existsSync(ctxHistPath) ? ctxHistPath : null,
       },
       apiCalls,
+      modelPricing: matchedPricing,
       reductionCategories: {
         truncatedFiles: fileCategorySummary,
         truncatedCommands: cmdCategorySummary,
@@ -432,7 +481,6 @@ module.exports = (db, config) => {
     const prunedFromCall1 = commonSizeCall1 - commonSizeCall2;
 
     const trimmedItems = [];
-    const addedItems = [];
 
     for (let i = 0; i < commonMsgCount; i++) {
       const sum1 = summarizeMessage(messages1[i], i);

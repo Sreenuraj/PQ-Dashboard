@@ -41,6 +41,21 @@ function estimateTokens(bytes) {
   return Math.round(bytes / 4);
 }
 
+function getModelPricing(modelId) {
+  const mid = String(modelId || '').toLowerCase();
+  if (mid.includes('haiku')) {
+    return { name: 'Claude 3.5 Haiku', uncached: 0.80, cacheRead: 0.08, cacheWrite: 1.00, discount: '90%' };
+  } else if (mid.includes('gpt-4o-mini')) {
+    return { name: 'OpenAI GPT-4o-mini', uncached: 0.15, cacheRead: 0.075, cacheWrite: 0.15, discount: '50%' };
+  } else if (mid.includes('gpt-4o')) {
+    return { name: 'OpenAI GPT-4o', uncached: 2.50, cacheRead: 1.25, cacheWrite: 2.50, discount: '50%' };
+  } else if (mid.includes('deepseek')) {
+    return { name: 'DeepSeek V3/R1', uncached: 0.14, cacheRead: 0.014, cacheWrite: 0.14, discount: '90%' };
+  }
+  // Default Anthropic Claude 3.5 / 3.7 Sonnet rates
+  return { name: 'Claude 3.5/3.7 Sonnet', uncached: 3.00, cacheRead: 0.30, cacheWrite: 3.75, discount: '90%' };
+}
+
 // ── State ──
 let currentTaskId = null;
 let analyticsData = null;
@@ -236,9 +251,9 @@ function renderAnalytics(contentEl) {
     <div class="panel pa-chart-panel">
       <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center">
         <div>
-          <span>📊 Request Size Timeline</span>
+          <span>📊 Request Size & Cache Timeline</span>
           <span style="font-size:11px;color:var(--text-3);font-weight:normal;margin-left:6px">
-            (Green bars = Context Pruning on previous content | Click any bar to jump to reduction event)
+            (Toggle legends below to switch view modes | Click bars to inspect)
           </span>
         </div>
         <div class="pa-chart-legend">
@@ -262,7 +277,7 @@ function renderAnalytics(contentEl) {
     </div>
 
     <!-- Chronological Reduction Sequence Feed & Comparison Section -->
-    <div id="pa-comparison-section" class="panel pa-comparison-panel-full">
+    <div id="pa-comparison-section" class="panel pa-comparison-panel-full" style="display:${chartSeries.requestSize ? 'block' : 'none'}">
       <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
         <span>📜 Chronological Context Reduction Sequence (${events.length} total events)</span>
         <div style="display:flex;align-items:center;gap:10px">
@@ -279,12 +294,250 @@ function renderAnalytics(contentEl) {
         <div class="loading-state"><div class="spinner"></div><p>Loading chronological reduction sequence...</p></div>
       </div>
     </div>
+
+    <!-- Dedicated Cache Observability & Savings Panel -->
+    <div id="pa-cache-section" class="panel pa-comparison-panel-full" style="display:${!chartSeries.requestSize && (chartSeries.cacheReads || chartSeries.cacheWrites) ? 'block' : 'none'}">
+      <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center">
+        <span>⚡ Prompt Cache Observability & Financial Savings</span>
+        <div id="pa-cache-model-badge"></div>
+      </div>
+      <div id="pa-cache-body" class="panel-body" style="padding:16px">
+        <!-- Rendered dynamically -->
+      </div>
+    </div>
   `;
 
   bindAnalyticsEvents(calls);
   drawTimelineChart(calls);
 
   renderReductionSequenceFeed(document.getElementById('pa-comparison-body'), events);
+  renderCacheObservabilityPanel(document.getElementById('pa-cache-body'), calls);
+}
+
+function renderCacheObservabilityPanel(body, calls) {
+  if (!body) return;
+
+  const serverPricing = analyticsData?.modelPricing;
+  let pricing = {
+    name: 'Claude 3.5/3.7 Sonnet',
+    uncached: 3.00,
+    cacheRead: 0.30,
+    cacheWrite: 3.75,
+    discount: '90%',
+    source: 'Default Rates',
+  };
+
+  if (serverPricing) {
+    const u = serverPricing.inputPrice != null ? serverPricing.inputPrice : 3.00;
+    const cr = serverPricing.cacheReadsPrice != null ? serverPricing.cacheReadsPrice : u * 0.1;
+    const cw = serverPricing.cacheWritesPrice != null ? serverPricing.cacheWritesPrice : u * 1.25;
+    const disc = u > 0 ? (((u - cr) / u) * 100).toFixed(0) + '%' : '90%';
+
+    pricing = {
+      name: serverPricing.modelKey || 'OpenRouter Model',
+      uncached: u,
+      cacheRead: cr,
+      cacheWrite: cw,
+      discount: disc,
+      source: 'IDE Cache (openrouter_models.json)',
+    };
+  } else {
+    const sampleModel = calls.find(c => c.modelId)?.modelId || 'claude-3-7-sonnet';
+    pricing = getModelPricing(sampleModel);
+    pricing.source = 'Default Rates';
+  }
+
+  const modelBadge = document.getElementById('pa-cache-model-badge');
+  if (modelBadge) {
+    modelBadge.innerHTML = `
+      <span style="font-size:10.5px;background:rgba(56,189,248,0.12);color:#38bdf8;padding:3px 10px;border-radius:12px;border:1px solid rgba(56,189,248,0.3);font-weight:600" title="Model pricing loaded dynamically from ${escHtml(pricing.source)}">
+        🏷️ Pricing Rates: <strong>${escHtml(pricing.name)}</strong> (Uncached: $${pricing.uncached.toFixed(2)}/1M | Cache Read: $${pricing.cacheRead.toFixed(3)}/1M [${pricing.discount} Off] | Cache Write: $${pricing.cacheWrite.toFixed(3)}/1M)
+      </span>
+    `;
+  }
+
+  const totalReads = calls.reduce((s, c) => s + c.cacheReads, 0);
+  const totalWrites = calls.reduce((s, c) => s + c.cacheWrites, 0);
+  const totalTokensIn = calls.reduce((s, c) => s + c.tokensIn, 0);
+  const totalTokensOut = calls.reduce((s, c) => s + c.tokensOut, 0);
+
+  // Model-aware cost calculation
+  const costWithoutCache = ((totalReads + totalTokensIn) / 1000000.0) * pricing.uncached + (totalTokensOut / 1000000.0) * 15.00;
+  const costWithCache = (totalTokensIn / 1000000.0) * pricing.uncached + (totalReads / 1000000.0) * pricing.cacheRead + (totalWrites / 1000000.0) * pricing.cacheWrite + (totalTokensOut / 1000000.0) * 15.00;
+  const costSaved = Math.max(0, costWithoutCache - costWithCache);
+  const percentSaved = costWithoutCache > 0 ? ((costSaved / costWithoutCache) * 100).toFixed(1) : '0.0';
+
+  const cacheHitsCount = calls.filter(c => c.cacheReads > 0).length;
+  const hitRate = calls.length > 0 ? ((cacheHitsCount / calls.length) * 100).toFixed(1) : '0.0';
+
+  body.innerHTML = `
+    <!-- Top Executive Cache Metrics Grid -->
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-bottom:16px">
+      <div style="background:var(--bg-3);padding:14px;border-radius:var(--radius-sm);border:1px solid var(--border);border-left:4px solid var(--green)">
+        <div style="font-size:10.5px;color:var(--text-3);font-weight:bold;text-transform:uppercase">💰 Financial Cost Saved</div>
+        <div class="mono" style="font-size:20px;font-weight:bold;color:var(--green);margin:4px 0">$${costSaved.toFixed(2)}</div>
+        <div style="font-size:10.5px;color:var(--green);font-weight:bold">${percentSaved}% total token cost discount</div>
+      </div>
+
+      <div style="background:var(--bg-3);padding:14px;border-radius:var(--radius-sm);border:1px solid var(--border);border-left:4px solid #38bdf8">
+        <div style="font-size:10.5px;color:var(--text-3);font-weight:bold;text-transform:uppercase">🎯 Cache Hit Rate</div>
+        <div class="mono" style="font-size:20px;font-weight:bold;color:#38bdf8;margin:4px 0">${hitRate}%</div>
+        <div style="font-size:10.5px;color:var(--text-3)">${cacheHitsCount} of ${calls.length} requests hit KV cache</div>
+      </div>
+
+      <div style="background:var(--bg-3);padding:14px;border-radius:var(--radius-sm);border:1px solid var(--border);border-left:4px solid var(--green)">
+        <div style="font-size:10.5px;color:var(--text-3);font-weight:bold;text-transform:uppercase">📖 Total Cache Reads</div>
+        <div class="mono" style="font-size:20px;font-weight:bold;color:var(--green);margin:4px 0">${fmtTokens(totalReads)}</div>
+        <div style="font-size:10.5px;color:var(--text-3)">Served at ${pricing.discount} price discount ($${pricing.cacheRead.toFixed(2)}/1M)</div>
+      </div>
+
+      <div style="background:var(--bg-3);padding:14px;border-radius:var(--radius-sm);border:1px solid var(--border);border-left:4px solid #f59e0b">
+        <div style="font-size:10.5px;color:var(--text-3);font-weight:bold;text-transform:uppercase">✍️ Total Cache Writes</div>
+        <div class="mono" style="font-size:20px;font-weight:bold;color:#f59e0b;margin:4px 0">${fmtTokens(totalWrites)}</div>
+        <div style="font-size:10.5px;color:var(--text-3)">KV Cache breakpoints created</div>
+      </div>
+    </div>
+
+    <!-- How Cache Read / Write Works Explainer Card -->
+    <div style="background:var(--bg-2);padding:14px;border-radius:var(--radius-sm);border:1px solid var(--border);margin-bottom:16px">
+      <div style="font-weight:bold;font-size:12px;color:var(--text);margin-bottom:8px">
+        💡 How Model Prompt Caching Works (Model: ${escHtml(pricing.name)}):
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;font-size:11px;line-height:1.5">
+        <div style="background:var(--bg-3);padding:10px 12px;border-radius:var(--radius-sm);border-left:3px solid #f59e0b">
+          <strong style="color:#f59e0b;font-size:11.5px">✍️ What is Cache Write?</strong>
+          <p style="color:var(--text-2);margin-top:4px">
+            When you send a request to <strong>${escHtml(pricing.name)}</strong>, the model provider checks for matching prompt prefixes in memory. If new system instructions, tools, or files are added, it writes the prompt prefix into memory as a <strong>KV Cache Breakpoint</strong>.
+          </p>
+          <div style="color:var(--text-3);font-size:10px;margin-top:4px">
+            • <strong>Rate:</strong> $${pricing.cacheWrite.toFixed(2)} / 1M tokens (initial creation charge).
+          </div>
+        </div>
+
+        <div style="background:var(--bg-3);padding:10px 12px;border-radius:var(--radius-sm);border-left:3px solid var(--green)">
+          <strong style="color:var(--green);font-size:11.5px">📖 What is Cache Read?</strong>
+          <p style="color:var(--text-2);margin-top:4px">
+            On subsequent turns, the model matches your prompt prefix against active KV memory. Instead of re-reading and re-computing tokens, it reads them directly from memory!
+          </p>
+          <div style="color:var(--green);font-size:10px;margin-top:4px;font-weight:bold">
+            • <strong>Rate:</strong> $${pricing.cacheRead.toFixed(2)} / 1M tokens (<strong>${pricing.discount} Discount</strong> vs $${pricing.uncached.toFixed(2)} uncached).
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Per-Call Cache Breakdown Table with Expandable Git Diff -->
+    <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden">
+      <div style="background:var(--bg-3);padding:10px 14px;font-weight:bold;font-size:11.5px;color:var(--text);border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+        <span>📊 Per-Request Cache Usage & Breakpoints Breakdown (${calls.length} total calls)</span>
+        <span style="font-size:10.5px;color:var(--text-3);font-weight:normal">👉 Click any row to expand side-by-side prompt diff (N-1 vs N)</span>
+      </div>
+      <div style="max-height:450px;overflow-y:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:11px;text-align:left">
+          <thead style="background:var(--bg-3);color:var(--text-3);position:sticky;top:0;z-index:2">
+            <tr>
+              <th style="padding:8px 12px;width:30px"></th>
+              <th style="padding:8px 12px">Call #</th>
+              <th style="padding:8px 12px">Timestamp</th>
+              <th style="padding:8px 12px">Cache Reads</th>
+              <th style="padding:8px 12px">Cache Writes</th>
+              <th style="padding:8px 12px">Uncached Input</th>
+              <th style="padding:8px 12px">Est. Cost</th>
+              <th style="padding:8px 12px">Cache Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${calls.map(c => {
+              const isHit = c.cacheReads > 0;
+              const isWrite = c.cacheWrites > 0;
+              let badge = '<span style="color:var(--text-3)">Uncached</span>';
+              if (isHit) {
+                badge = `<span style="background:rgba(34,197,94,0.15);color:var(--green);padding:2px 8px;border-radius:10px;font-weight:bold;font-size:10px">🎯 Cache Hit (${pricing.discount} Off)</span>`;
+              } else if (isWrite) {
+                badge = '<span style="background:rgba(245,158,11,0.15);color:#f59e0b;padding:2px 8px;border-radius:10px;font-weight:bold;font-size:10px">✍️ Cache Creation</span>';
+              }
+
+              return `
+                <tr class="pa-cache-row" data-call-idx="${c.index}" style="border-bottom:1px solid var(--border);background:var(--bg-2);cursor:pointer">
+                  <td style="padding:8px 12px;color:var(--text-3);font-size:10px">▶</td>
+                  <td style="padding:8px 12px;font-weight:bold">Call #${c.index + 1}</td>
+                  <td style="padding:8px 12px;color:var(--text-3)">${fmtTime(c.ts)}</td>
+                  <td class="mono" style="padding:8px 12px;color:${isHit ? 'var(--green)' : 'var(--text-3)'};font-weight:${isHit ? 'bold' : 'normal'}">${fmtTokens(c.cacheReads)}</td>
+                  <td class="mono" style="padding:8px 12px;color:${isWrite ? '#f59e0b' : 'var(--text-3)'}">${fmtTokens(c.cacheWrites)}</td>
+                  <td class="mono" style="padding:8px 12px;color:var(--text-2)">${fmtTokens(c.tokensIn)}</td>
+                  <td class="mono" style="padding:8px 12px;color:var(--text-2)">${fmtCost(c.cost)}</td>
+                  <td style="padding:8px 12px">${badge}</td>
+                </tr>
+                <tr id="pa-cache-expand-${c.index}" style="display:none;background:var(--bg-1)">
+                  <td colspan="8" style="padding:12px;border-bottom:1px solid var(--border)">
+                    <div class="pa-cache-expand-content" data-loaded="false">
+                      <div class="loading-state" style="padding:10px"><div class="spinner"></div><p>Loading prompt diff comparison for Call #${c.index + 1}...</p></div>
+                    </div>
+                  </td>
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+
+  bindCacheTableEvents(calls);
+}
+
+function bindCacheTableEvents(calls) {
+  document.querySelectorAll('.pa-cache-row').forEach(row => {
+    row.addEventListener('click', async () => {
+      const idx = parseInt(row.dataset.callIdx);
+      const expandTr = document.getElementById(`pa-cache-expand-${idx}`);
+      if (!expandTr) return;
+
+      const isExpanded = expandTr.style.display !== 'none';
+      expandTr.style.display = isExpanded ? 'none' : 'table-row';
+      row.querySelector('td').innerText = isExpanded ? '▶' : '▼';
+
+      if (!isExpanded) {
+        const contentContainer = expandTr.querySelector('.pa-cache-expand-content');
+        if (contentContainer && contentContainer.dataset.loaded === 'false') {
+          contentContainer.dataset.loaded = 'true';
+          const prevIdx = idx > 0 ? idx - 1 : 0;
+          try {
+            const comp = await api.promptCompare(currentTaskId, prevIdx, idx);
+            renderInlinePromptDiff(contentContainer, comp, prevIdx, idx);
+          } catch (e) {
+            contentContainer.innerHTML = `<div class="empty-state"><p style="color:var(--red)">Failed to load prompt comparison: ${escHtml(e.message)}</p></div>`;
+          }
+        }
+      }
+    });
+  });
+}
+
+function renderInlinePromptDiff(container, comp, prevIdx, idx) {
+  const call1 = comp.call1;
+  const call2 = comp.call2;
+  const trimmedItems = comp.trimmedItems || [];
+
+  if (trimmedItems.length === 0) {
+    container.innerHTML = `
+      <div style="background:var(--bg-3);padding:10px 14px;border-radius:var(--radius-sm);font-size:11px;color:var(--text-3)">
+        ✓ Call #${idx + 1}'s prompt prefix matched Call #${prevIdx + 1} exactly. No message content was pruned or modified.
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = `
+    <div style="font-weight:bold;font-size:11.5px;color:var(--text);margin-bottom:8px">
+      🔍 Prompt Content Comparison (Call #${prevIdx + 1} vs Call #${idx + 1}):
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      ${trimmedItems.map(item => renderSideBySideComparisonCard(item, prevIdx, idx)).join('')}
+    </div>
+  `;
+
+  bindSynchronizedScroll(container);
 }
 
 function renderReductionSequenceFeed(body, events) {
@@ -395,6 +648,69 @@ function renderReductionEventCard(ev) {
           <div style="font-weight:bold;font-size:10.5px;color:var(--green);margin-bottom:6px;display:flex;justify-content:space-between">
             <span>🟢 AFTER in Call #${ev.callIndex + 1} (Sent Payload)</span>
             <span class="mono">${fmtBytes(ev.afterSize)}</span>
+          </div>
+          <div class="mono pa-sbs-right" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border);max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all">
+            ${escHtml(prefix)}
+            ${insertedText ? `<span style="background:rgba(34,197,94,0.25);color:var(--green);font-weight:bold;padding:2px 4px;border-radius:2px">${escHtml(insertedText)}</span>` : ''}
+            ${escHtml(suffix)}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderSideBySideComparisonCard(item, callAIndex, callBIndex) {
+  const diff = item.diffChunks || {};
+  const prefix = diff.prefix || '';
+  const suffix = diff.suffix || '';
+  const removedText = diff.removedText || '(Whole message removed)';
+  const insertedText = diff.insertedText || '';
+
+  return `
+    <div class="pa-sbs-card panel" style="border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-2)">
+      <!-- Card Header -->
+      <div style="background:var(--bg-3);padding:10px 14px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)">
+        <div>
+          <strong style="color:var(--text);font-size:12px">msg[${item.index}]</strong>
+          <span style="text-transform:uppercase;font-weight:700;color:var(--accent-2);margin-left:6px;font-size:10.5px">(${item.role})</span>
+          <span style="color:var(--text-3);margin-left:10px;font-size:11px">Request #${callAIndex + 1} → Request #${callBIndex + 1}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px">
+          <span class="mono" style="color:var(--green);font-weight:bold;font-size:12px;background:rgba(34,197,94,0.12);padding:3px 10px;border-radius:var(--radius-sm);border:1px solid rgba(34,197,94,0.3)">
+            ✂️ Saved ${fmtBytes(item.bytesSaved)} (${fmtBytes(item.before.size)} → ${fmtBytes(item.after.size)})
+          </span>
+        </div>
+      </div>
+
+      <!-- Isolated Removed Chunk Highlight Banner -->
+      <div style="background:rgba(239,68,68,0.08);border-bottom:1px solid rgba(239,68,68,0.25);padding:8px 14px;font-size:11px">
+        <span style="color:var(--red);font-weight:bold">✂️ EXACT CONTENT REMOVED FROM REQUEST #${callAIndex + 1}:</span>
+        <div class="mono" style="margin-top:4px;background:rgba(239,68,68,0.15);color:var(--red);padding:6px 10px;border-radius:var(--radius-sm);border-left:3px solid var(--red);max-height:90px;overflow-y:auto;white-space:pre-wrap;word-break:break-all">
+          ${escHtml(removedText)}
+        </div>
+      </div>
+
+      <!-- 2-Column Side-by-Side Synchronized Scroll Comparison -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border)">
+        <!-- Left Column: Request A -->
+        <div style="background:var(--bg-2);padding:10px 12px">
+          <div style="font-weight:bold;font-size:10.5px;color:var(--red);margin-bottom:6px;display:flex;justify-content:space-between">
+            <span>🔴 BEFORE in Request #${callAIndex + 1} (Original)</span>
+            <span class="mono">${fmtBytes(item.before.size)}</span>
+          </div>
+          <div class="mono pa-sbs-left" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border);max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all">
+            ${escHtml(prefix)}
+            <span style="background:rgba(239,68,68,0.25);color:var(--red);font-weight:bold;padding:2px 4px;border-radius:2px">${escHtml(removedText)}</span>
+            ${escHtml(suffix)}
+          </div>
+        </div>
+
+        <!-- Right Column: Request B -->
+        <div style="background:var(--bg-2);padding:10px 12px">
+          <div style="font-weight:bold;font-size:10.5px;color:var(--green);margin-bottom:6px;display:flex;justify-content:space-between">
+            <span>🟢 AFTER in Request #${callBIndex + 1} (Sent Payload)</span>
+            <span class="mono">${fmtBytes(item.after.size)}</span>
           </div>
           <div class="mono pa-sbs-right" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border);max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all">
             ${escHtml(prefix)}
@@ -621,6 +937,16 @@ function bindAnalyticsEvents(calls) {
         chartSeries[seriesKey] = !chartSeries[seriesKey];
         chip.classList.toggle('active', chartSeries[seriesKey]);
         drawTimelineChart(calls);
+
+        const compSec = document.getElementById('pa-comparison-section');
+        const cacheSec = document.getElementById('pa-cache-section');
+        if (!chartSeries.requestSize && (chartSeries.cacheReads || chartSeries.cacheWrites)) {
+          if (compSec) compSec.style.display = 'none';
+          if (cacheSec) cacheSec.style.display = 'block';
+        } else {
+          if (compSec) compSec.style.display = 'block';
+          if (cacheSec) cacheSec.style.display = 'none';
+        }
       }
     });
   });
@@ -695,7 +1021,7 @@ function handleChartHover(e, calls) {
   if (!foundPt) return;
 
   const c = foundPt.call;
-  const prunedStr = c.trimmedFromPrevBytes > 0 ? `✂️ Context Pruned: <strong>${fmtBytes(c.trimmedFromPrevBytes)}</strong> from previous content` : 'No context pruning on previous content';
+  const prunedStr = c.trimmedFromPrevBytes > 0 ? `✂️ Context Pruned: <strong>${fmtBytes(c.trimmedFromPrevBytes)}</strong>` : 'No context pruning';
 
   tooltip.style.display = 'block';
 
@@ -713,10 +1039,9 @@ function handleChartHover(e, calls) {
       <span style="color:var(--text-3);font-weight:normal">${fmtTime(c.ts)}</span>
     </div>
     <div style="color:#38bdf8;font-weight:600">📦 Total Request Size: <strong>${fmtBytes(c.requestSize)}</strong></div>
-    <div style="font-size:10.5px;color:var(--green);margin-top:3px">${prunedStr}</div>
-    <div style="font-size:10px;color:var(--text-3);margin-top:2px">Net Delta: ${fmtDelta(c.sizeDelta)}</div>
+    <div style="color:var(--green);font-size:10.5px">📖 Cache Reads: <strong>${fmtTokens(c.cacheReads)} tokens</strong></div>
+    <div style="color:#f59e0b;font-size:10.5px">✍️ Cache Writes: <strong>${fmtTokens(c.cacheWrites)} tokens</strong></div>
     <div style="font-size:10px;color:var(--text-2);margin-top:2px">Cost: <strong>${fmtCost(c.cost)}</strong></div>
-    <div style="font-size:9.5px;color:var(--accent-2);margin-top:4px;font-weight:bold">👉 Click bar to jump to reduction event</div>
   `;
 }
 
@@ -734,10 +1059,18 @@ function handleChartClick(e, calls) {
   let colIdx = Math.floor((mouseX - padLeft) / colWidth);
   colIdx = Math.max(0, Math.min(calls.length - 1, colIdx));
 
-  const targetCard = document.querySelector(`.pa-sbs-card[data-call="${colIdx}"]`);
-  if (targetCard) {
-    targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    targetCard.style.outline = '2px solid var(--green)';
-    setTimeout(() => { targetCard.style.outline = 'none'; }, 2500);
+  if (!chartSeries.requestSize && (chartSeries.cacheReads || chartSeries.cacheWrites)) {
+    const tableRow = document.querySelector(`.pa-cache-row[data-call-idx="${colIdx}"]`);
+    if (tableRow) {
+      tableRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      tableRow.click();
+    }
+  } else {
+    const targetCard = document.querySelector(`.pa-sbs-card[data-call="${colIdx}"]`);
+    if (targetCard) {
+      targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      targetCard.style.outline = '2px solid var(--green)';
+      setTimeout(() => { targetCard.style.outline = 'none'; }, 2500);
+    }
   }
 }
