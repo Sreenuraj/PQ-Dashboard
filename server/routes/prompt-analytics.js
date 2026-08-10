@@ -466,6 +466,11 @@ module.exports = (db, config, getStore) => {
     const systemPromptTokens = systemPromptCapture?.approx_tokens || 0;
     const systemPromptAvailable = !!systemPromptCapture;
 
+    let dbTaskModels = [];
+    try {
+      dbTaskModels = db.prepare('SELECT model_id, ts FROM task_models WHERE task_id = ? ORDER BY ts ASC').all(taskId);
+    } catch (e) {}
+
     const apiCalls = [];
     let prevRequestSize = 0;
 
@@ -491,7 +496,11 @@ module.exports = (db, config, getStore) => {
       }
 
       const sizeDelta = apiCalls.length === 0 ? 0 : (requestSize - prevRequestSize);
-      const mId = msg.modelInfo?.modelId || data.model || null;
+      let mId = msg.modelInfo?.modelId || data.model || null;
+      if (!mId && dbTaskModels.length > 0) {
+        const match = dbTaskModels.filter(m => (m.ts || 0) <= (msg.ts || 0)).pop() || dbTaskModels[0];
+        if (match) mId = match.model_id;
+      }
 
       // ── Per-call context window utilization ──
       // Looks up the model's context window from the registry and computes how
