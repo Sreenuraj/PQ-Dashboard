@@ -10,8 +10,27 @@ export async function get(path, params = {}) {
   const qs = new URLSearchParams(cleaned).toString();
   const url = `${API}${path}${qs ? '?' + qs : ''}`;
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`API error ${res.status}`);
-  return res.json();
+  const contentType = res.headers.get('content-type') || '';
+  const bodyText = await res.text();
+  let body = null;
+
+  if (contentType.includes('application/json') && bodyText) {
+    try {
+      body = JSON.parse(bodyText);
+    } catch {
+      throw new Error(`Invalid JSON from ${url}`);
+    }
+  }
+
+  if (!res.ok) {
+    throw new Error(body?.error || `API error ${res.status}`);
+  }
+
+  if (!contentType.includes('application/json')) {
+    throw new Error(`Expected JSON from ${url}, got ${contentType || 'unknown content type'}`);
+  }
+
+  return body;
 }
 
 export async function post(path, body = {}) {
@@ -96,7 +115,8 @@ export const api = {
   // Prompt Analytics
   promptAnalytics:     (taskId) => get(`/prompt-analytics/${taskId}`),
   promptMessages:      (taskId, from, to) => get(`/prompt-analytics/${taskId}/messages`, { from, to }),
-  promptCompare:       (taskId, call1, call2) => get(`/prompt-analytics/${taskId}/compare`, { call1, call2 }),
+  promptRequest:       (taskId, call) => get(`/prompt-analytics/${taskId}/prompt`, { call }),
+  promptCompare:       (taskId, call1, call2, mode) => get(`/prompt-analytics/${taskId}/compare`, { call1, call2, mode }),
 };
 
 // Phase 4: cached metric defs (fetched once per page-load; consumed by MetricTooltip)

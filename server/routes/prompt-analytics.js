@@ -64,7 +64,7 @@ function getModelCachePricing(modelId, openrouterCache) {
  */
 function getEffectiveMessagesAtTs(rawHistory, contextUpdates, ts, maxMsgIdx) {
   if (maxMsgIdx < 0 || !rawHistory || rawHistory.length === 0) return [];
-  
+
   const limit = Math.min(maxMsgIdx + 1, rawHistory.length);
   const msgs = JSON.parse(JSON.stringify(rawHistory.slice(0, limit)));
 
@@ -114,12 +114,139 @@ function getEffectiveMessagesAtTs(rawHistory, contextUpdates, ts, maxMsgIdx) {
   return msgs;
 }
 
+/**
+ * The extension records `conversationHistoryIndex` as the last message index
+ * that was ALREADY in apiConversationHistory before this turn's message was
+ * appended. For every call after the first, that's a valid, correct index.
+ * But for the very first API call of a task there is no "before" — the
+ * recorded value comes through as -1 — even though the first user message
+ * (apiHistory[0]) IS part of what got sent. The old code treated -1 as
+ * "no messages" and returned an empty prompt, which is why Call #1 always
+ * rendered as an empty "0 B -> 0 B" diff.
+ * ponytail: only special-cases callIndex 0; if some other call ever reports
+ * -1 (shouldn't happen) it still safely falls back to "no history".
+ */
+function resolveMaxMsgIdx(callIndex, histIdx, apiHistoryLength) {
+  if (histIdx >= 0) return histIdx;
+  return callIndex === 0 && apiHistoryLength > 0 ? 0 : -1;
+}
+
 function extractTextContent(content) {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
     return content.map(b => (typeof b === 'string' ? b : (b.text || b.thinking || ''))).join('\n---\n');
   }
   return JSON.stringify(content || '');
+}
+
+/**
+ * Detects the pruning category (file / command / environment snapshot) from
+ * the raw before/after text of a message so the diff UI can explain *what*
+ * kind of content changed, not just that it changed.
+ */
+function detectReductionCategory(contentPrevStr, contentCurrStr) {
+  const fileMatch = contentPrevStr.match(/read_file for '([^']+)'/);
+  if (fileMatch) {
+    return { category: 'File Read Truncated', targetName: fileMatch[1] };
+  }
+  if (contentPrevStr.includes('execute_command for') || contentCurrStr.includes('Tool output truncated')) {
+    const cmdMatch = contentPrevStr.match(/execute_command for '([^']+)'/);
+    return { category: 'Terminal Output Truncated', targetName: cmdMatch ? cmdMatch[1] : 'Terminal Command Output' };
+  }
+  if (contentPrevStr.includes('<environment_details>') && contentCurrStr.includes('stale workspace/environment snapshot')) {
+    return { category: 'Stale Environment Snapshot Removed', targetName: '<environment_details>' };
+  }
+  return { category: 'Other Content', targetName: 'Context Text' };
+}
+
+/**
+ * Looks for evidence (in ui_messages.json, between the previous call's and
+ * this call's api_req_started entries) that the agent was sitting idle
+ * waiting on the user — an `ask` event (completion_result, followup
+ * question, tool-approval, etc.) — rather than just assuming any large time
+ * gap means "TTL expired". This turns a guess into an evidenced claim.
+ */
+function findUserWaitGap(uiMessages, fromUiIdx, toUiIdx) {
+  if (!Array.isArray(uiMessages) || fromUiIdx == null || toUiIdx == null) return null;
+  for (let idx = fromUiIdx + 1; idx < toUiIdx; idx++) {
+    const m = uiMessages[idx];
+    if (m && m.type === 'ask') {
+      return { askType: m.ask || null, ts: m.ts };
+    }
+  }
+  return null;
+}
+
+/**
+ * Explains WHY a given call had (or didn't have) a cache read/write, since
+ * the raw numbers alone don't tell the user the cause. Checks, in order:
+ * first call, model swap (cache is model-specific), an evidenced user-wait
+ * gap (an `ask` event found in ui_messages.json between the two calls),
+ * unexplained elapsed time (only ever a guess — labeled as such), and
+ * prefix invalidation (earlier content pruned/rewritten since the previous
+ * call broke the cached prefix match).
+ */
+function computeCacheExplanation(call, prevCall, uiMessages) {
+  const hasRead = call.cacheReads > 0;
+  const hasWrite = call.cacheWrites > 0;
+
+  if (!prevCall) {
+    if (hasWrite) {
+      return { code: 'first_call', text: 'First request in this task — there was no existing cache to read from yet, so the full prompt prefix was written to cache.' };
+    }
+    return { code: 'no_cache_activity', text: 'No cache reads or writes reported by the provider for this request.' };
+  }
+
+  const timeSincePrevMs = (call.ts || 0) - (prevCall.ts || 0);
+  const FIVE_MIN_MS = 5 * 60 * 1000; // ponytail: Anthropic's default breakpoint TTL; other providers may differ
+  const modelChanged = !!(call.modelId && prevCall.modelId && call.modelId !== prevCall.modelId);
+  const waitGap = findUserWaitGap(uiMessages, prevCall.uiMsgIndex, call.uiMsgIndex);
+
+  if (hasWrite && !hasRead) {
+    if (modelChanged) {
+      return { code: 'model_changed', text: `Model changed from "${prevCall.modelId}" to "${call.modelId}" — prompt cache is model-specific, so a fresh cache entry had to be created.` };
+    }
+    if (waitGap) {
+      const waitedMin = Math.round(timeSincePrevMs / 60000);
+      return { code: 'idle_wait_ttl', text: `Evidence found: the agent finished its previous turn and was waiting on you (an "${waitGap.askType || 'ask'}" event) — ${waitedMin} minute(s) passed before you responded. That idle gap exceeded the provider's ~5-minute cache breakpoint window, so the prompt prefix had to be rewritten to cache once the conversation resumed.` };
+    }
+    if (timeSincePrevMs > FIVE_MIN_MS) {
+      const elapsedMin = Math.round(timeSincePrevMs / 60000);
+      return { code: 'ttl_expired_unconfirmed', text: `${elapsedMin} minutes passed since the previous request with no "waiting on user" event found in the task log — likely the provider's ~5-minute cache breakpoint expired, but this is a guess based on elapsed time only (the API doesn't report cache-eviction reasons).` };
+    }
+    if (call.hasPruning || call.trimmedFromPrevBytes > 100) {
+      return { code: 'prefix_invalidated', text: `Earlier content in the prompt (before the cache breakpoint) was pruned or rewritten since the previous call (${call.trimmedFromPrevBytes} bytes changed), invalidating the old cached prefix — a new cache entry was written.` };
+    }
+    return { code: 'prefix_extended', text: 'New content (tools, files, instructions) was appended beyond the previously cached prefix, so it was written to cache again.' };
+  }
+
+  if (hasRead && hasWrite) {
+    return { code: 'partial_hit', text: 'The earlier part of the prompt matched the existing cache (read), and new content appended beyond it was written as a fresh cache breakpoint.' };
+  }
+
+  if (hasRead && !hasWrite) {
+    return { code: 'full_hit', text: 'The prompt prefix matched the existing cache exactly — tokens were served from cache with no new write needed.' };
+  }
+
+  return { code: 'no_cache_activity', text: "No cache reads or writes reported by the provider for this request (uncached, or this model doesn't support prompt caching)." };
+}
+
+
+function summarizePromptMessage(msg, idx) {
+
+  const content = msg?.content;
+  const size = JSON.stringify(content || '').length;
+  const fullText = extractTextContent(content);
+  const preview = fullText.substring(0, 450);
+
+  return { index: idx, role: msg?.role || 'unknown', size, preview, fullText };
+}
+
+function buildExactPromptText(messages) {
+  return messages.map((msg, idx) => {
+    const role = msg?.role || 'unknown';
+    return `===== message[${idx}] role=${role} =====\n${extractTextContent(msg?.content)}`;
+  }).join('\n\n');
 }
 
 function computeExactDiffChunks(str1, str2) {
@@ -166,8 +293,59 @@ function computeExactDiffChunks(str1, str2) {
   };
 }
 
-module.exports = (db, config) => {
+module.exports = (db, config, getStore) => {
   const router = express.Router();
+
+  /**
+   * Cross-references the Network Inspector's in-memory proxy buffer to find
+   * the actual chat/completions request nearest to a given call's timestamp,
+   * and extracts the real system prompt text from its first content block.
+   * Only works if the proxy was running & capturing traffic at the time the
+   * call was made and the record hasn't been evicted from the buffer yet
+   * (FIFO, default max 500) — this is the ONLY place the system prompt is
+   * ever available, since it's never written to any task file on disk.
+   */
+  function findSystemPromptFromProxy(callTs) {
+    if (typeof getStore !== 'function' || !callTs) return null;
+    const store = getStore();
+    if (!store) return null;
+
+    const { requests } = store.getAll({ limit: 9999 });
+    const CHAT_MATCH = /chat\/completions|\/v1\/messages/i;
+    const MAX_DRIFT_MS = 2 * 60 * 1000; // ponytail: proxy record ts vs task ts can drift a little; 2min window is generous enough to match but tight enough to avoid pairing with the wrong call
+
+    let best = null;
+    let bestDrift = Infinity;
+    for (const r of requests) {
+      if (!CHAT_MATCH.test(r.url || '') || !r.requestBody) continue;
+      const recTs = new Date(r.timestamp).getTime();
+      const drift = Math.abs(recTs - callTs);
+      if (drift < bestDrift && drift <= MAX_DRIFT_MS) {
+        bestDrift = drift;
+        best = r;
+      }
+    }
+    if (!best) return null;
+
+    try {
+      const parsed = JSON.parse(best.requestBody);
+      let systemText = null;
+
+      if (typeof parsed.system === 'string') {
+        systemText = parsed.system;
+      } else if (Array.isArray(parsed.system)) {
+        systemText = parsed.system.map(b => b.text || '').join('\n');
+      } else if (Array.isArray(parsed.messages) && parsed.messages[0]?.role === 'system') {
+        const c = parsed.messages[0].content;
+        systemText = typeof c === 'string' ? c : (Array.isArray(c) ? c.map(b => b.text || '').join('\n') : null);
+      }
+
+      if (!systemText) return null;
+      return { text: systemText, source: 'network_inspector_proxy_buffer', matchedRequestId: best.id, driftMs: bestDrift };
+    } catch (e) {
+      return null;
+    }
+  }
 
   function resolveTaskPath(taskId) {
     const task = db.prepare('SELECT source FROM tasks WHERE id = ?').get(taskId);
@@ -188,6 +366,56 @@ module.exports = (db, config) => {
     }
 
     return null;
+  }
+
+  function readTaskPromptFiles(taskPath) {
+    const uiPath = path.join(taskPath, 'ui_messages.json');
+    const apiHistPath = path.join(taskPath, 'api_conversation_history.json');
+    const ctxHistPath = path.join(taskPath, 'context_history.json');
+
+    const files = {
+      uiPath,
+      apiHistPath,
+      ctxHistPath,
+      uiMessages: [],
+      apiHistory: [],
+      contextUpdates: [],
+    };
+
+    if (fs.existsSync(uiPath)) files.uiMessages = JSON.parse(fs.readFileSync(uiPath, 'utf8'));
+    if (fs.existsSync(apiHistPath)) files.apiHistory = JSON.parse(fs.readFileSync(apiHistPath, 'utf8'));
+    if (fs.existsSync(ctxHistPath)) {
+      const ctxRaw = JSON.parse(fs.readFileSync(ctxHistPath, 'utf8'));
+      files.contextUpdates = Array.isArray(ctxRaw) ? ctxRaw : (ctxRaw.updates || []);
+    }
+
+    return files;
+  }
+
+  function getApiCallEntries(uiMessages, apiHistoryLength) {
+    const apiCallEntries = [];
+    for (const msg of uiMessages) {
+      if (msg.say !== 'api_req_started' || !msg.text) continue;
+      try {
+        const data = JSON.parse(msg.text);
+        const rawHistIdx = msg.conversationHistoryIndex != null ? msg.conversationHistoryIndex : -1;
+        apiCallEntries.push({
+          historyIndex: resolveMaxMsgIdx(apiCallEntries.length, rawHistIdx, apiHistoryLength),
+          ts: msg.ts,
+          tokensIn: data.tokensIn || 0,
+          tokensOut: data.tokensOut || 0,
+          cacheReads: data.cacheReads || 0,
+          cacheWrites: data.cacheWrites || 0,
+          cost: data.cost || 0,
+          requestText: data.request || null,
+          modelId: msg.modelInfo?.modelId || data.model || null,
+          providerId: msg.modelInfo?.providerId || null,
+        });
+      } catch {
+        continue;
+      }
+    }
+    return apiCallEntries;
   }
 
   /**
@@ -236,7 +464,8 @@ module.exports = (db, config) => {
       let data;
       try { data = JSON.parse(msg.text); } catch { continue; }
 
-      const histIdx = msg.conversationHistoryIndex != null ? msg.conversationHistoryIndex : -1;
+      const rawHistIdx = msg.conversationHistoryIndex != null ? msg.conversationHistoryIndex : -1;
+      const histIdx = resolveMaxMsgIdx(apiCalls.length, rawHistIdx, apiHistory.length);
 
       let requestSize = 0;
       let messageCount = 0;
@@ -255,6 +484,7 @@ module.exports = (db, config) => {
 
       apiCalls.push({
         index: apiCalls.length,
+        uiMsgIndex: i,
         ts: msg.ts,
         tokensIn: data.tokensIn || 0,
         tokensOut: data.tokensOut || 0,
@@ -271,6 +501,7 @@ module.exports = (db, config) => {
         modelId: mId,
         providerId: msg.modelInfo?.providerId || null,
       });
+
 
       if (requestSize > 0) prevRequestSize = requestSize;
     }
@@ -303,26 +534,17 @@ module.exports = (db, config) => {
           const contentPrevStr = extractTextContent(msgsPrev[mIdx]?.content);
           const contentCurrStr = extractTextContent(msgsCurr[mIdx]?.content);
 
-          let category = 'Other Content';
-          let targetName = 'Context Text';
+          const { category, targetName } = detectReductionCategory(contentPrevStr, contentCurrStr);
 
-          const fileMatch = contentPrevStr.match(/read_file for '([^']+)'/);
-          if (fileMatch) {
-            category = 'File Read Truncated';
-            targetName = fileMatch[1];
+          if (category === 'File Read Truncated') {
             if (!filePruningMap[targetName]) filePruningMap[targetName] = { count: 0, bytesSaved: 0 };
             filePruningMap[targetName].count++;
             filePruningMap[targetName].bytesSaved += bytesSaved;
-          } else if (contentPrevStr.includes('execute_command for') || contentCurrStr.includes('Tool output truncated')) {
-            category = 'Terminal Output Truncated';
-            const cmdMatch = contentPrevStr.match(/execute_command for '([^']+)'/);
-            targetName = cmdMatch ? cmdMatch[1] : 'Terminal Command Output';
+          } else if (category === 'Terminal Output Truncated') {
             if (!cmdPruningMap[targetName]) cmdPruningMap[targetName] = { count: 0, bytesSaved: 0 };
             cmdPruningMap[targetName].count++;
             cmdPruningMap[targetName].bytesSaved += bytesSaved;
-          } else if (contentPrevStr.includes('<environment_details>') && contentCurrStr.includes('stale workspace/environment snapshot')) {
-            category = 'Stale Environment Snapshot Removed';
-            targetName = '<environment_details>';
+          } else if (category === 'Stale Environment Snapshot Removed') {
             envPruningCount++;
             envPruningBytes += bytesSaved;
           }
@@ -350,7 +572,15 @@ module.exports = (db, config) => {
       callCurr.hasPruning = turnSavedBytes > 100;
     }
 
+    // Attach a human-readable explanation of cache behavior to every call
+    // (needs to run after trimmedFromPrevBytes/hasPruning are computed above).
+    for (let i = 0; i < apiCalls.length; i++) {
+      apiCalls[i].cacheExplanation = computeCacheExplanation(apiCalls[i], i > 0 ? apiCalls[i - 1] : null, uiMessages);
+    }
+
+
     const taskMeta = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+
 
     const fileCategorySummary = Object.keys(filePruningMap).map(f => ({
       path: f,
@@ -395,59 +625,75 @@ module.exports = (db, config) => {
       },
       reductionEvents,
       totalMessages: apiHistory.length,
+      systemPromptNote: 'The system prompt (tool definitions, core instructions) is generated in-memory by the extension at request time and is not persisted to any task file, so it cannot be shown here. Only user/assistant turns from api_conversation_history.json are reconstructed.',
     });
   });
 
+
   /**
-   * GET /api/prompt-analytics/:taskId/compare?call1=5&call2=10
+   * GET /api/prompt-analytics/:taskId/prompt?call=5
+   * Returns the exact effective prompt payload for a single API call.
    */
-  router.get('/prompt-analytics/:taskId/compare', (req, res) => {
+  router.get('/prompt-analytics/:taskId/prompt', (req, res) => {
     const taskId = req.params.taskId;
-    const call1 = parseInt(req.query.call1 || '0');
-    const call2 = parseInt(req.query.call2 || '1');
+    const call = parseInt(req.query.call || '0');
     const taskPath = resolveTaskPath(taskId);
 
     if (!taskPath) {
       return res.status(404).json({ error: 'Task not found' });
     }
 
-    const uiPath = path.join(taskPath, 'ui_messages.json');
-    const apiHistPath = path.join(taskPath, 'api_conversation_history.json');
-    const ctxHistPath = path.join(taskPath, 'context_history.json');
-
-    let uiMessages = [];
-    let apiHistory = [];
-    let contextUpdates = [];
-
+    let files;
     try {
-      if (fs.existsSync(uiPath)) uiMessages = JSON.parse(fs.readFileSync(uiPath, 'utf8'));
-      if (fs.existsSync(apiHistPath)) apiHistory = JSON.parse(fs.readFileSync(apiHistPath, 'utf8'));
-      if (fs.existsSync(ctxHistPath)) {
-        const ctxRaw = JSON.parse(fs.readFileSync(ctxHistPath, 'utf8'));
-        contextUpdates = Array.isArray(ctxRaw) ? ctxRaw : (ctxRaw.updates || []);
-      }
+      files = readTaskPromptFiles(taskPath);
     } catch (e) {
       return res.status(500).json({ error: 'Failed to parse task files' });
     }
 
-    const apiCallEntries = [];
-    for (const msg of uiMessages) {
-      if (msg.say !== 'api_req_started' || !msg.text) continue;
-      try {
-        const data = JSON.parse(msg.text);
-        apiCallEntries.push({
-          historyIndex: msg.conversationHistoryIndex != null ? msg.conversationHistoryIndex : -1,
-          ts: msg.ts,
-          tokensIn: data.tokensIn || 0,
-          tokensOut: data.tokensOut || 0,
-          cacheReads: data.cacheReads || 0,
-          cacheWrites: data.cacheWrites || 0,
-          cost: data.cost || 0,
-        });
-      } catch {
-        continue;
-      }
+    const apiCallEntries = getApiCallEntries(files.uiMessages, files.apiHistory.length);
+    if (call < 0 || call >= apiCallEntries.length) {
+      return res.status(400).json({ error: 'Invalid call index' });
     }
+
+    const entry = apiCallEntries[call];
+    const messages = getEffectiveMessagesAtTs(files.apiHistory, files.contextUpdates, entry.ts, entry.historyIndex);
+    const requestSize = messages.reduce((s, m) => s + JSON.stringify(m.content || '').length, 0);
+    const systemPrompt = findSystemPromptFromProxy(entry.ts);
+
+    res.json({
+      call: { index: call, ...entry, messageCount: messages.length, requestSize },
+      prompt: {
+        messageCount: messages.length,
+        requestSize,
+        text: buildExactPromptText(messages),
+        messages,
+      },
+      systemPrompt,
+    });
+  });
+
+  /**
+   * GET /api/prompt-analytics/:taskId/compare?call1=5&call2=10&mode=prefix|full
+   */
+  router.get('/prompt-analytics/:taskId/compare', (req, res) => {
+    const taskId = req.params.taskId;
+    const call1 = parseInt(req.query.call1 || '0');
+    const call2 = parseInt(req.query.call2 || '1');
+    const mode = req.query.mode === 'full' ? 'full' : 'prefix';
+    const taskPath = resolveTaskPath(taskId);
+
+    if (!taskPath) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+
+    let files;
+    try {
+      files = readTaskPromptFiles(taskPath);
+    } catch (e) {
+      return res.status(500).json({ error: 'Failed to parse task files' });
+    }
+
+    const apiCallEntries = getApiCallEntries(files.uiMessages, files.apiHistory.length);
 
     if (call1 < 0 || call1 >= apiCallEntries.length || call2 < 0 || call2 >= apiCallEntries.length) {
       return res.status(400).json({ error: 'Invalid call indices' });
@@ -456,17 +702,13 @@ module.exports = (db, config) => {
     const entry1 = apiCallEntries[call1];
     const entry2 = apiCallEntries[call2];
 
-    const messages1 = getEffectiveMessagesAtTs(apiHistory, contextUpdates, entry1.ts, entry1.historyIndex);
-    const messages2 = getEffectiveMessagesAtTs(apiHistory, contextUpdates, entry2.ts, entry1.historyIndex);
-
-    function summarizeMessage(msg, idx) {
-      const content = msg.content;
-      const size = JSON.stringify(content || '').length;
-      const fullText = extractTextContent(content);
-      const preview = fullText.substring(0, 450);
-
-      return { index: idx, role: msg.role, size, preview, fullText };
-    }
+    const messages1 = getEffectiveMessagesAtTs(files.apiHistory, files.contextUpdates, entry1.ts, entry1.historyIndex);
+    const messages2 = getEffectiveMessagesAtTs(
+      files.apiHistory,
+      files.contextUpdates,
+      entry2.ts,
+      mode === 'full' ? entry2.historyIndex : entry1.historyIndex
+    );
 
     const commonMsgCount = Math.min(messages1.length, messages2.length);
     let commonSizeCall1 = 0;
@@ -480,17 +722,31 @@ module.exports = (db, config) => {
     const prunedFromCall1 = commonSizeCall1 - commonSizeCall2;
 
     const trimmedItems = [];
+    const changedItems = [];
 
     for (let i = 0; i < commonMsgCount; i++) {
-      const sum1 = summarizeMessage(messages1[i], i);
-      const sum2 = summarizeMessage(messages2[i], i);
+      const sum1 = summarizePromptMessage(messages1[i], i);
+      const sum2 = summarizePromptMessage(messages2[i], i);
       const diffChunks = computeExactDiffChunks(sum1.fullText, sum2.fullText);
       const saved = sum1.size - sum2.size;
+
+      if (sum1.fullText !== sum2.fullText) {
+        changedItems.push({
+          index: i,
+          role: messages1[i]?.role || messages2[i]?.role || 'unknown',
+          before: sum1,
+          after: sum2,
+          diffChunks,
+          bytesSaved: Math.max(0, saved),
+          bytesDelta: sum2.size - sum1.size,
+          changeType: saved > 10 ? 'reduced' : (saved < -10 ? 'expanded' : 'modified'),
+        });
+      }
 
       if (saved > 10) {
         trimmedItems.push({
           index: i,
-          role: messages1[i].role,
+          role: messages1[i]?.role || 'unknown',
           before: sum1,
           after: sum2,
           diffChunks,
@@ -499,20 +755,82 @@ module.exports = (db, config) => {
       }
     }
 
+    const addedItems = [];
+    for (let i = commonMsgCount; i < messages2.length; i++) {
+      addedItems.push({
+        index: i,
+        role: messages2[i]?.role || 'unknown',
+        after: summarizePromptMessage(messages2[i], i),
+      });
+    }
+
+    const removedItems = [];
+    for (let i = commonMsgCount; i < messages1.length; i++) {
+      removedItems.push({
+        index: i,
+        role: messages1[i]?.role || 'unknown',
+        before: summarizePromptMessage(messages1[i], i),
+      });
+    }
+
     const req1Size = messages1.reduce((s, m) => s + JSON.stringify(m.content || '').length, 0);
     const req2Size = messages2.reduce((s, m) => s + JSON.stringify(m.content || '').length, 0);
+
+    // ── Explain WHY the prompt changed between these two calls ──
+    // (model swap, and/or the framework condensing/resetting context)
+    const modelChanged = !!(entry1.modelId && entry2.modelId && entry1.modelId !== entry2.modelId);
+
+    // Heuristic for a context condense/reset: total size dropped meaningfully
+    // while the message count did NOT shrink (a simple truncation/removal of
+    // tool output would reduce or hold message count, not grow it while also
+    // shrinking total bytes). Early-message reductions (system/task context,
+    // not the tail-end tool outputs) are the other tell-tale sign.
+    // ponytail: heuristic thresholds (5% size drop, msg[0..4]) — good enough to
+    // flag likely condensation for investigation; not a guaranteed classifier.
+    const sizeDropPct = req1Size > 0 ? (req1Size - req2Size) / req1Size : 0;
+    const earlyBigChange = changedItems.some(it => it.index < 5 && it.bytesSaved > 2000);
+    const possibleContextCondensation = sizeDropPct > 0.05 && messages2.length >= messages1.length && earlyBigChange;
+
+    const systemPrompt1 = findSystemPromptFromProxy(entry1.ts);
+    const systemPrompt2 = findSystemPromptFromProxy(entry2.ts);
+    const systemPromptChanged = !!(systemPrompt1 && systemPrompt2 && systemPrompt1.text !== systemPrompt2.text);
 
     res.json({
       call1: { index: call1, ...entry1, messageCount: messages1.length, requestSize: req1Size },
       call2: { index: call2, ...entry2, messageCount: messages2.length, requestSize: req2Size },
+      mode,
+      systemPrompt1,
+      systemPrompt2,
+      systemPromptChanged,
       pruningSummary: {
         req1ContentBeforePruning: commonSizeCall1,
         req1ContentAfterPruning: commonSizeCall2,
         bytesSaved: prunedFromCall1,
         percentSaved: commonSizeCall1 > 0 ? ((prunedFromCall1 / commonSizeCall1) * 100).toFixed(1) : '0.0',
       },
+      annotations: {
+        modelChanged,
+        fromModelId: entry1.modelId || null,
+        toModelId: entry2.modelId || null,
+        fromProviderId: entry1.providerId || null,
+        toProviderId: entry2.providerId || null,
+        possibleContextCondensation,
+        sizeDropPct: Math.round(sizeDropPct * 1000) / 10,
+      },
       trimmedItems,
-      addedItems: [],
+      changedItems,
+      addedItems,
+      removedItems,
+      prompt1: {
+        messageCount: messages1.length,
+        requestSize: req1Size,
+        text: buildExactPromptText(messages1),
+      },
+      prompt2: {
+        messageCount: messages2.length,
+        requestSize: req2Size,
+        text: buildExactPromptText(messages2),
+      },
     });
   });
 

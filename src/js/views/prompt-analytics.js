@@ -341,8 +341,15 @@ function renderCacheObservabilityPanel(body, calls) {
 
   const cacheHitsCount = calls.filter(c => c.cacheReads > 0).length;
   const hitRate = calls.length > 0 ? ((cacheHitsCount / calls.length) * 100).toFixed(1) : '0.0';
+  const systemPromptNote = analyticsData?.systemPromptNote;
 
   body.innerHTML = `
+    ${systemPromptNote ? `
+      <div style="background:rgba(148,163,184,0.08);border:1px solid rgba(148,163,184,0.25);border-radius:var(--radius-sm);padding:8px 14px;margin-bottom:14px;font-size:10.5px;color:var(--text-3);display:flex;align-items:flex-start;gap:8px">
+        <span style="font-size:13px">📄</span>
+        <span><strong style="color:var(--text-2)">Note:</strong> ${escHtml(systemPromptNote)}</span>
+      </div>
+    ` : ''}
     <!-- Top Executive Cache Metrics Grid -->
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-bottom:16px">
       <div style="background:var(--bg-3);padding:14px;border-radius:var(--radius-sm);border:1px solid var(--border);border-left:4px solid var(--green)">
@@ -402,7 +409,7 @@ function renderCacheObservabilityPanel(body, calls) {
     <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden">
       <div style="background:var(--bg-3);padding:10px 14px;font-weight:bold;font-size:11.5px;color:var(--text);border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
         <span>📊 Per-Request Cache Usage & Breakpoints Breakdown (${calls.length} total calls)</span>
-        <span style="font-size:10.5px;color:var(--text-3);font-weight:normal">👉 Click any row to expand side-by-side prompt diff (N-1 vs N)</span>
+        <span style="font-size:10.5px;color:var(--text-3);font-weight:normal">👉 Click any row to expand exact prompt and before/after comparison</span>
       </div>
       <div style="max-height:450px;overflow-y:auto">
         <table style="width:100%;border-collapse:collapse;font-size:11px;text-align:left">
@@ -422,11 +429,13 @@ function renderCacheObservabilityPanel(body, calls) {
             ${calls.map(c => {
               const isHit = c.cacheReads > 0;
               const isWrite = c.cacheWrites > 0;
-              let badge = '<span style="color:var(--text-3)">Uncached</span>';
-              if (isHit) {
-                badge = `<span style="background:rgba(34,197,94,0.15);color:var(--green);padding:2px 8px;border-radius:10px;font-weight:bold;font-size:10px">🎯 Cache Hit (${pricing.discount} Off)</span>`;
+              let badge = '<span style="color:var(--text-3)" title="No provider-reported prompt cache reads or writes for this request">Uncached</span>';
+              if (isHit && isWrite) {
+                badge = `<span style="background:rgba(34,197,94,0.15);color:var(--green);padding:2px 8px;border-radius:10px;font-weight:bold;font-size:10px" title="${fmtTokens(c.cacheReads)} input tokens were read from a matching cached prompt prefix at the cache-read rate; ${fmtTokens(c.cacheWrites)} tokens were also written as a new cache breakpoint for future requests.">🎯 Cache Read + Write</span>`;
+              } else if (isHit) {
+                badge = `<span style="background:rgba(34,197,94,0.15);color:var(--green);padding:2px 8px;border-radius:10px;font-weight:bold;font-size:10px" title="${fmtTokens(c.cacheReads)} input tokens were read from a matching cached prompt prefix at the cache-read rate, which is ${pricing.discount} cheaper than uncached input for this model.">🎯 Cache Read (${pricing.discount} cheaper)</span>`;
               } else if (isWrite) {
-                badge = '<span style="background:rgba(245,158,11,0.15);color:#f59e0b;padding:2px 8px;border-radius:10px;font-weight:bold;font-size:10px">✍️ Cache Creation</span>';
+                badge = '<span style="background:rgba(245,158,11,0.15);color:#f59e0b;padding:2px 8px;border-radius:10px;font-weight:bold;font-size:10px" title="The provider wrote prompt-prefix tokens into its prompt cache so later requests can reuse them if the prefix matches.">✍️ Cache Write</span>';
               }
 
               return `
@@ -462,6 +471,7 @@ function bindCacheTableEvents(calls) {
   document.querySelectorAll('.pa-cache-row').forEach(row => {
     row.addEventListener('click', async () => {
       const idx = parseInt(row.dataset.callIdx);
+      const call = calls[idx];
       const expandTr = document.getElementById(`pa-cache-expand-${idx}`);
       if (!expandTr) return;
 
@@ -473,32 +483,450 @@ function bindCacheTableEvents(calls) {
         const contentContainer = expandTr.querySelector('.pa-cache-expand-content');
         if (contentContainer && contentContainer.dataset.loaded === 'false') {
           contentContainer.dataset.loaded = 'true';
-          const prevIdx = idx > 0 ? idx - 1 : 0;
+          const prevIdx = idx - 1;
+
           try {
-            const comp = await api.promptCompare(currentTaskId, prevIdx, idx);
-            renderInlinePromptDiff(contentContainer, comp, prevIdx, idx);
+            if (idx === 0) {
+              const promptData = await api.promptRequest(currentTaskId, idx);
+              contentContainer.innerHTML =
+                renderSystemPromptSection(promptData?.systemPrompt) +
+                renderCacheExplanationBanner(call?.cacheExplanation) +
+                renderInitialPromptDiffMarkup(promptData, idx);
+            } else {
+              const comp = await api.promptCompare(currentTaskId, prevIdx, idx, 'full');
+              contentContainer.innerHTML =
+                renderSystemPromptSection(comp?.systemPrompt2 || comp?.systemPrompt1) +
+                renderCacheExplanationBanner(call?.cacheExplanation) +
+                renderChangeAnnotationsBanner(comp?.annotations, prevIdx, idx) +
+                renderSideBySidePromptDiffMarkup(comp, prevIdx, idx);
+              bindSynchronizedScroll(contentContainer);
+            }
           } catch (e) {
-            contentContainer.innerHTML = `<div class="empty-state"><p style="color:var(--red)">Failed to load prompt comparison: ${escHtml(e.message)}</p></div>`;
+            contentContainer.innerHTML = renderPromptDetailsError('Prompt diff', e);
           }
         }
       }
+
     });
   });
 }
 
+function renderPromptDetailsError(label, error) {
+  return `
+    <div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);color:var(--red);padding:10px 14px;border-radius:var(--radius-sm);font-size:11px;margin-bottom:10px">
+      ${escHtml(label)} unavailable: ${escHtml(error?.message || 'Unknown error')}
+    </div>
+  `;
+}
+
+function renderInitialPromptDiffMarkup(promptData, idx) {
+  const prompt = promptData?.prompt || {};
+  const rows = buildAddedFileDiffRows(prompt.text || '');
+  return renderUnifiedDiffPanel({
+    title: `Prompt for Call #${idx + 1}`,
+    subtitle: 'Initial request prompt',
+    beforeLabel: '/dev/null',
+    afterLabel: `call-${idx + 1}-prompt`,
+    beforeSize: 0,
+    afterSize: prompt.requestSize || promptData?.call?.requestSize || 0,
+    rows,
+  });
+}
+
+/**
+ * Builds paired rows for a TRUE two-column side-by-side prompt diff (unlike
+ * the old unified +/- stacked view). Context lines pair 1:1; the changed
+ * block pairs removed[j] with added[j] by index.
+ * ponytail: index-pairing, not a real LCS/Myers line diff — good enough for
+ * readable side-by-side; upgrade if misaligned pairing on reordered lines
+ * becomes a complaint.
+ */
+function buildSideBySideDiffRows(beforeText, afterText) {
+  const beforeLines = splitPromptLines(beforeText);
+  const afterLines = splitPromptLines(afterText);
+
+  if (beforeText === afterText) {
+    return [{ type: 'note', text: 'No prompt text changed between these two calls.' }];
+  }
+
+  let prefixLen = 0;
+  const maxPrefix = Math.min(beforeLines.length, afterLines.length);
+  while (prefixLen < maxPrefix && beforeLines[prefixLen] === afterLines[prefixLen]) prefixLen++;
+
+  let suffixLen = 0;
+  const maxSuffix = Math.min(beforeLines.length - prefixLen, afterLines.length - prefixLen);
+  while (
+    suffixLen < maxSuffix &&
+    beforeLines[beforeLines.length - 1 - suffixLen] === afterLines[afterLines.length - 1 - suffixLen]
+  ) suffixLen++;
+
+  const context = 8;
+  const beforeChangeEnd = beforeLines.length - suffixLen;
+  const afterChangeEnd = afterLines.length - suffixLen;
+  const contextStart = Math.max(0, prefixLen - context);
+  const suffixVisible = Math.min(context, suffixLen);
+
+  const rows = [];
+
+  if (contextStart > 0) rows.push({ type: 'skip', text: `... ${contextStart} unchanged lines hidden ...` });
+
+  for (let i = contextStart; i < prefixLen; i++) {
+    rows.push({ type: 'ctx', leftLine: i + 1, leftText: beforeLines[i], rightLine: i + 1, rightText: afterLines[i] });
+  }
+
+  const removedCount = beforeChangeEnd - prefixLen;
+  const addedCount = afterChangeEnd - prefixLen;
+  const maxCount = Math.max(removedCount, addedCount);
+
+  for (let j = 0; j < maxCount; j++) {
+    const leftIdx = j < removedCount ? prefixLen + j : null;
+    const rightIdx = j < addedCount ? prefixLen + j : null;
+    rows.push({
+      type: 'change',
+      leftLine: leftIdx != null ? leftIdx + 1 : '',
+      leftText: leftIdx != null ? beforeLines[leftIdx] : null,
+      rightLine: rightIdx != null ? rightIdx + 1 : '',
+      rightText: rightIdx != null ? afterLines[rightIdx] : null,
+    });
+  }
+
+  const suffixBeforeStart = beforeChangeEnd;
+  const suffixAfterStart = afterChangeEnd;
+  for (let i = 0; i < suffixVisible; i++) {
+    rows.push({
+      type: 'ctx',
+      leftLine: suffixBeforeStart + i + 1,
+      leftText: beforeLines[suffixBeforeStart + i],
+      rightLine: suffixAfterStart + i + 1,
+      rightText: afterLines[suffixAfterStart + i],
+    });
+  }
+
+  if (suffixLen > suffixVisible) rows.push({ type: 'skip', text: `... ${suffixLen - suffixVisible} unchanged lines hidden ...` });
+
+  return rows;
+}
+
+function renderSideBySideDiffRow(row) {
+  if (row.type === 'note' || row.type === 'skip') {
+    return `<div style="grid-column:1 / -1;color:var(--text-3);background:var(--bg-3);padding:3px 10px;font-style:italic">${escHtml(row.text)}</div>`;
+  }
+
+  const leftPresent = row.leftText != null;
+  const rightPresent = row.rightText != null;
+  const leftBg = row.type === 'change' && leftPresent ? 'rgba(239,68,68,0.12)' : 'transparent';
+  const rightBg = row.type === 'change' && rightPresent ? 'rgba(34,197,94,0.12)' : 'transparent';
+  const leftColor = row.type === 'change' && leftPresent ? 'var(--red)' : 'var(--text-2)';
+  const rightColor = row.type === 'change' && rightPresent ? 'var(--green)' : 'var(--text-2)';
+
+  return `
+    <div style="display:grid;grid-template-columns:44px 1fr;gap:6px;background:${leftBg};color:${leftColor};padding:1px 8px;white-space:pre-wrap;word-break:break-word;border-right:1px solid var(--border)">
+      <span style="color:var(--text-3);text-align:right;user-select:none">${leftPresent ? row.leftLine : ''}</span>
+      <span>${leftPresent ? escHtml(row.leftText) : ''}</span>
+    </div>
+    <div style="display:grid;grid-template-columns:44px 1fr;gap:6px;background:${rightBg};color:${rightColor};padding:1px 8px;white-space:pre-wrap;word-break:break-word">
+      <span style="color:var(--text-3);text-align:right;user-select:none">${rightPresent ? row.rightLine : ''}</span>
+      <span>${rightPresent ? escHtml(row.rightText) : ''}</span>
+    </div>
+  `;
+}
+
+/**
+ * TRUE two-column side-by-side prompt diff (replaces the old unified
+ * stacked +/- view used in the Cache table's expandable row).
+ */
+function renderSideBySidePromptDiffMarkup(comp, prevIdx, idx) {
+  const beforeText = comp?.prompt1?.text || '';
+  const afterText = comp?.prompt2?.text || '';
+  const beforeSize = comp?.prompt1?.requestSize || comp?.call1?.requestSize || 0;
+  const afterSize = comp?.prompt2?.requestSize || comp?.call2?.requestSize || 0;
+  const delta = afterSize - beforeSize;
+  const deltaText = delta >= 0 ? `+${fmtBytes(delta)}` : `-${fmtBytes(Math.abs(delta))}`;
+  const deltaColor = delta >= 0 ? '#f59e0b' : 'var(--green)';
+
+  const rows = buildSideBySideDiffRows(beforeText, afterText);
+
+  return `
+    <div class="pa-git-diff-card" style="border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-2)">
+      <div class="pa-git-diff-header" style="background:var(--bg-3);padding:10px 14px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;gap:12px">
+        <div>
+          <div style="font-weight:bold;font-size:12px;color:var(--text)">Prompt Diff: Call #${prevIdx + 1} → Call #${idx + 1}</div>
+          <div style="font-size:10.5px;color:var(--text-3);margin-top:2px">${comp?.call1?.messageCount || 0} messages → ${comp?.call2?.messageCount || 0} messages</div>
+        </div>
+        <div class="mono" style="font-size:11px;color:${deltaColor};font-weight:bold">
+          ${fmtBytes(beforeSize)} → ${fmtBytes(afterSize)} (${deltaText})
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;background:var(--bg-1);border-bottom:1px solid var(--border);font-size:10.5px;color:var(--text-3)">
+        <div class="mono" style="padding:8px 14px;color:var(--red);border-right:1px solid var(--border)">🔴 call-${prevIdx + 1}-prompt (Before)</div>
+        <div class="mono" style="padding:8px 14px;color:var(--green)">🟢 call-${idx + 1}-prompt (After)</div>
+      </div>
+      <div class="pa-git-diff-content mono" style="max-height:560px;overflow:auto;background:var(--bg-1);font-size:10.5px;line-height:1.45;display:grid;grid-template-columns:1fr 1fr">
+        ${rows.map(renderSideBySideDiffRow).join('')}
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Renders a banner explaining WHY a call had (or didn't have) a cache
+ * read/write — model swap, TTL expiry, prefix invalidation, first call, etc.
+ * Comes straight from the server's computeCacheExplanation().
+ */
+/**
+ * Renders the real system prompt text (cross-referenced live from the
+ * Network Inspector's in-memory proxy buffer, since it's never persisted
+ * to any task file) when available, or an explanatory note when it isn't
+ * (proxy wasn't running, buffer already evicted the record, etc).
+ */
+function renderSystemPromptSection(systemPrompt) {
+  if (systemPrompt && systemPrompt.text) {
+    return `
+      <details style="background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:10px">
+        <summary style="cursor:pointer;padding:8px 14px;font-size:11.5px;font-weight:bold;color:var(--text);display:flex;align-items:center;gap:8px">
+          <span>🛰️</span> System Prompt (captured live via Network Inspector proxy)
+          <span style="font-size:10px;color:var(--text-3);font-weight:normal">— not persisted to disk; only available while the proxy was capturing traffic</span>
+        </summary>
+        <div class="mono" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:10px 14px;max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-word;border-top:1px solid var(--border)">${escHtml(systemPrompt.text)}</div>
+      </details>
+    `;
+  }
+
+  return `
+    <div style="background:rgba(148,163,184,0.08);border:1px solid rgba(148,163,184,0.25);border-radius:var(--radius-sm);padding:8px 14px;margin-bottom:10px;font-size:10.5px;color:var(--text-3);display:flex;align-items:flex-start;gap:8px">
+      <span style="font-size:13px">📄</span>
+      <span><strong style="color:var(--text-2)">System prompt not shown:</strong> it's generated in-memory by the extension and never persisted to any task file. It's only recoverable live via the Network Inspector proxy, and no matching captured request was found in its buffer for this call (proxy wasn't running at the time, or the record has since been evicted).</span>
+    </div>
+  `;
+}
+
+function renderCacheExplanationBanner(explanation) {
+  if (!explanation) return '';
+  const iconMap = {
+    first_call: '🆕',
+    model_changed: '🔀',
+    idle_wait_ttl: '⏳',
+    ttl_expired_unconfirmed: '❓',
+    prefix_invalidated: '✂️',
+    prefix_extended: '➕',
+    partial_hit: '🎯',
+    full_hit: '✅',
+    no_cache_activity: 'ℹ️',
+  };
+  const icon = iconMap[explanation.code] || 'ℹ️';
+  // Unconfirmed guesses get an amber "unverified" treatment instead of the
+  // confident blue used for evidenced explanations — don't let a guess look
+  // as certain as a fact backed by actual log evidence.
+  const isUnconfirmed = explanation.code === 'ttl_expired_unconfirmed';
+  const accent = isUnconfirmed ? '#f59e0b' : '#38bdf8';
+  const bg = isUnconfirmed ? 'rgba(245,158,11,0.08)' : 'rgba(56,189,248,0.08)';
+  const border = isUnconfirmed ? 'rgba(245,158,11,0.3)' : 'rgba(56,189,248,0.3)';
+  const label = isUnconfirmed ? 'Possible cache behavior (unconfirmed):' : 'Why this cache behavior?';
+
+  return `
+    <div style="background:${bg};border:1px solid ${border};border-radius:var(--radius-sm);padding:10px 14px;margin-bottom:10px;font-size:11.5px;color:var(--text);display:flex;align-items:flex-start;gap:8px">
+      <span style="font-size:14px">${icon}</span>
+      <span><strong style="color:${accent}">${label}</strong> ${escHtml(explanation.text)}</span>
+    </div>
+  `;
+}
+
+
+/**
+ * Renders a banner above the diff explaining WHY the prompt changed:
+ * a model swap and/or a likely context condensation/reset — the two
+ * causes that a raw text diff alone can't explain.
+ */
+function renderChangeAnnotationsBanner(annotations, prevIdx, idx) {
+
+  if (!annotations) return '';
+  const { modelChanged, fromModelId, toModelId, possibleContextCondensation, sizeDropPct } = annotations;
+
+  if (!modelChanged && !possibleContextCondensation) return '';
+
+  const items = [];
+  if (modelChanged) {
+    items.push(`
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:14px">🔀</span>
+        <span><strong style="color:#f59e0b">Model changed</strong> between Call #${prevIdx + 1} and Call #${idx + 1}:
+          <span class="mono" style="color:var(--red)">${escHtml(fromModelId || 'unknown')}</span> →
+          <span class="mono" style="color:var(--green)">${escHtml(toModelId || 'unknown')}</span>
+        </span>
+      </div>
+    `);
+  }
+  if (possibleContextCondensation) {
+    items.push(`
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:14px">🧹</span>
+        <span><strong style="color:#f59e0b">Likely context condensation/reset</strong> detected — request size dropped by
+          <strong>${sizeDropPct}%</strong> with early-conversation content (system context, task setup) rewritten, not just
+          tail-end tool output trimmed. This usually means the framework compacted/summarized the running history.
+        </span>
+      </div>
+    `);
+  }
+
+  return `
+    <div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.3);border-radius:var(--radius-sm);padding:10px 14px;margin-bottom:10px;font-size:11.5px;color:var(--text);display:flex;flex-direction:column;gap:6px">
+      ${items.join('')}
+    </div>
+  `;
+}
+
+
+function buildAddedFileDiffRows(text) {
+  const lines = splitPromptLines(text);
+  return [
+    { type: 'file', text: '--- /dev/null' },
+    { type: 'file', text: '+++ prompt' },
+    ...lines.map((line, i) => ({ type: 'add', oldLine: '', newLine: i + 1, text: line })),
+  ];
+}
+
+function buildUnifiedDiffRows(beforeText, afterText) {
+  const beforeLines = splitPromptLines(beforeText);
+  const afterLines = splitPromptLines(afterText);
+
+  if (beforeText === afterText) {
+    return [
+      { type: 'file', text: '--- prompt-before' },
+      { type: 'file', text: '+++ prompt-after' },
+      { type: 'note', text: 'No prompt text changed between these two calls.' },
+    ];
+  }
+
+  let prefixLen = 0;
+  const maxPrefix = Math.min(beforeLines.length, afterLines.length);
+  while (prefixLen < maxPrefix && beforeLines[prefixLen] === afterLines[prefixLen]) {
+    prefixLen++;
+  }
+
+  let suffixLen = 0;
+  const maxSuffix = Math.min(beforeLines.length - prefixLen, afterLines.length - prefixLen);
+  while (
+    suffixLen < maxSuffix &&
+    beforeLines[beforeLines.length - 1 - suffixLen] === afterLines[afterLines.length - 1 - suffixLen]
+  ) {
+    suffixLen++;
+  }
+
+  const context = 8;
+  const beforeChangeEnd = beforeLines.length - suffixLen;
+  const afterChangeEnd = afterLines.length - suffixLen;
+  const contextStart = Math.max(0, prefixLen - context);
+  const suffixBeforeStart = beforeChangeEnd;
+  const suffixAfterStart = afterChangeEnd;
+  const suffixVisible = Math.min(context, suffixLen);
+  const rows = [
+    { type: 'file', text: '--- prompt-before' },
+    { type: 'file', text: '+++ prompt-after' },
+  ];
+
+  if (contextStart > 0) rows.push({ type: 'skip', text: `... ${contextStart} unchanged lines hidden ...` });
+
+  for (let i = contextStart; i < prefixLen; i++) {
+    rows.push({ type: 'ctx', oldLine: i + 1, newLine: i + 1, text: beforeLines[i] });
+  }
+
+  for (let i = prefixLen; i < beforeChangeEnd; i++) {
+    rows.push({ type: 'del', oldLine: i + 1, newLine: '', text: beforeLines[i] });
+  }
+
+  for (let i = prefixLen; i < afterChangeEnd; i++) {
+    rows.push({ type: 'add', oldLine: '', newLine: i + 1, text: afterLines[i] });
+  }
+
+  for (let i = 0; i < suffixVisible; i++) {
+    rows.push({
+      type: 'ctx',
+      oldLine: suffixBeforeStart + i + 1,
+      newLine: suffixAfterStart + i + 1,
+      text: beforeLines[suffixBeforeStart + i],
+    });
+  }
+
+  if (suffixLen > suffixVisible) rows.push({ type: 'skip', text: `... ${suffixLen - suffixVisible} unchanged lines hidden ...` });
+
+  return rows;
+}
+
+function splitPromptLines(text) {
+  if (!text) return [''];
+  return String(text).split('\n');
+}
+
+function renderUnifiedDiffPanel({ title, subtitle, beforeLabel, afterLabel, beforeSize, afterSize, rows }) {
+  const delta = afterSize - beforeSize;
+  const deltaText = delta >= 0 ? `+${fmtBytes(delta)}` : `-${fmtBytes(Math.abs(delta))}`;
+  const deltaColor = delta >= 0 ? '#f59e0b' : 'var(--green)';
+
+  return `
+    <div class="pa-git-diff-card" style="border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-2)">
+      <div class="pa-git-diff-header" style="background:var(--bg-3);padding:10px 14px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;gap:12px">
+        <div>
+          <div style="font-weight:bold;font-size:12px;color:var(--text)">${escHtml(title)}</div>
+          <div style="font-size:10.5px;color:var(--text-3);margin-top:2px">${escHtml(subtitle)}</div>
+        </div>
+        <div class="mono" style="font-size:11px;color:${deltaColor};font-weight:bold">
+          ${fmtBytes(beforeSize)} → ${fmtBytes(afterSize)} (${deltaText})
+        </div>
+      </div>
+      <div style="background:var(--bg-1);border-bottom:1px solid var(--border);padding:8px 14px;font-size:10.5px;color:var(--text-3)">
+        <span class="mono" style="color:var(--red)">--- ${escHtml(beforeLabel)}</span>
+        <span class="mono" style="color:var(--green);margin-left:14px">+++ ${escHtml(afterLabel)}</span>
+      </div>
+      <div class="pa-git-diff-content mono" style="max-height:560px;overflow:auto;background:var(--bg-1);font-size:10.5px;line-height:1.45">
+        ${rows.map(renderUnifiedDiffRow).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function renderUnifiedDiffRow(row) {
+  if (row.type === 'file') {
+    const color = row.text.startsWith('---') ? 'var(--red)' : 'var(--green)';
+    return `<div style="display:flex;color:${color};background:var(--bg-3);padding:2px 10px">${escHtml(row.text)}</div>`;
+  }
+
+  if (row.type === 'skip' || row.type === 'note') {
+    return `<div style="display:flex;color:var(--text-3);background:var(--bg-3);padding:3px 10px;font-style:italic">${escHtml(row.text)}</div>`;
+  }
+
+  const mark = row.type === 'add' ? '+' : (row.type === 'del' ? '-' : ' ');
+  const bg = row.type === 'add' ? 'rgba(34,197,94,0.12)' : (row.type === 'del' ? 'rgba(239,68,68,0.12)' : 'transparent');
+  const color = row.type === 'add' ? 'var(--green)' : (row.type === 'del' ? 'var(--red)' : 'var(--text-2)');
+
+  return `
+    <div class="pa-diff-line" style="display:grid;grid-template-columns:52px 52px 18px 1fr;gap:8px;background:${bg};color:${color};padding:1px 10px;white-space:pre-wrap;word-break:break-word">
+      <span style="color:var(--text-3);text-align:right;user-select:none">${row.oldLine || ''}</span>
+      <span style="color:var(--text-3);text-align:right;user-select:none">${row.newLine || ''}</span>
+      <span style="font-weight:bold;user-select:none">${mark}</span>
+      <span>${escHtml(row.text)}</span>
+    </div>
+  `;
+}
+
 function renderInlinePromptDiff(container, comp, prevIdx, idx) {
+  container.innerHTML = renderInlinePromptDiffMarkup(comp, prevIdx, idx);
+  bindSynchronizedScroll(container);
+}
+
+function renderInlinePromptDiffMarkup(comp, prevIdx, idx) {
+  if (!comp) return '';
+
   const trimmedItems = comp.trimmedItems || [];
 
   if (trimmedItems.length === 0) {
-    container.innerHTML = `
+    return `
       <div style="background:var(--bg-3);padding:10px 14px;border-radius:var(--radius-sm);font-size:11px;color:var(--text-3)">
         ✓ Call #${idx + 1}'s prompt prefix matched Call #${prevIdx + 1} exactly. No message content was pruned or modified.
       </div>
     `;
-    return;
   }
 
-  container.innerHTML = `
+  return `
     <div style="font-weight:bold;font-size:11.5px;color:var(--text);margin-bottom:8px">
       🔍 Prompt Content Comparison (Call #${prevIdx + 1} vs Call #${idx + 1}):
     </div>
@@ -506,8 +934,83 @@ function renderInlinePromptDiff(container, comp, prevIdx, idx) {
       ${trimmedItems.map(item => renderDiffBoxMarkup(item, prevIdx, idx)).join('')}
     </div>
   `;
+}
 
-  bindSynchronizedScroll(container);
+function renderFullPromptComparison(comp, prevIdx, idx) {
+  if (!comp) return '';
+
+  const changedItems = comp.changedItems || [];
+  const addedItems = comp.addedItems || [];
+  const removedItems = comp.removedItems || [];
+  const hasChanges = changedItems.length > 0 || addedItems.length > 0 || removedItems.length > 0;
+  const beforeSize = comp.call1?.requestSize || comp.prompt1?.requestSize || 0;
+  const afterSize = comp.call2?.requestSize || comp.prompt2?.requestSize || 0;
+  const delta = afterSize - beforeSize;
+  const deltaText = delta >= 0 ? `+${fmtBytes(delta)}` : `-${fmtBytes(Math.abs(delta))}`;
+  const deltaColor = delta >= 0 ? '#f59e0b' : 'var(--green)';
+
+  if (!hasChanges) {
+    return `
+      <div style="background:var(--bg-3);padding:10px 14px;border-radius:var(--radius-sm);font-size:11px;color:var(--text-3)">
+        Cache creation was recorded, but the reconstructed prompt body matched the previous call.
+      </div>
+    `;
+  }
+
+  return `
+    <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden">
+      <div style="background:var(--bg-3);padding:10px 14px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;gap:12px">
+        <div>
+          <div style="font-weight:bold;font-size:11.5px;color:#f59e0b">✍️ Cache Creation Prompt Comparison</div>
+          <div style="font-size:10.5px;color:var(--text-3);margin-top:2px">Full effective prompt before and after cache creation, excluding the initial prompt case.</div>
+        </div>
+        <div class="mono" style="font-size:11px;color:${deltaColor};font-weight:bold">
+          Call #${prevIdx + 1} ${fmtBytes(beforeSize)} → Call #${idx + 1} ${fmtBytes(afterSize)} (${deltaText})
+        </div>
+      </div>
+      <div style="padding:12px;display:flex;flex-direction:column;gap:10px">
+        ${changedItems.map(item => renderDiffBoxMarkup(item, prevIdx, idx)).join('')}
+        ${addedItems.map(item => renderAddedPromptMessageMarkup(item, idx)).join('')}
+        ${removedItems.map(item => renderRemovedPromptMessageMarkup(item, prevIdx)).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function renderAddedPromptMessageMarkup(item, idx) {
+  return `
+    <div class="panel" style="border:1px solid rgba(34,197,94,0.3);border-radius:var(--radius-sm);overflow:hidden;background:rgba(34,197,94,0.04)">
+      <div style="background:var(--bg-3);padding:10px 14px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)">
+        <div style="display:flex;align-items:center;gap:10px">
+          <strong style="color:var(--text);font-size:12px">msg[${item.index}]</strong>
+          <span style="text-transform:uppercase;font-weight:700;color:var(--accent-2);font-size:10.5px">(${escHtml(item.role)})</span>
+          <span style="color:var(--green);font-size:11px;font-weight:bold">Added in Call #${idx + 1}</span>
+        </div>
+        <span class="mono" style="color:var(--green);font-weight:bold;font-size:11px">${fmtBytes(item.after?.size || 0)}</span>
+      </div>
+      <div class="mono" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:10px;max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all">
+        ${escHtml(item.after?.fullText || '')}
+      </div>
+    </div>
+  `;
+}
+
+function renderRemovedPromptMessageMarkup(item, prevIdx) {
+  return `
+    <div class="panel" style="border:1px solid rgba(239,68,68,0.3);border-radius:var(--radius-sm);overflow:hidden;background:rgba(239,68,68,0.04)">
+      <div style="background:var(--bg-3);padding:10px 14px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)">
+        <div style="display:flex;align-items:center;gap:10px">
+          <strong style="color:var(--text);font-size:12px">msg[${item.index}]</strong>
+          <span style="text-transform:uppercase;font-weight:700;color:var(--accent-2);font-size:10.5px">(${escHtml(item.role)})</span>
+          <span style="color:var(--red);font-size:11px;font-weight:bold">Removed after Call #${prevIdx + 1}</span>
+        </div>
+        <span class="mono" style="color:var(--red);font-weight:bold;font-size:11px">${fmtBytes(item.before?.size || 0)}</span>
+      </div>
+      <div class="mono" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:10px;max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all">
+        ${escHtml(item.before?.fullText || '')}
+      </div>
+    </div>
+  `;
 }
 
 function renderReductionSequenceFeed(body, events) {
@@ -582,8 +1085,23 @@ function renderDiffBoxMarkup(item, prevCallIdx, callIdx, category, targetName, i
   const diff = item.diffChunks || {};
   const prefix = diff.prefix || '';
   const suffix = diff.suffix || '';
-  const removedText = diff.removedText || '(Content removed)';
+  const removedText = diff.removedText || '';
   const insertedText = diff.insertedText || '';
+  const beforeSize = item.before?.size || 0;
+  const afterSize = item.after?.size || 0;
+  const bytesDelta = item.bytesDelta != null ? item.bytesDelta : (afterSize - beforeSize);
+  const isExpanded = bytesDelta > 10;
+  const isReduced = bytesDelta < -10;
+  const metricColor = isExpanded ? '#f59e0b' : (isReduced ? 'var(--green)' : '#38bdf8');
+  const metricLabel = isExpanded
+    ? `Expanded ${fmtBytes(bytesDelta)}`
+    : (isReduced ? `Saved ${fmtBytes(Math.abs(bytesDelta))}` : 'Modified');
+  const bannerTitle = isExpanded
+    ? `🟢 EXACT CONTENT ADDED IN CALL #${callIdx + 1}:`
+    : (isReduced ? `✂️ EXACT CONTENT REMOVED FROM CALL #${prevCallIdx + 1}:` : '🔁 EXACT CONTENT CHANGED:');
+  const bannerText = isExpanded ? insertedText : (removedText || insertedText || '(Content changed)');
+  const bannerColor = isExpanded ? 'var(--green)' : (isReduced ? 'var(--red)' : '#38bdf8');
+  const bannerBg = isExpanded ? 'rgba(34,197,94,0.08)' : (isReduced ? 'rgba(239,68,68,0.08)' : 'rgba(56,189,248,0.08)');
 
   const headerLabel = category ? `
     <span style="background:rgba(255,255,255,0.06);padding:2px 8px;border-radius:12px;font-size:10.5px;font-weight:bold;color:${catColor || 'var(--green)'}">
@@ -602,17 +1120,17 @@ function renderDiffBoxMarkup(item, prevCallIdx, callIdx, category, targetName, i
           ${headerLabel}
         </div>
         <div>
-          <span class="mono" style="color:var(--green);font-weight:bold;font-size:12px;background:rgba(34,197,94,0.12);padding:3px 10px;border-radius:var(--radius-sm);border:1px solid rgba(34,197,94,0.3)">
-            ✂️ Saved ${fmtBytes(item.bytesSaved)} (${fmtBytes(item.before?.size || 0)} → ${fmtBytes(item.after?.size || 0)})
+          <span class="mono" style="color:${metricColor};font-weight:bold;font-size:12px;background:rgba(255,255,255,0.06);padding:3px 10px;border-radius:var(--radius-sm);border:1px solid rgba(255,255,255,0.12)">
+            ${metricLabel} (${fmtBytes(beforeSize)} → ${fmtBytes(afterSize)})
           </span>
         </div>
       </div>
 
-      <!-- Exact Removed Content Highlight Banner -->
-      <div style="background:rgba(239,68,68,0.08);border-bottom:1px solid rgba(239,68,68,0.25);padding:8px 14px;font-size:11px">
-        <span style="color:var(--red);font-weight:bold">✂️ EXACT CONTENT REMOVED FROM CALL #${prevCallIdx + 1}:</span>
-        <div class="mono" style="margin-top:4px;background:rgba(239,68,68,0.15);color:var(--red);padding:6px 10px;border-radius:var(--radius-sm);border-left:3px solid var(--red);max-height:90px;overflow-y:auto;white-space:pre-wrap;word-break:break-all">
-          ${escHtml(removedText)}
+      <!-- Exact Changed Content Highlight Banner -->
+      <div style="background:${bannerBg};border-bottom:1px solid rgba(255,255,255,0.12);padding:8px 14px;font-size:11px">
+        <span style="color:${bannerColor};font-weight:bold">${bannerTitle}</span>
+        <div class="mono" style="margin-top:4px;background:rgba(255,255,255,0.06);color:${bannerColor};padding:6px 10px;border-radius:var(--radius-sm);border-left:3px solid ${bannerColor};max-height:90px;overflow-y:auto;white-space:pre-wrap;word-break:break-all">
+          ${escHtml(bannerText)}
         </div>
       </div>
 
@@ -622,11 +1140,11 @@ function renderDiffBoxMarkup(item, prevCallIdx, callIdx, category, targetName, i
         <div style="background:var(--bg-2);padding:10px 12px">
           <div style="font-weight:bold;font-size:10.5px;color:var(--red);margin-bottom:6px;display:flex;justify-content:space-between">
             <span>🔴 BEFORE in Call #${prevCallIdx + 1} (Original)</span>
-            <span class="mono">${fmtBytes(item.before?.size || 0)}</span>
+            <span class="mono">${fmtBytes(beforeSize)}</span>
           </div>
           <div class="mono pa-sbs-left" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border);max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all">
             ${escHtml(prefix)}
-            <span style="background:rgba(239,68,68,0.25);color:var(--red);font-weight:bold;padding:2px 4px;border-radius:2px">${escHtml(removedText)}</span>
+            ${removedText ? `<span style="background:rgba(239,68,68,0.25);color:var(--red);font-weight:bold;padding:2px 4px;border-radius:2px">${escHtml(removedText)}</span>` : ''}
             ${escHtml(suffix)}
           </div>
         </div>
@@ -635,7 +1153,7 @@ function renderDiffBoxMarkup(item, prevCallIdx, callIdx, category, targetName, i
         <div style="background:var(--bg-2);padding:10px 12px">
           <div style="font-weight:bold;font-size:10.5px;color:var(--green);margin-bottom:6px;display:flex;justify-content:space-between">
             <span>🟢 AFTER in Call #${callIdx + 1} (Sent Payload)</span>
-            <span class="mono">${fmtBytes(item.after?.size || 0)}</span>
+            <span class="mono">${fmtBytes(afterSize)}</span>
           </div>
           <div class="mono pa-sbs-right" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border);max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all">
             ${escHtml(prefix)}

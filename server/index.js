@@ -27,7 +27,7 @@ const testingRouter = require('./routes/testing')(db);
 const networkRouter = require('./routes/network')(getStore, getProxyStatus, getClientCount, getMockRules, addMockRule, deleteMockRule, getInterceptState, setInterceptState, resolveInterceptedRequest, forwardAllPending);
 
 // Prompt Analytics routes
-const promptAnalyticsRouter = require('./routes/prompt-analytics')(db, config);
+const promptAnalyticsRouter = require('./routes/prompt-analytics')(db, config, getStore);
 
 app.use('/api', testingRouter);
 app.use('/api', networkRouter);
@@ -68,6 +68,10 @@ app.post('/api/refresh', async (req, res) => {
 // GET /api/refresh/status
 app.get('/api/refresh/status', (req, res) => {
   res.json({ parsing });
+});
+
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: `API route not found: ${req.method} ${req.originalUrl}` });
 });
 
 // Serve frontend static files (after build)
