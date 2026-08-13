@@ -396,6 +396,9 @@ function renderAnalytics(contentEl) {
   const cmdSaved = (cats.truncatedCommands || []).reduce((s, c) => s + c.bytesSaved, 0);
   const envSaved = cats.environmentSnapshots?.bytesSaved || 0;
 
+  const scratchSum = data.scratchSummary || { count: 0, totalSavedBytes: 0 };
+  const scratchSaved = scratchSum.totalSavedBytes || 0;
+
   renderTaskMetricsBar(data.task, calls);
 
   contentEl.innerHTML = `
@@ -404,7 +407,7 @@ function renderAnalytics(contentEl) {
       <div style="font-weight:bold;font-size:12.5px;color:var(--text);margin-bottom:10px">
         📌 Executive Context Reduction Summary — What Was Pruned During Task:
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(240px, 1fr));gap:12px">
         <!-- Files Truncated Card -->
         <div class="panel" style="background:var(--bg-2);border:1px solid var(--border);border-left:4px solid var(--green);padding:12px;border-radius:var(--radius-sm)">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
@@ -454,6 +457,20 @@ function renderAnalytics(contentEl) {
           </div>
           <div style="font-size:11px;color:var(--text-2);background:var(--bg-3);padding:8px;border-radius:2px;margin-top:10px">
             ✓ Keeps latest workspace state while purging historical duplicates.
+          </div>
+        </div>
+
+        <!-- Immediate Scratch Offloads Card -->
+        <div class="panel" style="background:var(--bg-2);border:1px solid var(--border);border-left:4px solid #e879f9;padding:12px;border-radius:var(--radius-sm)">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <span style="font-weight:bold;font-size:11.5px;color:#e879f9">⚡ Immediate Scratch Offloads</span>
+            <span class="mono" style="font-size:11px;font-weight:bold;color:#e879f9">-${fmtBytes(scratchSaved)}</span>
+          </div>
+          <div style="font-size:10.5px;color:var(--text-3);margin-bottom:8px">
+            ${scratchSum.count || 0} tool outputs offloaded to scratch/ files:
+          </div>
+          <div style="font-size:11px;color:var(--text-2);background:var(--bg-3);padding:8px;border-radius:2px;margin-top:10px">
+            ✓ Offloads raw bulk logs to disk at write-time, keeping only compact Head+Tail snippets in prompt.
           </div>
         </div>
       </div>
@@ -536,6 +553,19 @@ function renderAnalytics(contentEl) {
         <!-- Rendered dynamically -->
       </div>
     </div>
+
+    <!-- Dedicated Scratch Offload Inspector Panel -->
+    <div id="pa-scratch-section" class="panel pa-comparison-panel-full" style="margin-top:16px">
+      <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+        <span>⚡ Immediate Write-Time Scratch Offload Inspector (${(data.scratchEvents || []).length} offloaded outputs)</span>
+        <div style="font-size:11px;color:var(--text-3)">
+          Comparing raw tool logs in <code style="color:#38bdf8">scratch/*.log</code> vs retained prompt preview payload sent to AI model
+        </div>
+      </div>
+      <div id="pa-scratch-body" class="panel-body" style="padding:16px">
+        <!-- Rendered dynamically -->
+      </div>
+    </div>
   `;
 
   bindAnalyticsEvents(calls);
@@ -544,6 +574,7 @@ function renderAnalytics(contentEl) {
 
   renderReductionSequenceFeed(document.getElementById('pa-comparison-body'), events);
   renderCacheObservabilityPanel(document.getElementById('pa-cache-body'), calls);
+  renderScratchInspector(document.getElementById('pa-scratch-body'), data.scratchEvents || []);
 
   document.getElementById('pa-detach-chart-btn')?.addEventListener('click', () => {
     openFullscreenChartModal(calls, data.task);
@@ -2510,4 +2541,72 @@ export async function silentRefreshPromptAnalytics() {
   } catch (e) {
     console.error('Silent refresh failed:', e);
   }
+}
+
+function renderScratchInspector(container, scratchEvents) {
+  if (!container) return;
+  if (!scratchEvents || scratchEvents.length === 0) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding:20px">
+        <p style="color:var(--text-3);font-size:12px">No write-time scratch offloads detected for this task.</p>
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:16px">
+      ${scratchEvents.map(evt => {
+        const rawSizeStr = fmtBytes(evt.rawBytes);
+        const promptSizeStr = fmtBytes(evt.promptBytes);
+        const savedStr = fmtBytes(evt.bytesSaved);
+        const savingsPct = evt.rawBytes > 0 ? ((evt.bytesSaved / evt.rawBytes) * 100).toFixed(1) : '0';
+
+        return `
+          <div class="panel" style="border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-2)">
+            <div style="background:var(--bg-3);padding:10px 14px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);flex-wrap:wrap;gap:8px">
+              <div style="display:flex;align-items:center;gap:10px">
+                <span style="background:rgba(232,121,249,0.15);color:#e879f9;padding:2px 8px;border-radius:12px;font-size:10.5px;font-weight:bold;border:1px solid rgba(232,121,249,0.3)">
+                  ⚡ ${escHtml(evt.toolName)}
+                </span>
+                <strong style="color:var(--text);font-size:11.5px" class="mono">${escHtml(evt.filename)}</strong>
+                <span style="color:var(--text-3);font-size:11px">Call #${evt.callIndex + 1}</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <span class="mono" style="color:#e879f9;font-size:11.5px;font-weight:bold">
+                  Saved ${savedStr} (${savingsPct}%)
+                </span>
+              </div>
+            </div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border)">
+              <!-- Left Pane: Raw Output in scratch/*.log -->
+              <div style="background:var(--bg-2);padding:10px 12px">
+                <div style="font-weight:bold;font-size:10.5px;color:var(--red);margin-bottom:6px;display:flex;justify-content:space-between">
+                  <span>🔴 RAW UNTRUNCATED OUTPUT (scratch/${escHtml(evt.filename)})</span>
+                  <span class="mono">${rawSizeStr}</span>
+                </div>
+                <div class="mono pa-sbs-left" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border);max-height:240px;overflow:auto;white-space:pre-wrap;word-break:break-all">
+                  ${escHtml(evt.rawPreviewText || '(Empty output)')}
+                </div>
+              </div>
+
+              <!-- Right Pane: Retained Prompt Payload Snippet -->
+              <div style="background:var(--bg-2);padding:10px 12px">
+                <div style="font-weight:bold;font-size:10.5px;color:var(--green);margin-bottom:6px;display:flex;justify-content:space-between">
+                  <span>🟢 RETAINED PROMPT PAYLOAD (Sent to LLM)</span>
+                  <span class="mono">${promptSizeStr}</span>
+                </div>
+                <div class="mono pa-sbs-right" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border);max-height:240px;overflow:auto;white-space:pre-wrap;word-break:break-all">
+                  ${escHtml(evt.promptSnippetText || '(Snippet in prompt payload)')}
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+
+  bindSynchronizedScroll(container);
 }

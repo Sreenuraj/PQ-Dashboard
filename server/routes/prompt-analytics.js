@@ -662,17 +662,91 @@ module.exports = (db, config, getStore) => {
       status: taskMeta?.status || 'completed',
     };
 
-    const fileCategorySummary = Object.keys(filePruningMap).map(f => ({
-      path: f,
-      count: filePruningMap[f].count,
-      bytesSaved: filePruningMap[f].bytesSaved,
-    })).sort((a, b) => b.bytesSaved - a.bytesSaved);
+    // ── Scan scratch/ directory for write-time offloaded logs ──
+    const scratchDir = path.join(taskPath, 'scratch');
+    const scratchEvents = [];
+    let totalScratchRawBytes = 0;
+    let totalScratchPromptBytes = 0;
 
-    const cmdCategorySummary = Object.keys(cmdPruningMap).map(c => ({
-      command: c,
-      count: cmdPruningMap[c].count,
-      bytesSaved: cmdPruningMap[c].bytesSaved,
-    })).sort((a, b) => b.bytesSaved - a.bytesSaved);
+    if (fs.existsSync(scratchDir)) {
+      try {
+        const scratchFiles = fs.readdirSync(scratchDir).filter(f => f.endsWith('.log'));
+        for (const fname of scratchFiles) {
+          const fpath = path.join(scratchDir, fname);
+          const stat = fs.statSync(fpath);
+          const rawBytes = stat.size;
+          totalScratchRawBytes += rawBytes;
+
+          let rawPreviewText = '';
+          try {
+            const rawText = fs.readFileSync(fpath, 'utf8');
+            rawPreviewText = rawText.length > 2500 ? rawText.substring(0, 2500) + `\n... [${rawText.length - 2500} more chars]` : rawText;
+          } catch {}
+
+          let toolName = 'tool_output';
+          const match = fname.match(/tool_([a-z_]+)_/i);
+          if (match) toolName = match[1];
+
+          let promptSnippetText = '';
+          let matchedCallIndex = -1;
+          let matchedMsgIndex = -1;
+
+          for (let cIdx = 0; cIdx < apiCalls.length; cIdx++) {
+            const call = apiCalls[cIdx];
+            const msgs = getEffectiveMessagesAtTs(apiHistory, contextUpdates, call.ts, call.historyIndex);
+            for (let mIdx = 0; mIdx < msgs.length; mIdx++) {
+              const str = extractTextContent(msgs[mIdx]?.content);
+              if (str.includes(fname) || (str.includes('scratch') && str.includes(toolName))) {
+                matchedCallIndex = cIdx;
+                matchedMsgIndex = mIdx;
+                promptSnippetText = str;
+                break;
+              }
+            }
+            if (matchedCallIndex >= 0) break;
+          }
+
+          if (!promptSnippetText) {
+            const uiMatch = uiMessages.find(m => (m.text && typeof m.text === 'string' && m.text.includes(fname)));
+            if (uiMatch) {
+              promptSnippetText = extractTextContent(uiMatch.text);
+            }
+          }
+
+          const promptBytes = promptSnippetText ? promptSnippetText.length : Math.min(rawBytes, 1500);
+          totalScratchPromptBytes += promptBytes;
+          const bytesSaved = Math.max(0, rawBytes - promptBytes);
+
+          scratchEvents.push({
+            filename: fname,
+            toolName,
+            rawBytes,
+            promptBytes,
+            bytesSaved,
+            rawPreviewText,
+            promptSnippetText: promptSnippetText || '(Snippet in prompt payload)',
+            callIndex: matchedCallIndex >= 0 ? matchedCallIndex : 0,
+            msgIndex: matchedMsgIndex,
+          });
+
+          if (matchedCallIndex >= 0 && apiCalls[matchedCallIndex]) {
+            apiCalls[matchedCallIndex].scratchOffloadedBytes = (apiCalls[matchedCallIndex].scratchOffloadedBytes || 0) + bytesSaved;
+          }
+        }
+      } catch (e) {
+        console.error('Scratch scan error:', e);
+      }
+    }
+
+    scratchEvents.sort((a, b) => b.bytesSaved - a.bytesSaved);
+
+    const totalScratchSavedBytes = Math.max(0, totalScratchRawBytes - totalScratchPromptBytes);
+    const scratchSummary = {
+      count: scratchEvents.length,
+      totalRawBytes: totalScratchRawBytes,
+      totalPromptBytes: totalScratchPromptBytes,
+      totalSavedBytes: totalScratchSavedBytes,
+    };
 
     res.json({
       task: taskObj,
@@ -690,6 +764,8 @@ module.exports = (db, config, getStore) => {
         environmentSnapshots: { count: envPruningCount, bytesSaved: envPruningBytes },
       },
       reductionEvents,
+      scratchSummary,
+      scratchEvents,
       totalMessages: apiHistory.length,
       systemPromptCapture, // null if proxy never captured it for this task
       systemPromptNote: systemPromptAvailable
