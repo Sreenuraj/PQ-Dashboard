@@ -785,31 +785,68 @@ module.exports = (db, config, getStore) => {
       totalSavedBytes: totalScratchSavedBytes,
     };
 
-    // Calculate Financial Cost Breakdown
-    const modelInfo = getModelInfo(detectedModelId);
-    const inputPricePerM = matchedPricing?.prompt || modelInfo?.inputPrice || 3.0;
-    const outputPricePerM = matchedPricing?.completion || modelInfo?.outputPrice || 15.0;
-    const cacheReadPricePerM = matchedPricing?.cacheRead || (inputPricePerM * 0.1);
-    const cacheWritePricePerM = matchedPricing?.cacheWrite || (inputPricePerM * 1.25);
+    // Calculate Financial Cost Breakdown per API Call (Supports mid-task model switches!)
+    let totalInputCost = 0;
+    let totalOutputCost = 0;
+    let totalCacheReadCost = 0;
+    let totalCacheWriteCost = 0;
 
-    const totalTokensIn = apiCalls.reduce((s, c) => s + (c.tokensIn || 0), 0);
-    const totalTokensOut = apiCalls.reduce((s, c) => s + (c.tokensOut || 0), 0);
-    const totalCacheReads = apiCalls.reduce((s, c) => s + (c.cacheReads || 0), 0);
-    const totalCacheWrites = apiCalls.reduce((s, c) => s + (c.cacheWrites || 0), 0);
+    let totalTokensIn = 0;
+    let totalTokensOut = 0;
+    let totalCacheReads = 0;
+    let totalCacheWrites = 0;
+
+    const modelsUsedSet = new Set();
+    const modelRateMap = {};
+
+    for (const c of apiCalls) {
+      const callModel = c.modelId || detectedModelId || 'unknown';
+      modelsUsedSet.add(callModel);
+
+      if (!modelRateMap[callModel]) {
+        const pricing = getModelCachePricing(callModel, openrouterCache);
+        const info = getModelInfo(callModel);
+        const inRate = pricing?.prompt || info?.inputPrice || 3.0;
+        const outRate = pricing?.completion || info?.outputPrice || 15.0;
+        const readRate = pricing?.cacheRead || (inRate * 0.1);
+        const writeRate = pricing?.cacheWrite || (inRate * 1.25);
+        modelRateMap[callModel] = { inRate, outRate, readRate, writeRate };
+      }
+
+      const rates = modelRateMap[callModel];
+      const inTok = c.tokensIn || 0;
+      const outTok = c.tokensOut || 0;
+      const readTok = c.cacheReads || 0;
+      const writeTok = c.cacheWrites || 0;
+
+      totalTokensIn += inTok;
+      totalTokensOut += outTok;
+      totalCacheReads += readTok;
+      totalCacheWrites += writeTok;
+
+      totalInputCost += (inTok / 1e6) * rates.inRate;
+      totalOutputCost += (outTok / 1e6) * rates.outRate;
+      totalCacheReadCost += (readTok / 1e6) * rates.readRate;
+      totalCacheWriteCost += (writeTok / 1e6) * rates.writeRate;
+    }
+
     const calculatedTotalCost = apiCalls.reduce((s, c) => s + (c.cost || 0), 0);
+    const modelsUsedList = Array.from(modelsUsedSet);
 
-    const inputCost = (totalTokensIn / 1e6) * inputPricePerM;
-    const outputCost = (totalTokensOut / 1e6) * outputPricePerM;
-    const cacheReadCost = (totalCacheReads / 1e6) * cacheReadPricePerM;
-    const cacheWriteCost = (totalCacheWrites / 1e6) * cacheWritePricePerM;
+    const avgInputRate = totalTokensIn > 0 ? (totalInputCost / totalTokensIn) * 1e6 : (modelRateMap[detectedModelId]?.inRate || 3.0);
+    const avgOutputRate = totalTokensOut > 0 ? (totalOutputCost / totalTokensOut) * 1e6 : (modelRateMap[detectedModelId]?.outRate || 15.0);
+    const avgCacheReadRate = totalCacheReads > 0 ? (totalCacheReadCost / totalCacheReads) * 1e6 : (modelRateMap[detectedModelId]?.readRate || 0.30);
+    const avgCacheWriteRate = totalCacheWrites > 0 ? (totalCacheWriteCost / totalCacheWrites) * 1e6 : (modelRateMap[detectedModelId]?.writeRate || 3.75);
 
     const financialBreakdown = {
-      modelId: detectedModelId || 'unknown',
-      totalCost: calculatedTotalCost || (inputCost + outputCost + cacheReadCost + cacheWriteCost),
-      input: { tokens: totalTokensIn, pricePerM: inputPricePerM, cost: inputCost },
-      output: { tokens: totalTokensOut, pricePerM: outputPricePerM, cost: outputCost },
-      cacheRead: { tokens: totalCacheReads, pricePerM: cacheReadPricePerM, cost: cacheReadCost },
-      cacheWrite: { tokens: totalCacheWrites, pricePerM: cacheWritePricePerM, cost: cacheWriteCost },
+      modelId: modelsUsedList.length > 1 ? `Multi-Model (${modelsUsedList.map(m => m.split('/').pop()).join(', ')})` : (detectedModelId || 'unknown'),
+      modelsUsed: modelsUsedList,
+      isMultiModel: modelsUsedList.length > 1,
+      totalCost: calculatedTotalCost || (totalInputCost + totalOutputCost + totalCacheReadCost + totalCacheWriteCost),
+      input: { tokens: totalTokensIn, pricePerM: avgInputRate, cost: totalInputCost },
+      output: { tokens: totalTokensOut, pricePerM: avgOutputRate, cost: totalOutputCost },
+      cacheRead: { tokens: totalCacheReads, pricePerM: avgCacheReadRate, cost: totalCacheReadCost },
+      cacheWrite: { tokens: totalCacheWrites, pricePerM: avgCacheWriteRate, cost: totalCacheWriteCost },
     };
 
     res.json({
