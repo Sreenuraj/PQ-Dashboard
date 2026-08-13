@@ -208,6 +208,8 @@ function initSchema(db) {
     'ALTER TABLE tasks ADD COLUMN agent_count INTEGER DEFAULT 0',
     'ALTER TABLE tasks ADD COLUMN is_multi_agent INTEGER DEFAULT 0',
     'ALTER TABLE tasks ADD COLUMN agent_sequence_json TEXT',
+    // Custom task label
+    'ALTER TABLE tasks ADD COLUMN label TEXT',
   ];
   for (const sql of migrations) {
     try { db.exec(sql); } catch (e) {
@@ -255,6 +257,13 @@ function saveTask(db, taskId, source, summary, metadata, focusCompletion, events
   const status = deriveStatus(events, summary);
   const cls = classification || { category: 'general', editTurns: 0, oneShotTurns: 0, retryCycles: 0, shellCommands: {} };
 
+  // Preserve existing label if task re-parsed
+  let existingLabel = null;
+  try {
+    const row = db.prepare('SELECT label FROM tasks WHERE id = ?').get(taskId);
+    if (row && row.label) existingLabel = row.label;
+  } catch (e) {}
+
   // Phase 4: compute denormalized agent context + per-session heuristic metrics.
   // The events are still in the input array at this point; once we insert them
   // we could re-query, but doing it inline avoids a second pass.
@@ -271,8 +280,8 @@ function saveTask(db, taskId, source, summary, metadata, focusCompletion, events
      status,has_reasoning,has_context_reset,first_message,focus_chain_completion,
      environment,pq_version,event_count,
      activity_category,edit_turns,oneshot_turns,retry_cycles,shell_command_count,
-     primary_agent,agent_count,is_multi_agent,agent_sequence_json)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+     primary_agent,agent_count,is_multi_agent,agent_sequence_json,label)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
     taskId, source,
     summary.first_ts, summary.last_ts, summary.duration,
@@ -295,7 +304,8 @@ function saveTask(db, taskId, source, summary, metadata, focusCompletion, events
     agentMeta.primary_agent,
     agentMeta.agent_count,
     agentMeta.is_multi_agent,
-    agentMeta.agent_sequence_json
+    agentMeta.agent_sequence_json,
+    existingLabel
   );
 
   // Delete old events + related data for this task (replace)

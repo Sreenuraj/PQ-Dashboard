@@ -53,6 +53,16 @@ export async function put(path, body = {}) {
   return res.json();
 }
 
+export async function patch(path, body = {}) {
+  const res = await fetch(`${API}${path}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) throw new Error(`API error ${res.status}`);
+  return res.json();
+}
+
 export async function del(path) {
   const res = await fetch(`${API}${path}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`API error ${res.status}`);
@@ -77,6 +87,13 @@ export const api = {
   metricDefs:    ()     => get('/analytics/metric-defs'),
   tasks:         (p={}) => get('/tasks', p),
   task:          (id)   => get(`/tasks/${id}`),
+  updateTaskLabel: async (id, label) => {
+    try {
+      return await patch(`/tasks/${id}/label`, { label });
+    } catch (e) {
+      return await post(`/prompt-analytics/${id}/label`, { label });
+    }
+  },
   taskEvents:    (id,p={}) => get(`/tasks/${id}/events`, p),
   evaluate:      (id)   => get(`/tasks/${id}/evaluate`),
   testTask:      (id,p={}) => get(`/tasks/${id}/test`, p),

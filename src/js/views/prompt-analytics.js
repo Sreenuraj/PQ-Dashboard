@@ -31,6 +31,15 @@ function fmtTime(ts) {
   return d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
+function fmtDuration(ms) {
+  if (!ms || ms <= 0) return '0s';
+  const sec = Math.floor(ms / 1000);
+  const min = Math.floor(sec / 60);
+  const remSec = sec % 60;
+  if (min === 0) return `${remSec}s`;
+  return `${min}m ${remSec}s`;
+}
+
 function fmtDelta(bytes) {
   if (bytes === 0) return '<span class="pa-delta-zero" title="No size change from previous call">±0</span>';
   if (bytes > 0) return `<span class="pa-delta-up" title="Request size expanded by ${fmtBytes(bytes)}">▲ +${fmtBytes(bytes)}</span>`;
@@ -40,6 +49,14 @@ function fmtDelta(bytes) {
 // ── State ──
 let currentTaskId = null;
 let analyticsData = null;
+let allTasksList = [];
+
+let activeMode = 'single'; // 'single' | 'compare'
+let compareSelectedTaskIds = [];
+let compareDataMap = {}; // taskId -> analyticsData
+let compareStepIndex = 0;
+let useSharedCompareScale = true;
+const COMPARE_TASK_COLORS = ['#ec4899', '#06b6d4', '#f59e0b', '#a78bfa', '#10b981', '#ef4444', '#38bdf8'];
 
 let hoveredCallIndex = null;
 let chartCanvas = null;
@@ -51,72 +68,153 @@ let chartSeries = {
   cacheReads: true,
   cacheWrites: true,
   contextWindow: true,
+  cumulativeCost: true,
+  cacheHitPct: true,
+  stepLatency: false,
 };
+
+let fullscreenZoomRange = [0, 100];
 
 // ── Main Render ──
 export async function renderPromptAnalytics(container, params) {
   const taskIdFromUrl = params?.get('task') || null;
+  const modeFromUrl = params?.get('mode') || 'single';
+  activeMode = modeFromUrl;
 
-  let tasks = [];
   try {
-    const result = await api.tasks({ limit: 50, page: 1 });
-    tasks = result.tasks || [];
+    const result = await api.tasks({ limit: 100, page: 1 });
+    allTasksList = result.tasks || [];
+    allTasksList.forEach(t => {
+      t.label = getSavedTaskLabel(t.id, t.label);
+    });
   } catch (e) {
     console.error('Failed to load tasks:', e);
   }
 
   container.innerHTML = `
-    <div class="view-header">
-      <h1 class="view-title">🔬 Prompt Observability & Context Reduction</h1>
-      <p class="view-subtitle">Executive summary and chronological trace of content pruned from LLM context windows</p>
+    <!-- Top View Header with Mode Switcher -->
+    <div class="view-header" style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:12px">
+      <div>
+        <h1 class="view-title">🔬 Prompt Observability & Context Reduction</h1>
+        <p class="view-subtitle">Executive summary, cumulative cost/time curves, and chronological trace of context windows</p>
+      </div>
+      <div style="display:flex;gap:6px;background:var(--bg-3);padding:4px;border-radius:var(--radius-sm);border:1px solid var(--border)">
+        <button id="pa-tab-single" class="action-btn ${activeMode === 'single' ? 'primary' : 'secondary'}" style="padding:4px 14px;font-size:11.5px">🔬 Single Task Analysis</button>
+        <button id="pa-tab-compare" class="action-btn ${activeMode === 'compare' ? 'primary' : 'secondary'}" style="padding:4px 14px;font-size:11.5px">🔀 Compare Tasks</button>
+      </div>
     </div>
 
-    <!-- Task Selector -->
-    <div class="panel pa-selector-panel">
+    <!-- Task Selector Panel -->
+    <div class="panel pa-selector-panel" style="margin-bottom:16px">
       <div class="panel-body" style="padding:12px 16px">
-        <div class="pa-selector-row">
-          <label class="pa-label">Select Task</label>
-          <select id="pa-task-select" class="filter-select pa-task-select">
-            <option value="">— Choose a task to analyze —</option>
-            ${tasks.map(t => `
-              <option value="${t.id}" ${t.id === taskIdFromUrl ? 'selected' : ''}>
-                ${escHtml(t.first_message ? t.first_message.substring(0, 80) : 'Task ' + t.id)} 
-                (${t.api_call_count || 0} calls, ${fmtCost(t.total_cost)})
-              </option>
-            `).join('')}
-          </select>
-          <button id="pa-load-btn" class="action-btn primary pa-load-btn">Analyze Task</button>
+        <div id="pa-single-selector-container" style="display:${activeMode === 'single' ? 'block' : 'none'}">
+          <div class="pa-selector-row" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <label class="pa-label" style="font-weight:bold;font-size:12px">Select Task</label>
+            <select id="pa-task-select" class="filter-select pa-task-select" style="flex:1;min-width:280px">
+              <option value="">— Choose a task to analyze —</option>
+              ${allTasksList.map(t => {
+                const displayName = t.label ? `🏷️ ${escHtml(t.label)}` : escHtml(t.first_message ? t.first_message.substring(0, 75) : 'Task ' + t.id);
+                return `
+                  <option value="${t.id}" ${t.id === taskIdFromUrl ? 'selected' : ''}>
+                    ${displayName} (${t.api_call_count || 0} calls, ${fmtCost(t.total_cost)})
+                  </option>
+                `;
+              }).join('')}
+            </select>
+            <button id="pa-load-btn" class="action-btn primary pa-load-btn">Analyze Task</button>
+            <div id="pa-task-metrics-bar" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"></div>
+          </div>
+        </div>
+
+        <!-- Compare Task Selector -->
+        <div id="pa-compare-selector-container" style="display:${activeMode === 'compare' ? 'block' : 'none'}">
+          <div style="font-weight:bold;font-size:12px;margin-bottom:8px">Select 2 or more tasks to compare performance across prompt versions:</div>
+          <div id="pa-compare-tasks-list" style="display:grid;grid-template-columns:repeat(auto-fill, minmax(280px, 1fr));gap:8px;max-height:180px;overflow-y:auto;background:var(--bg-3);padding:10px;border-radius:var(--radius-sm);border:1px solid var(--border)">
+            ${allTasksList.map(t => {
+              const displayName = t.label ? `🏷️ ${escHtml(t.label)}` : escHtml(t.first_message ? t.first_message.substring(0, 45) : t.id);
+              return `
+                <label style="display:flex;align-items:center;gap:8px;font-size:11px;cursor:pointer;background:var(--bg-2);padding:6px 10px;border-radius:4px;border:1px solid var(--border)">
+                  <input type="checkbox" class="pa-compare-cb" value="${t.id}" ${compareSelectedTaskIds.includes(t.id) ? 'checked' : ''}>
+                  <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;${t.label ? 'color:#38bdf8;font-weight:bold;' : ''}" title="${escHtml(t.first_message || t.id)}">
+                    ${displayName}
+                  </span>
+                  <span class="mono" style="margin-left:auto;color:var(--text-3);font-size:10px;white-space:nowrap">${t.api_call_count || 0}c | ${fmtCost(t.total_cost)}</span>
+                </label>
+              `;
+            }).join('')}
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px">
+            <span style="font-size:11px;color:var(--text-3)"><span id="pa-compare-count">${compareSelectedTaskIds.length}</span> tasks selected for side-by-side comparison</span>
+            <button id="pa-run-compare-btn" class="action-btn primary" style="padding:6px 16px;font-size:12px">🔀 Run Side-by-Side Task Comparison</button>
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- Content -->
+    <!-- Main Content Container -->
     <div id="pa-content">
-      ${taskIdFromUrl ? '<div class="loading-state"><div class="spinner"></div><p>Loading prompt analytics...</p></div>' : `
+      ${activeMode === 'single' ? (taskIdFromUrl ? '<div class="loading-state"><div class="spinner"></div><p>Loading prompt analytics...</p></div>' : `
         <div class="empty-state" style="margin-top:40px">
           <div class="icon">🔬</div>
           <p>Select a task above to analyze its prompt history and context reductions</p>
+        </div>
+      `) : `
+        <div class="empty-state" style="margin-top:40px">
+          <div class="icon">🔀</div>
+          <p>Select 2 or more tasks above and click "Run Side-by-Side Task Comparison"</p>
         </div>
       `}
     </div>
   `;
 
+  // Bind Mode Switcher
+  document.getElementById('pa-tab-single')?.addEventListener('click', () => {
+    activeMode = 'single';
+    const taskId = currentTaskId || (allTasksList[0]?.id || '');
+    window.location.hash = taskId ? `#/prompt-analytics?task=${taskId}&mode=single` : `#/prompt-analytics?mode=single`;
+  });
+
+  document.getElementById('pa-tab-compare')?.addEventListener('click', () => {
+    activeMode = 'compare';
+    window.location.hash = `#/prompt-analytics?mode=compare`;
+  });
+
   document.getElementById('pa-load-btn')?.addEventListener('click', () => {
     const select = document.getElementById('pa-task-select');
     const taskId = select?.value;
     if (taskId) {
-      window.location.hash = `#/prompt-analytics?task=${taskId}`;
+      window.location.hash = `#/prompt-analytics?task=${taskId}&mode=single`;
     }
   });
 
   document.getElementById('pa-task-select')?.addEventListener('change', (e) => {
     if (e.target.value) {
-      window.location.hash = `#/prompt-analytics?task=${e.target.value}`;
+      window.location.hash = `#/prompt-analytics?task=${e.target.value}&mode=single`;
     }
   });
 
-  if (taskIdFromUrl) {
+  // Bind Compare Checkboxes
+  document.querySelectorAll('.pa-compare-cb').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const selected = Array.from(document.querySelectorAll('.pa-compare-cb:checked')).map(c => c.value);
+      compareSelectedTaskIds = selected;
+      const cnt = document.getElementById('pa-compare-count');
+      if (cnt) cnt.innerText = selected.length;
+    });
+  });
+
+  document.getElementById('pa-run-compare-btn')?.addEventListener('click', () => {
+    if (compareSelectedTaskIds.length < 1) {
+      alert('Please select at least 1 or 2 tasks to compare');
+      return;
+    }
+    loadCompareAnalytics(compareSelectedTaskIds);
+  });
+
+  if (activeMode === 'single' && taskIdFromUrl) {
     await loadTaskAnalytics(taskIdFromUrl);
+  } else if (activeMode === 'compare' && compareSelectedTaskIds.length > 0) {
+    await loadCompareAnalytics(compareSelectedTaskIds);
   }
 }
 
@@ -131,6 +229,41 @@ async function loadTaskAnalytics(taskId) {
 
   try {
     analyticsData = await api.promptAnalytics(taskId);
+    if (analyticsData) {
+      if (!analyticsData.task) {
+        analyticsData.task = { id: taskId };
+      }
+      analyticsData.task.label = getSavedTaskLabel(taskId, analyticsData.task.label);
+
+      let item = allTasksList.find(t => t.id === taskId);
+      if (!item) {
+        item = {
+          id: taskId,
+          label: analyticsData.task.label,
+          first_message: analyticsData.task.firstMessage || `Task ${taskId}`,
+          total_cost: analyticsData.task.totalCost || 0,
+          api_call_count: analyticsData.apiCalls?.length || 0,
+        };
+        allTasksList.unshift(item);
+      } else {
+        item.label = analyticsData.task.label;
+      }
+
+      const select = document.getElementById('pa-task-select');
+      if (select) {
+        select.innerHTML = `
+          <option value="">— Choose a task to analyze —</option>
+          ${allTasksList.map(t => {
+            const displayName = t.label ? `🏷️ ${escHtml(t.label)}` : escHtml(t.first_message ? t.first_message.substring(0, 75) : 'Task ' + t.id);
+            return `
+              <option value="${t.id}" ${t.id === taskId ? 'selected' : ''}>
+                ${displayName} (${t.api_call_count || 0} calls, ${fmtCost(t.total_cost)})
+              </option>
+            `;
+          }).join('')}
+        `;
+      }
+    }
   } catch (e) {
     contentEl.innerHTML = `
       <div class="empty-state">
@@ -154,6 +287,105 @@ async function loadTaskAnalytics(taskId) {
   renderAnalytics(contentEl);
 }
 
+function getSavedTaskLabel(taskId, defaultLabel) {
+  if (defaultLabel) return defaultLabel;
+  try {
+    return localStorage.getItem(`pq_task_label_${taskId}`) || null;
+  } catch {
+    return null;
+  }
+}
+
+function setSavedTaskLabel(taskId, label) {
+  try {
+    if (label) localStorage.setItem(`pq_task_label_${taskId}`, label);
+    else localStorage.removeItem(`pq_task_label_${taskId}`);
+  } catch {}
+}
+
+function computeOverallCacheHitPct(calls) {
+  let totalReads = 0;
+  let totalPrompt = 0;
+  (calls || []).forEach(c => {
+    const reads = c.cacheReads || 0;
+    const inTok = c.tokensIn || 0;
+    totalReads += reads;
+    if (reads > 0) {
+      totalPrompt += (inTok >= reads ? inTok : (reads + inTok));
+    } else {
+      totalPrompt += inTok;
+    }
+  });
+  if (totalPrompt <= 0) return { pct: '0.0', reads: totalReads, prompt: 0 };
+  const pctVal = Math.min(100, Math.max(0, (totalReads / totalPrompt) * 100));
+  const pctStr = (pctVal === 100 || totalReads === totalPrompt) ? '100.0' : pctVal.toFixed(1);
+  return { pct: pctStr, reads: totalReads, prompt: totalPrompt };
+}
+
+function renderTaskMetricsBar(task, calls) {
+  const bar = document.getElementById('pa-task-metrics-bar');
+  if (!bar || !task) return;
+
+  const totalCost = task.totalCost || calls.reduce((s, c) => s + c.cost, 0);
+  const durationMs = task.duration || (calls.length > 1 ? (calls[calls.length - 1].ts - calls[0].ts) : 0);
+  const label = task.label || getSavedTaskLabel(task.id, null);
+  task.label = label;
+  const labelText = label ? escHtml(label) : '+ Add Label';
+
+  const { pct: cacheHitOverall, reads: totalReads, prompt: totalPrompt } = computeOverallCacheHitPct(calls);
+
+  bar.innerHTML = `
+    <div style="display:flex;align-items:center;gap:6px;background:rgba(56,189,248,0.12);border:1px solid rgba(56,189,248,0.3);padding:4px 10px;border-radius:14px;font-size:11px">
+      <button id="pa-edit-label-btn" style="background:none;border:none;color:#38bdf8;font-weight:bold;cursor:pointer;display:flex;align-items:center;gap:4px;padding:0" title="Click to assign a unique custom label to this task">
+        🏷️ <span id="pa-label-display">${labelText}</span>
+        <span style="font-size:10px;opacity:0.7">✏️</span>
+      </button>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:12px;background:var(--bg-3);border:1px solid var(--border);padding:4px 12px;border-radius:var(--radius-sm);font-size:11px">
+      <span title="Total number of LLM API calls made in task">📞 <strong>${calls.length}</strong> calls</span>
+      <span style="color:var(--border)">|</span>
+      <span title="Total financial cost spent on LLM requests">💰 <strong style="color:var(--green)">${fmtCost(totalCost)}</strong></span>
+      <span style="color:var(--border)">|</span>
+      <span title="Total duration of task execution">⏱️ <strong>${fmtDuration(durationMs)}</strong></span>
+    </div>
+  `;
+
+  document.getElementById('pa-edit-label-btn')?.addEventListener('click', async () => {
+    const currentLabel = task.label || getSavedTaskLabel(task.id, null) || '';
+    const newLabel = prompt('Enter a unique label for this task (e.g. v1-baseline-prompt, claude-3.5-test):', currentLabel);
+    if (newLabel !== null) {
+      const cleanLabel = newLabel.trim() || null;
+      task.label = cleanLabel;
+      setSavedTaskLabel(task.id, cleanLabel);
+      if (analyticsData && analyticsData.task) analyticsData.task.label = cleanLabel;
+
+      // Update task list item label
+      const taskItem = allTasksList.find(t => t.id === task.id);
+      if (taskItem) taskItem.label = cleanLabel;
+
+      renderTaskMetricsBar(task, calls);
+
+      // Update dropdown option text
+      const select = document.getElementById('pa-task-select');
+      if (select) {
+        const opt = select.querySelector(`option[value="${task.id}"]`);
+        if (opt) {
+          const displayName = cleanLabel ? `🏷️ ${cleanLabel}` : (task.firstMessage ? task.firstMessage.substring(0, 75) : 'Task ' + task.id);
+          opt.innerText = `${displayName} (${calls.length} calls, ${fmtCost(totalCost)})`;
+        }
+      }
+
+      // Sync with backend API in background
+      try {
+        await api.updateTaskLabel(task.id, cleanLabel);
+      } catch (e) {
+        console.warn('Backend task label sync warning:', e);
+      }
+    }
+  });
+}
+
 function renderAnalytics(contentEl) {
   const data = analyticsData;
   const calls = data.apiCalls;
@@ -164,8 +396,10 @@ function renderAnalytics(contentEl) {
   const cmdSaved = (cats.truncatedCommands || []).reduce((s, c) => s + c.bytesSaved, 0);
   const envSaved = cats.environmentSnapshots?.bytesSaved || 0;
 
+  renderTaskMetricsBar(data.task, calls);
+
   contentEl.innerHTML = `
-    <!-- Top Executive Pruning Category Summary Grid -->
+    <!-- Executive Pruning Category Summary Grid -->
     <div style="margin-bottom:16px">
       <div style="font-weight:bold;font-size:12.5px;color:var(--text);margin-bottom:10px">
         📌 Executive Context Reduction Summary — What Was Pruned During Task:
@@ -225,27 +459,42 @@ function renderAnalytics(contentEl) {
       </div>
     </div>
 
-    <!-- Timeline Chart -->
+    <!-- Timeline Chart Panel -->
     <div class="panel pa-chart-panel">
-      <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center">
-        <div>
-          <span>📊 Request Size & Cache Timeline</span>
-          <span style="font-size:11px;color:var(--text-3);font-weight:normal;margin-left:6px">
+      <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span>📊 Request Size, Cumulative Cost & Cache Timeline</span>
+          ${data.task?.label ? `<span style="background:rgba(56,189,248,0.15);color:#38bdf8;padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:bold">🏷️ ${escHtml(data.task.label)}</span>` : ''}
+          <span style="font-size:10.5px;color:var(--text-3);font-weight:normal">
             (Toggle legends below to switch view modes | Click bars to inspect)
           </span>
         </div>
-        <div class="pa-chart-legend">
-          <button class="pa-legend-chip ${chartSeries.requestSize ? 'active' : ''}" data-series="requestSize">
-            <span class="pa-legend-color" style="background:#38bdf8"></span> Request Size (Bars)
-          </button>
-          <button class="pa-legend-chip ${chartSeries.cacheReads ? 'active' : ''}" data-series="cacheReads">
-            <span class="pa-legend-color" style="background:#10b981"></span> Cache Reads
-          </button>
-          <button class="pa-legend-chip ${chartSeries.cacheWrites ? 'active' : ''}" data-series="cacheWrites">
-            <span class="pa-legend-color" style="background:#f59e0b"></span> Cache Writes
-          </button>
-          <button class="pa-legend-chip ${chartSeries.contextWindow ? 'active' : ''}" data-series="contextWindow">
-            <span class="pa-legend-color" style="background:#a78bfa"></span> Context Window %
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <div class="pa-chart-legend" style="display:flex;gap:4px;flex-wrap:wrap">
+            <button class="pa-legend-chip ${chartSeries.requestSize ? 'active' : ''}" data-series="requestSize">
+              <span class="pa-legend-color" style="background:#38bdf8"></span> Request Size (Bars)
+            </button>
+            <button class="pa-legend-chip ${chartSeries.cacheReads ? 'active' : ''}" data-series="cacheReads">
+              <span class="pa-legend-color" style="background:#10b981"></span> Cache Reads
+            </button>
+            <button class="pa-legend-chip ${chartSeries.cacheWrites ? 'active' : ''}" data-series="cacheWrites">
+              <span class="pa-legend-color" style="background:#f59e0b"></span> Cache Writes
+            </button>
+            <button class="pa-legend-chip ${chartSeries.contextWindow ? 'active' : ''}" data-series="contextWindow">
+              <span class="pa-legend-color" style="background:#a78bfa"></span> Context %
+            </button>
+            <button class="pa-legend-chip ${chartSeries.cumulativeCost ? 'active' : ''}" data-series="cumulativeCost">
+              <span class="pa-legend-color" style="background:#ec4899"></span> Cumulative Cost ($)
+            </button>
+            <button class="pa-legend-chip ${chartSeries.cacheHitPct ? 'active' : ''}" data-series="cacheHitPct">
+              <span class="pa-legend-color" style="background:#06b6d4"></span> Cache Hit %
+            </button>
+            <button class="pa-legend-chip ${chartSeries.stepLatency ? 'active' : ''}" data-series="stepLatency">
+              <span class="pa-legend-color" style="background:#6366f1"></span> Latency (s)
+            </button>
+          </div>
+          <button id="pa-detach-chart-btn" class="action-btn secondary" style="padding:3px 10px;font-size:11px;display:flex;align-items:center;gap:4px" title="Detach graph into interactive fullscreen mode with section zoom">
+            ⛶ Fullscreen Zoom
           </button>
         </div>
       </div>
@@ -295,6 +544,604 @@ function renderAnalytics(contentEl) {
 
   renderReductionSequenceFeed(document.getElementById('pa-comparison-body'), events);
   renderCacheObservabilityPanel(document.getElementById('pa-cache-body'), calls);
+
+  document.getElementById('pa-detach-chart-btn')?.addEventListener('click', () => {
+    openFullscreenChartModal(calls, data.task);
+  });
+}
+
+function openFullscreenChartModal(calls, task) {
+  let modal = document.getElementById('pa-fullscreen-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'pa-fullscreen-modal';
+    modal.style.cssText = `
+      position:fixed;top:0;left:0;width:100vw;height:100vh;
+      background:rgba(10,15,25,0.96);backdrop-filter:blur(8px);
+      z-index:9999;display:flex;flex-direction:column;padding:20px;box-sizing:border-box;
+    `;
+    document.body.appendChild(modal);
+  }
+
+  fullscreenZoomRange = [0, 100];
+
+  modal.style.display = 'flex';
+  modal.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <div>
+        <h2 style="font-size:18px;margin:0;color:var(--text);display:flex;align-items:center;gap:10px">
+          <span>📊 Fullscreen Timeline Zoom & Section Analysis</span>
+          ${task?.label ? `<span style="background:rgba(56,189,248,0.2);color:#38bdf8;padding:2px 10px;border-radius:12px;font-size:12px;font-weight:bold">🏷️ ${escHtml(task.label)}</span>` : ''}
+        </h2>
+        <p style="font-size:11px;color:var(--text-3);margin:4px 0 0">Drag the stock-chart style section sliders below to zoom into specific call ranges and inspect spikes</p>
+      </div>
+      <button id="pa-fullscreen-close" class="action-btn secondary" style="padding:6px 14px;font-size:13px;font-weight:bold">✖ Close Fullscreen</button>
+    </div>
+
+    <!-- Chart Canvas Container -->
+    <div style="flex:1;background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px;display:flex;flex-direction:column;position:relative">
+      <div style="flex:1;position:relative;min-height:360px">
+        <canvas id="pa-fullscreen-canvas" data-height="380"></canvas>
+        <div id="pa-fullscreen-tooltip" class="pa-chart-tooltip" style="display:none;pointer-events:none;z-index:100;position:absolute"></div>
+      </div>
+
+      <!-- Range Zoom Controls -->
+      <div style="margin-top:14px;background:var(--bg-3);padding:12px;border-radius:var(--radius-sm);border:1px solid var(--border)">
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;margin-bottom:8px">
+          <span>🔍 <strong>Stock Chart Range Zoom (Brush Selector)</strong></span>
+          <span id="pa-zoom-range-label" style="font-weight:bold;color:#38bdf8">Showing Calls #1 to #${calls.length}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px">
+          <span style="font-size:10.5px;color:var(--text-3)">Start Call:</span>
+          <input type="range" id="pa-zoom-min" min="0" max="95" value="0" style="flex:1">
+          <span style="font-size:10.5px;color:var(--text-3)">End Call:</span>
+          <input type="range" id="pa-zoom-max" min="5" max="100" value="100" style="flex:1">
+          <button id="pa-zoom-reset" class="action-btn secondary" style="padding:2px 10px;font-size:10.5px">Reset Zoom</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const fsCanvas = document.getElementById('pa-fullscreen-canvas');
+
+  const updateFsChart = () => {
+    drawTimelineChart(calls, fsCanvas, fullscreenZoomRange);
+    const startIdx = Math.floor((fullscreenZoomRange[0] / 100) * calls.length) + 1;
+    const endIdx = Math.max(startIdx, Math.ceil((fullscreenZoomRange[1] / 100) * calls.length));
+    const rangeLabel = document.getElementById('pa-zoom-range-label');
+    if (rangeLabel) {
+      rangeLabel.innerText = `Showing Calls #${startIdx} to #${endIdx} of ${calls.length} total calls`;
+    }
+  };
+
+  updateFsChart();
+
+  document.getElementById('pa-fullscreen-close')?.addEventListener('click', () => {
+    modal.style.display = 'none';
+  });
+
+  const minSlider = document.getElementById('pa-zoom-min');
+  const maxSlider = document.getElementById('pa-zoom-max');
+
+  minSlider?.addEventListener('input', (e) => {
+    let val = parseInt(e.target.value);
+    if (val >= fullscreenZoomRange[1] - 2) val = fullscreenZoomRange[1] - 2;
+    fullscreenZoomRange[0] = val;
+    updateFsChart();
+  });
+
+  maxSlider?.addEventListener('input', (e) => {
+    let val = parseInt(e.target.value);
+    if (val <= fullscreenZoomRange[0] + 2) val = fullscreenZoomRange[0] + 2;
+    fullscreenZoomRange[1] = val;
+    updateFsChart();
+  });
+
+  document.getElementById('pa-zoom-reset')?.addEventListener('click', () => {
+    fullscreenZoomRange = [0, 100];
+    if (minSlider) minSlider.value = 0;
+    if (maxSlider) maxSlider.value = 100;
+    updateFsChart();
+  });
+
+  if (fsCanvas) {
+    fsCanvas.addEventListener('mousemove', (e) => {
+      handleChartHover(e, calls, fsCanvas, 'pa-fullscreen-tooltip');
+    });
+    fsCanvas.addEventListener('mouseleave', () => {
+      hoveredCallIndex = null;
+      updateFsChart();
+      const tt = document.getElementById('pa-fullscreen-tooltip');
+      if (tt) tt.style.display = 'none';
+    });
+  }
+}
+
+// ── Multi-Task Comparison View Handler ──
+async function loadCompareAnalytics(taskIds) {
+  const contentEl = document.getElementById('pa-content');
+  if (!contentEl) return;
+
+  contentEl.innerHTML = '<div class="loading-state"><div class="spinner"></div><p>Fetching multi-task analytics data for comparison...</p></div>';
+
+  compareDataMap = {};
+  for (const id of taskIds) {
+    try {
+      const res = await api.promptAnalytics(id);
+      if (res && res.apiCalls) {
+        if (!res.task) res.task = { id };
+        const taskItem = allTasksList.find(x => x.id === id);
+        const resolvedLabel = taskItem?.label || res.task.label || getSavedTaskLabel(id, null);
+        res.task.label = resolvedLabel;
+        if (taskItem) taskItem.label = resolvedLabel;
+        compareDataMap[id] = res;
+      }
+    } catch (e) {
+      console.error(`Failed to load comparison data for ${id}:`, e);
+    }
+  }
+
+  const validIds = Object.keys(compareDataMap);
+  if (validIds.length === 0) {
+    contentEl.innerHTML = `
+      <div class="empty-state">
+        <div class="icon">⚠</div>
+        <p>No valid prompt analytics found for the selected tasks</p>
+      </div>
+    `;
+    return;
+  }
+
+  renderCompareAnalyticsView(contentEl, validIds);
+}
+
+function renderCompareAnalyticsView(contentEl, taskIds) {
+  const maxCallsAcrossTasks = Math.max(...taskIds.map(id => compareDataMap[id].apiCalls.length), 1);
+  compareStepIndex = 0;
+
+  contentEl.innerHTML = `
+    <!-- Executive Side-by-Side Metrics Table -->
+    <div class="panel" style="margin-bottom:16px">
+      <div class="panel-title">🔀 Executive Side-by-Side Performance Comparison (${taskIds.length} tasks)</div>
+      <div class="panel-body" style="padding:14px;overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:11.5px">
+          <thead>
+            <tr style="background:var(--bg-3);color:var(--text-3);text-align:left">
+              <th style="padding:10px">Task / Label</th>
+              <th style="padding:10px">Total Calls</th>
+              <th style="padding:10px">Total Cost ($)</th>
+              <th style="padding:10px">Duration</th>
+              <th style="padding:10px">Cache Hit %</th>
+              <th style="padding:10px">Pruned Context</th>
+              <th style="padding:10px">Primary Model</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${taskIds.map(id => {
+              const d = compareDataMap[id];
+              const t = d.task || { id };
+              const taskItem = allTasksList.find(x => x.id === id);
+              const label = taskItem?.label || t.label || getSavedTaskLabel(id, null);
+              t.label = label;
+              const displayName = label ? `🏷️ ${escHtml(label)}` : escHtml(t.firstMessage ? t.firstMessage.substring(0, 50) : id);
+
+              const calls = d.apiCalls || [];
+              const totalCost = t.totalCost || calls.reduce((s, c) => s + c.cost, 0);
+              const durationMs = t.duration || (calls.length > 1 ? (calls[calls.length - 1].ts - calls[0].ts) : 0);
+
+              const { pct: cacheHitPct } = computeOverallCacheHitPct(calls);
+
+              const cats = d.reductionCategories || {};
+              const fileSaved = (cats.truncatedFiles || []).reduce((s, f) => s + f.bytesSaved, 0);
+              const cmdSaved = (cats.truncatedCommands || []).reduce((s, c) => s + c.bytesSaved, 0);
+              const totalPruned = fileSaved + cmdSaved + (cats.environmentSnapshots?.bytesSaved || 0);
+
+              const modelLabel = calls.find(c => c.modelId)?.modelId || 'Unknown';
+
+              return `
+                <tr style="border-bottom:1px solid var(--border)">
+                  <td style="padding:10px;font-weight:bold">
+                    <span style="${label ? 'color:#38bdf8' : ''}">${displayName}</span>
+                  </td>
+                  <td class="mono" style="padding:10px;font-weight:bold">${calls.length} calls</td>
+                  <td class="mono" style="padding:10px;color:var(--green);font-weight:bold">${fmtCost(totalCost)}</td>
+                  <td class="mono" style="padding:10px">${fmtDuration(durationMs)}</td>
+                  <td class="mono" style="padding:10px;color:#06b6d4;font-weight:bold">${cacheHitPct}%</td>
+                  <td class="mono" style="padding:10px;color:#38bdf8">${fmtBytes(totalPruned)}</td>
+                  <td style="padding:10px;color:var(--text-2);font-family:monospace;font-size:10.5px">${escHtml(modelLabel)}</td>
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Synchronized Step Slider Controls -->
+    <div class="panel" style="margin-bottom:16px;background:var(--bg-2)">
+      <div class="panel-body" style="padding:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div style="font-weight:bold;font-size:12.5px;color:var(--text)">
+            ⏱️ Master Synchronized Step Slider — Inspect Turn-by-Turn Behavior Across Tasks
+          </div>
+          <div style="font-size:12px;font-weight:bold;color:#38bdf8">
+            Inspecting Call #<span id="pa-compare-step-num">1</span> of ${maxCallsAcrossTasks}
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px">
+          <span style="font-size:11px;color:var(--text-3)">Call #1</span>
+          <input type="range" id="pa-compare-slider" min="0" max="${maxCallsAcrossTasks - 1}" value="0" style="flex:1">
+          <span style="font-size:11px;color:var(--text-3)">Call #${maxCallsAcrossTasks}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Synchronized Step State Comparison Inspector Grid -->
+    <div style="margin-bottom:16px">
+      <div style="font-weight:bold;font-size:12px;color:var(--text);margin-bottom:10px">
+        🔍 Step Inspector — What happened at Call #<span id="pa-compare-inspector-num">1</span> for each selected task:
+      </div>
+      <div id="pa-compare-inspector-grid" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(300px, 1fr));gap:12px">
+        <!-- Rendered dynamically -->
+      </div>
+    </div>
+
+    <!-- Global Comparison Legend Toggle Controls -->
+    <div class="panel" style="margin-bottom:16px;background:var(--bg-2)">
+      <div class="panel-body" style="padding:12px 14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <div style="font-weight:bold;font-size:12.5px;color:var(--text)">
+            📊 Metric Lines:
+          </div>
+          <button id="pa-toggle-shared-scale-btn" class="pa-legend-chip ${useSharedCompareScale ? 'active' : ''}" style="--chip-color:#38bdf8;font-weight:bold;border:1px solid rgba(56,189,248,0.4)" title="When enabled, all side-by-side graphs share the exact same Y-axis scale so relative differences ($6.65 vs $12.56) are visually obvious">
+            ⚖️ Shared Y-Axis Scale: <strong style="color:#38bdf8">${useSharedCompareScale ? 'ON (Proportional)' : 'OFF (Independent)'}</strong>
+          </button>
+        </div>
+        <div class="pa-chart-legend" style="display:flex;gap:4px;flex-wrap:wrap">
+          <button class="pa-compare-legend-chip pa-legend-chip ${chartSeries.requestSize ? 'active' : ''}" data-series="requestSize">
+            <span class="pa-legend-color" style="background:#38bdf8"></span> Request Size (Bars)
+          </button>
+          <button class="pa-compare-legend-chip pa-legend-chip ${chartSeries.cacheReads ? 'active' : ''}" data-series="cacheReads">
+            <span class="pa-legend-color" style="background:#10b981"></span> Cache Reads
+          </button>
+          <button class="pa-compare-legend-chip pa-legend-chip ${chartSeries.cacheWrites ? 'active' : ''}" data-series="cacheWrites">
+            <span class="pa-legend-color" style="background:#f59e0b"></span> Cache Writes
+          </button>
+          <button class="pa-compare-legend-chip pa-legend-chip ${chartSeries.contextWindow ? 'active' : ''}" data-series="contextWindow">
+            <span class="pa-legend-color" style="background:#a78bfa"></span> Context %
+          </button>
+          <button class="pa-compare-legend-chip pa-legend-chip ${chartSeries.cumulativeCost ? 'active' : ''}" data-series="cumulativeCost">
+            <span class="pa-legend-color" style="background:#ec4899"></span> Cumulative Cost ($)
+          </button>
+          <button class="pa-compare-legend-chip pa-legend-chip ${chartSeries.cacheHitPct ? 'active' : ''}" data-series="cacheHitPct">
+            <span class="pa-legend-color" style="background:#06b6d4"></span> Cache Hit %
+          </button>
+          <button class="pa-compare-legend-chip pa-legend-chip ${chartSeries.stepLatency ? 'active' : ''}" data-series="stepLatency">
+            <span class="pa-legend-color" style="background:#6366f1"></span> Latency (s)
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Unified Multi-Task Cumulative Cost Overlay Panel -->
+    <div class="panel" style="margin-bottom:16px;background:var(--bg-2)">
+      <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span>📈 Unified Cumulative Cost Growth Comparison (Overlaid Tasks)</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;font-size:10.5px;flex-wrap:wrap">
+          ${taskIds.map((id, tIdx) => {
+            const d = compareDataMap[id];
+            const t = d?.task || { id };
+            const taskItem = allTasksList.find(x => x.id === id);
+            const label = taskItem?.label || t.label || getSavedTaskLabel(id, null);
+            const name = label ? `🏷️ ${label}` : (t.firstMessage ? t.firstMessage.substring(0, 20) : id);
+            const color = COMPARE_TASK_COLORS[tIdx % COMPARE_TASK_COLORS.length];
+            const cost = t.totalCost || (d?.apiCalls || []).reduce((s, c) => s + c.cost, 0);
+            return `<span style="background:${color}22;color:${color};border:1px solid ${color}44;padding:2px 8px;border-radius:10px;font-weight:bold">${escHtml(name)}: ${fmtCost(cost)}</span>`;
+          }).join('')}
+        </div>
+      </div>
+      <div class="panel-body">
+        <div style="position:relative">
+          <canvas id="pa-compare-combined-canvas" data-height="220"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Side-by-Side Timeline Charts -->
+    <div style="display:grid;grid-template-columns:1fr;gap:16px;position:relative">
+      <div id="pa-compare-tooltip" class="pa-chart-tooltip" style="display:none;pointer-events:none;z-index:100;position:absolute"></div>
+      ${taskIds.map(id => {
+        const d = compareDataMap[id];
+        const t = d.task || { id };
+        const taskItem = allTasksList.find(x => x.id === id);
+        const label = taskItem?.label || t.label || getSavedTaskLabel(id, null);
+        t.label = label;
+        const displayName = label ? `🏷️ ${escHtml(label)}` : escHtml(t.firstMessage ? t.firstMessage.substring(0, 60) : id);
+
+        return `
+          <div class="panel">
+            <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap">
+              <span style="font-size:13px;font-weight:bold;${label ? 'color:#38bdf8' : ''}">
+                📊 ${displayName}
+              </span>
+              <span class="mono" style="font-size:11px;color:var(--green);font-weight:bold">${d.apiCalls.length} calls | ${fmtCost(t.totalCost)}</span>
+            </div>
+            <div class="panel-body">
+              <div style="position:relative">
+                <canvas id="pa-compare-canvas-${id}" data-task-id="${id}" data-height="200"></canvas>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+
+  const getGlobalCompareMaxes = () => {
+    if (!useSharedCompareScale) return null;
+    let maxCost = 0.01;
+    let maxSize = 1;
+    let maxCache = 1;
+    let maxLatency = 1;
+
+    taskIds.forEach(id => {
+      const calls = compareDataMap[id]?.apiCalls || [];
+      calls.forEach(c => {
+        const costVal = c.cumulativeCost || c.cost || 0;
+        if (costVal > maxCost) maxCost = costVal;
+        if ((c.requestSize || 0) > maxSize) maxSize = c.requestSize;
+        if ((c.cacheReads || 0) > maxCache) maxCache = c.cacheReads;
+        if ((c.cacheWrites || 0) > maxCache) maxCache = c.cacheWrites;
+        if (((c.latencyMs || 0) / 1000) > maxLatency) maxLatency = (c.latencyMs || 0) / 1000;
+      });
+    });
+
+    return { maxCost, maxSize, maxCache, maxLatency };
+  };
+
+  // Draw initial comparative charts
+  const updateAllCompareCharts = (stepIdx) => {
+    const stepLabel = document.getElementById('pa-compare-step-num');
+    const inspLabel = document.getElementById('pa-compare-inspector-num');
+    if (stepLabel) stepLabel.innerText = String(stepIdx + 1);
+    if (inspLabel) inspLabel.innerText = String(stepIdx + 1);
+
+    const sharedMaxes = getGlobalCompareMaxes();
+
+    taskIds.forEach(id => {
+      const canvas = document.getElementById(`pa-compare-canvas-${id}`);
+      if (canvas && compareDataMap[id]) {
+        drawTimelineChart(compareDataMap[id].apiCalls, canvas, null, stepIdx, sharedMaxes);
+        if (!canvas._hasHoverBound) {
+          canvas._hasHoverBound = true;
+          canvas.addEventListener('mousemove', (e) => {
+            handleChartHover(e, compareDataMap[id].apiCalls, canvas, 'pa-compare-tooltip');
+          });
+          canvas.addEventListener('mouseleave', () => {
+            hoveredCallIndex = null;
+            updateAllCompareCharts(compareStepIndex);
+            const tt = document.getElementById('pa-compare-tooltip');
+            if (tt) tt.style.display = 'none';
+          });
+        }
+      }
+    });
+
+    drawCombinedCompareChart(taskIds, stepIdx, sharedMaxes);
+    renderCompareStepInspector(taskIds, stepIdx);
+  };
+
+  updateAllCompareCharts(0);
+
+  // Bind Shared Y-Axis Scale toggle button
+  document.getElementById('pa-toggle-shared-scale-btn')?.addEventListener('click', () => {
+    useSharedCompareScale = !useSharedCompareScale;
+    const btn = document.getElementById('pa-toggle-shared-scale-btn');
+    if (btn) {
+      btn.classList.toggle('active', useSharedCompareScale);
+      btn.querySelector('strong').innerText = useSharedCompareScale ? 'ON (Proportional)' : 'OFF (Independent)';
+    }
+    updateAllCompareCharts(compareStepIndex);
+  });
+
+  // Bind compare legend chips
+  document.querySelectorAll('.pa-compare-legend-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const seriesKey = chip.dataset.series;
+      if (seriesKey) {
+        chartSeries[seriesKey] = !chartSeries[seriesKey];
+        document.querySelectorAll(`.pa-legend-chip[data-series="${seriesKey}"]`).forEach(c => {
+          c.classList.toggle('active', chartSeries[seriesKey]);
+        });
+        updateAllCompareCharts(compareStepIndex);
+      }
+    });
+  });
+
+  const slider = document.getElementById('pa-compare-slider');
+  slider?.addEventListener('input', (e) => {
+    compareStepIndex = parseInt(e.target.value);
+    updateAllCompareCharts(compareStepIndex);
+  });
+}
+
+function drawCombinedCompareChart(taskIds, stepIdx = null, sharedMaxes = null) {
+  const canvas = document.getElementById('pa-compare-combined-canvas');
+  if (!canvas) return;
+
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.parentElement.getBoundingClientRect();
+  const h = canvas.dataset.height ? parseInt(canvas.dataset.height) : 220;
+
+  canvas.width = rect.width * dpr;
+  canvas.height = h * dpr;
+  canvas.style.width = rect.width + 'px';
+  canvas.style.height = h + 'px';
+  ctx.scale(dpr, dpr);
+
+  const w = rect.width;
+  const pad = { top: 25, right: 60, bottom: 35, left: 70 };
+  const chartWeff = w - pad.left - pad.right;
+  const chartH = h - pad.top - pad.bottom;
+
+  const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
+  ctx.fillStyle = isDark ? '#111827' : '#ffffff';
+  ctx.fillRect(0, 0, w, h);
+
+  let maxCost = (sharedMaxes && sharedMaxes.maxCost) ? sharedMaxes.maxCost : 0.01;
+  let maxCalls = 1;
+
+  taskIds.forEach(id => {
+    const calls = compareDataMap[id]?.apiCalls || [];
+    if (calls.length > maxCalls) maxCalls = calls.length;
+    if (!sharedMaxes || !sharedMaxes.maxCost) {
+      calls.forEach(c => {
+        const val = c.cumulativeCost || c.cost || 0;
+        if (val > maxCost) maxCost = val;
+      });
+    }
+  });
+
+  // Grid lines
+  ctx.strokeStyle = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 5; i++) {
+    const y = pad.top + (chartH / 5) * i;
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(w - pad.right, y);
+    ctx.stroke();
+  }
+
+  // Left Y-axis (Cost $)
+  ctx.fillStyle = isDark ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.5)';
+  ctx.font = '10px Inter, sans-serif';
+  ctx.textAlign = 'right';
+  for (let i = 0; i <= 5; i++) {
+    const y = pad.top + (chartH / 5) * i;
+    const val = maxCost - (maxCost / 5) * i;
+    ctx.fillText(fmtCost(val), pad.left - 8, y + 3);
+  }
+
+  // Draw cost curve for each task
+  taskIds.forEach((id, tIdx) => {
+    const d = compareDataMap[id];
+    if (!d || !d.apiCalls || d.apiCalls.length === 0) return;
+
+    const calls = d.apiCalls;
+    const color = COMPARE_TASK_COLORS[tIdx % COMPARE_TASK_COLORS.length];
+    const colWidth = chartWeff / (maxCalls > 1 ? maxCalls - 1 : 1);
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2.5;
+    ctx.shadowColor = `${color}66`;
+    ctx.shadowBlur = 4;
+    ctx.beginPath();
+
+    const points = [];
+    calls.forEach((c, idx) => {
+      const x = pad.left + idx * colWidth;
+      const costVal = c.cumulativeCost || c.cost || 0;
+      const y = pad.top + chartH * (1 - costVal / maxCost);
+      points.push({ x, y, costVal, call: c, index: idx });
+
+      if (idx === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // Point markers
+    points.forEach(pt => {
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(pt.x, Math.max(pt.y, pad.top), (stepIdx === pt.index) ? 5 : 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  });
+
+  // Vertical Crosshair line for stepIdx
+  if (stepIdx != null && stepIdx < maxCalls) {
+    const colWidth = chartWeff / (maxCalls > 1 ? maxCalls - 1 : 1);
+    const x = pad.left + stepIdx * colWidth;
+    ctx.strokeStyle = '#f43f5e';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(x, pad.top);
+    ctx.lineTo(x, pad.top + chartH);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  ctx.fillStyle = isDark ? 'rgba(255,255,255,0.4)' : 'rgba(0,0,0,0.4)';
+  ctx.font = '10px Inter, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('API Call #', w / 2, h - 6);
+}
+
+function renderCompareStepInspector(taskIds, stepIdx) {
+  const grid = document.getElementById('pa-compare-inspector-grid');
+  if (!grid) return;
+
+  grid.innerHTML = taskIds.map(id => {
+    const d = compareDataMap[id];
+    const t = d.task || { id };
+    const calls = d.apiCalls || [];
+    const call = calls[stepIdx];
+
+    const taskItem = allTasksList.find(x => x.id === id);
+    const label = taskItem?.label || t.label || getSavedTaskLabel(id, null);
+    t.label = label;
+    const displayName = label ? `🏷️ ${escHtml(label)}` : escHtml(t.firstMessage ? t.firstMessage.substring(0, 35) : id);
+
+    const labelHeader = `<span style="font-weight:bold;font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;${label ? 'color:#38bdf8' : ''}">${displayName}</span>`;
+
+    if (!call) {
+      return `
+        <div class="panel" style="background:var(--bg-2);border:1px solid var(--border);padding:12px;border-radius:var(--radius-sm);opacity:0.6">
+          <div style="font-weight:bold;font-size:11.5px;color:var(--text-3);margin-bottom:6px;display:flex;align-items:center;gap:6px">
+            ${labelHeader}
+          </div>
+          <div style="font-size:10.5px;color:var(--text-3);font-style:italic">
+            (Task completed before Call #${stepIdx + 1})
+          </div>
+        </div>
+      `;
+    }
+
+    const hitBadge = call.cacheReads > 0 ? '<span style="background:rgba(34,197,94,0.15);color:var(--green);padding:2px 6px;border-radius:8px;font-weight:bold;font-size:9.5px">🎯 Cache Hit</span>' : '<span style="color:var(--text-3);font-size:9.5px">Uncached</span>';
+
+    return `
+      <div class="panel" style="background:var(--bg-2);border:1px solid var(--border);border-left:4px solid #38bdf8;padding:12px;border-radius:var(--radius-sm)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <div style="display:flex;align-items:center;gap:6px;overflow:hidden;max-width:210px">
+            ${labelHeader}
+          </div>
+          ${hitBadge}
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:10.5px;background:var(--bg-3);padding:8px;border-radius:var(--radius-sm)">
+          <div>
+            <span style="color:var(--text-3)">Request Size:</span> <strong style="color:#38bdf8">${fmtBytes(call.requestSize)}</strong>
+          </div>
+          <div>
+            <span style="color:var(--text-3)">Call Cost:</span> <strong style="color:var(--green)">${fmtCost(call.cost)}</strong>
+          </div>
+          <div>
+            <span style="color:var(--text-3)">Cumulative:</span> <strong style="color:#ec4899">${fmtCost(call.cumulativeCost || call.cost)}</strong>
+          </div>
+          <div>
+            <span style="color:var(--text-3)">Cache Reads:</span> <strong style="color:#10b981">${fmtTokens(call.cacheReads)}</strong>
+          </div>
+        </div>
+        ${call.modelId ? `<div style="font-size:9.5px;color:var(--text-3);margin-top:6px;font-family:monospace">🤖 ${escHtml(call.modelId)}</div>` : ''}
+      </div>
+    `;
+  }).join('');
 }
 
 function renderCacheObservabilityPanel(body, calls) {
@@ -512,7 +1359,6 @@ function bindCacheTableEvents(calls) {
           }
         }
       }
-
     });
   });
 }
@@ -539,14 +1385,6 @@ function renderInitialPromptDiffMarkup(promptData, idx) {
   });
 }
 
-/**
- * Builds paired rows for a TRUE two-column side-by-side prompt diff (unlike
- * the old unified +/- stacked view). Context lines pair 1:1; the changed
- * block pairs removed[j] with added[j] by index.
- * ponytail: index-pairing, not a real LCS/Myers line diff — good enough for
- * readable side-by-side; upgrade if misaligned pairing on reordered lines
- * becomes a complaint.
- */
 function buildSideBySideDiffRows(beforeText, afterText) {
   const beforeLines = splitPromptLines(beforeText);
   const afterLines = splitPromptLines(afterText);
@@ -637,10 +1475,6 @@ function renderSideBySideDiffRow(row) {
   `;
 }
 
-/**
- * TRUE two-column side-by-side prompt diff (replaces the old unified
- * stacked +/- view used in the Cache table's expandable row).
- */
 function renderSideBySidePromptDiffMarkup(comp, prevIdx, idx) {
   const beforeText = comp?.prompt1?.text || '';
   const afterText = comp?.prompt2?.text || '';
@@ -674,17 +1508,6 @@ function renderSideBySidePromptDiffMarkup(comp, prevIdx, idx) {
   `;
 }
 
-/**
- * Renders a banner explaining WHY a call had (or didn't have) a cache
- * read/write — model swap, TTL expiry, prefix invalidation, first call, etc.
- * Comes straight from the server's computeCacheExplanation().
- */
-/**
- * Renders the real system prompt text (cross-referenced live from the
- * Network Inspector's in-memory proxy buffer, since it's never persisted
- * to any task file) when available, or an explanatory note when it isn't
- * (proxy wasn't running, buffer already evicted the record, etc).
- */
 function renderSystemPromptSection(systemPrompt) {
   if (systemPrompt && systemPrompt.text) {
     return `
@@ -701,7 +1524,7 @@ function renderSystemPromptSection(systemPrompt) {
   return `
     <div style="background:rgba(148,163,184,0.08);border:1px solid rgba(148,163,184,0.25);border-radius:var(--radius-sm);padding:8px 14px;margin-bottom:10px;font-size:10.5px;color:var(--text-3);display:flex;align-items:flex-start;gap:8px">
       <span style="font-size:13px">📄</span>
-      <span><strong style="color:var(--text-2)">System prompt not shown:</strong> it's generated in-memory by the extension and never persisted to any task file. It's only recoverable live via the Network Inspector proxy, and no matching captured request was found in its buffer for this call (proxy wasn't running at the time, or the record has since been evicted).</span>
+      <span><strong style="color:var(--text-2)">System prompt not shown:</strong> it's generated in-memory by the extension and never persisted to any task file. It's only recoverable live via the Network Inspector proxy.</span>
     </div>
   `;
 }
@@ -720,9 +1543,6 @@ function renderCacheExplanationBanner(explanation) {
     no_cache_activity: 'ℹ️',
   };
   const icon = iconMap[explanation.code] || 'ℹ️';
-  // Unconfirmed guesses get an amber "unverified" treatment instead of the
-  // confident blue used for evidenced explanations — don't let a guess look
-  // as certain as a fact backed by actual log evidence.
   const isUnconfirmed = explanation.code === 'ttl_expired_unconfirmed';
   const accent = isUnconfirmed ? '#f59e0b' : '#38bdf8';
   const bg = isUnconfirmed ? 'rgba(245,158,11,0.08)' : 'rgba(56,189,248,0.08)';
@@ -737,14 +1557,7 @@ function renderCacheExplanationBanner(explanation) {
   `;
 }
 
-
-/**
- * Renders a banner above the diff explaining WHY the prompt changed:
- * a model swap and/or a likely context condensation/reset — the two
- * causes that a raw text diff alone can't explain.
- */
 function renderChangeAnnotationsBanner(annotations, prevIdx, idx) {
-
   if (!annotations) return '';
   const { modelChanged, fromModelId, toModelId, possibleContextCondensation, sizeDropPct } = annotations;
 
@@ -767,8 +1580,7 @@ function renderChangeAnnotationsBanner(annotations, prevIdx, idx) {
       <div style="display:flex;align-items:center;gap:8px">
         <span style="font-size:14px">🧹</span>
         <span><strong style="color:#f59e0b">Likely context condensation/reset</strong> detected — request size dropped by
-          <strong>${sizeDropPct}%</strong> with early-conversation content (system context, task setup) rewritten, not just
-          tail-end tool output trimmed. This usually means the framework compacted/summarized the running history.
+          <strong>${sizeDropPct}%</strong>.
         </span>
       </div>
     `);
@@ -781,7 +1593,6 @@ function renderChangeAnnotationsBanner(annotations, prevIdx, idx) {
   `;
 }
 
-
 function buildAddedFileDiffRows(text) {
   const lines = splitPromptLines(text);
   return [
@@ -789,73 +1600,6 @@ function buildAddedFileDiffRows(text) {
     { type: 'file', text: '+++ prompt' },
     ...lines.map((line, i) => ({ type: 'add', oldLine: '', newLine: i + 1, text: line })),
   ];
-}
-
-function buildUnifiedDiffRows(beforeText, afterText) {
-  const beforeLines = splitPromptLines(beforeText);
-  const afterLines = splitPromptLines(afterText);
-
-  if (beforeText === afterText) {
-    return [
-      { type: 'file', text: '--- prompt-before' },
-      { type: 'file', text: '+++ prompt-after' },
-      { type: 'note', text: 'No prompt text changed between these two calls.' },
-    ];
-  }
-
-  let prefixLen = 0;
-  const maxPrefix = Math.min(beforeLines.length, afterLines.length);
-  while (prefixLen < maxPrefix && beforeLines[prefixLen] === afterLines[prefixLen]) {
-    prefixLen++;
-  }
-
-  let suffixLen = 0;
-  const maxSuffix = Math.min(beforeLines.length - prefixLen, afterLines.length - prefixLen);
-  while (
-    suffixLen < maxSuffix &&
-    beforeLines[beforeLines.length - 1 - suffixLen] === afterLines[afterLines.length - 1 - suffixLen]
-  ) {
-    suffixLen++;
-  }
-
-  const context = 8;
-  const beforeChangeEnd = beforeLines.length - suffixLen;
-  const afterChangeEnd = afterLines.length - suffixLen;
-  const contextStart = Math.max(0, prefixLen - context);
-  const suffixBeforeStart = beforeChangeEnd;
-  const suffixAfterStart = afterChangeEnd;
-  const suffixVisible = Math.min(context, suffixLen);
-  const rows = [
-    { type: 'file', text: '--- prompt-before' },
-    { type: 'file', text: '+++ prompt-after' },
-  ];
-
-  if (contextStart > 0) rows.push({ type: 'skip', text: `... ${contextStart} unchanged lines hidden ...` });
-
-  for (let i = contextStart; i < prefixLen; i++) {
-    rows.push({ type: 'ctx', oldLine: i + 1, newLine: i + 1, text: beforeLines[i] });
-  }
-
-  for (let i = prefixLen; i < beforeChangeEnd; i++) {
-    rows.push({ type: 'del', oldLine: i + 1, newLine: '', text: beforeLines[i] });
-  }
-
-  for (let i = prefixLen; i < afterChangeEnd; i++) {
-    rows.push({ type: 'add', oldLine: '', newLine: i + 1, text: afterLines[i] });
-  }
-
-  for (let i = 0; i < suffixVisible; i++) {
-    rows.push({
-      type: 'ctx',
-      oldLine: suffixBeforeStart + i + 1,
-      newLine: suffixAfterStart + i + 1,
-      text: beforeLines[suffixBeforeStart + i],
-    });
-  }
-
-  if (suffixLen > suffixVisible) rows.push({ type: 'skip', text: `... ${suffixLen - suffixVisible} unchanged lines hidden ...` });
-
-  return rows;
 }
 
 function splitPromptLines(text) {
@@ -914,111 +1658,6 @@ function renderUnifiedDiffRow(row) {
   `;
 }
 
-function renderInlinePromptDiff(container, comp, prevIdx, idx) {
-  container.innerHTML = renderInlinePromptDiffMarkup(comp, prevIdx, idx);
-  bindSynchronizedScroll(container);
-}
-
-function renderInlinePromptDiffMarkup(comp, prevIdx, idx) {
-  if (!comp) return '';
-
-  const trimmedItems = comp.trimmedItems || [];
-
-  if (trimmedItems.length === 0) {
-    return `
-      <div style="background:var(--bg-3);padding:10px 14px;border-radius:var(--radius-sm);font-size:11px;color:var(--text-3)">
-        ✓ Call #${idx + 1}'s prompt prefix matched Call #${prevIdx + 1} exactly. No message content was pruned or modified.
-      </div>
-    `;
-  }
-
-  return `
-    <div style="font-weight:bold;font-size:11.5px;color:var(--text);margin-bottom:8px">
-      🔍 Prompt Content Comparison (Call #${prevIdx + 1} vs Call #${idx + 1}):
-    </div>
-    <div style="display:flex;flex-direction:column;gap:10px">
-      ${trimmedItems.map(item => renderDiffBoxMarkup(item, prevIdx, idx)).join('')}
-    </div>
-  `;
-}
-
-function renderFullPromptComparison(comp, prevIdx, idx) {
-  if (!comp) return '';
-
-  const changedItems = comp.changedItems || [];
-  const addedItems = comp.addedItems || [];
-  const removedItems = comp.removedItems || [];
-  const hasChanges = changedItems.length > 0 || addedItems.length > 0 || removedItems.length > 0;
-  const beforeSize = comp.call1?.requestSize || comp.prompt1?.requestSize || 0;
-  const afterSize = comp.call2?.requestSize || comp.prompt2?.requestSize || 0;
-  const delta = afterSize - beforeSize;
-  const deltaText = delta >= 0 ? `+${fmtBytes(delta)}` : `-${fmtBytes(Math.abs(delta))}`;
-  const deltaColor = delta >= 0 ? '#f59e0b' : 'var(--green)';
-
-  if (!hasChanges) {
-    return `
-      <div style="background:var(--bg-3);padding:10px 14px;border-radius:var(--radius-sm);font-size:11px;color:var(--text-3)">
-        Cache creation was recorded, but the reconstructed prompt body matched the previous call.
-      </div>
-    `;
-  }
-
-  return `
-    <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden">
-      <div style="background:var(--bg-3);padding:10px 14px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;gap:12px">
-        <div>
-          <div style="font-weight:bold;font-size:11.5px;color:#f59e0b">✍️ Cache Creation Prompt Comparison</div>
-          <div style="font-size:10.5px;color:var(--text-3);margin-top:2px">Full effective prompt before and after cache creation, excluding the initial prompt case.</div>
-        </div>
-        <div class="mono" style="font-size:11px;color:${deltaColor};font-weight:bold">
-          Call #${prevIdx + 1} ${fmtBytes(beforeSize)} → Call #${idx + 1} ${fmtBytes(afterSize)} (${deltaText})
-        </div>
-      </div>
-      <div style="padding:12px;display:flex;flex-direction:column;gap:10px">
-        ${changedItems.map(item => renderDiffBoxMarkup(item, prevIdx, idx)).join('')}
-        ${addedItems.map(item => renderAddedPromptMessageMarkup(item, idx)).join('')}
-        ${removedItems.map(item => renderRemovedPromptMessageMarkup(item, prevIdx)).join('')}
-      </div>
-    </div>
-  `;
-}
-
-function renderAddedPromptMessageMarkup(item, idx) {
-  return `
-    <div class="panel" style="border:1px solid rgba(34,197,94,0.3);border-radius:var(--radius-sm);overflow:hidden;background:rgba(34,197,94,0.04)">
-      <div style="background:var(--bg-3);padding:10px 14px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)">
-        <div style="display:flex;align-items:center;gap:10px">
-          <strong style="color:var(--text);font-size:12px">msg[${item.index}]</strong>
-          <span style="text-transform:uppercase;font-weight:700;color:var(--accent-2);font-size:10.5px">(${escHtml(item.role)})</span>
-          <span style="color:var(--green);font-size:11px;font-weight:bold">Added in Call #${idx + 1}</span>
-        </div>
-        <span class="mono" style="color:var(--green);font-weight:bold;font-size:11px">${fmtBytes(item.after?.size || 0)}</span>
-      </div>
-      <div class="mono" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:10px;max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all">
-        ${escHtml(item.after?.fullText || '')}
-      </div>
-    </div>
-  `;
-}
-
-function renderRemovedPromptMessageMarkup(item, prevIdx) {
-  return `
-    <div class="panel" style="border:1px solid rgba(239,68,68,0.3);border-radius:var(--radius-sm);overflow:hidden;background:rgba(239,68,68,0.04)">
-      <div style="background:var(--bg-3);padding:10px 14px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)">
-        <div style="display:flex;align-items:center;gap:10px">
-          <strong style="color:var(--text);font-size:12px">msg[${item.index}]</strong>
-          <span style="text-transform:uppercase;font-weight:700;color:var(--accent-2);font-size:10.5px">(${escHtml(item.role)})</span>
-          <span style="color:var(--red);font-size:11px;font-weight:bold">Removed after Call #${prevIdx + 1}</span>
-        </div>
-        <span class="mono" style="color:var(--red);font-weight:bold;font-size:11px">${fmtBytes(item.before?.size || 0)}</span>
-      </div>
-      <div class="mono" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:10px;max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all">
-        ${escHtml(item.before?.fullText || '')}
-      </div>
-    </div>
-  `;
-}
-
 function renderReductionSequenceFeed(body, events) {
   if (!body) return;
 
@@ -1042,7 +1681,7 @@ function renderReductionSequenceFeed(body, events) {
 
   body.innerHTML = `
     <div style="font-size:11px;color:var(--text-3);margin-bottom:12px">
-      Showing <strong>${filteredEvents.length}</strong> context reduction events in chronological order. Click any event card to view the exact side-by-side prompt diff:
+      Showing <strong>${filteredEvents.length}</strong> context reduction events in chronological order:
     </div>
 
     <div style="display:flex;flex-direction:column;gap:12px">
@@ -1117,7 +1756,6 @@ function renderDiffBoxMarkup(item, prevCallIdx, callIdx, category, targetName, i
 
   return `
     <div class="pa-sbs-card panel" data-call="${callIdx}" data-target="${escHtml(targetName || '')}" style="border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-2)">
-      <!-- Card Header -->
       <div style="background:var(--bg-3);padding:10px 14px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)">
         <div style="display:flex;align-items:center;gap:10px">
           <strong style="color:var(--text);font-size:12px">msg[${item.index}]</strong>
@@ -1132,7 +1770,6 @@ function renderDiffBoxMarkup(item, prevCallIdx, callIdx, category, targetName, i
         </div>
       </div>
 
-      <!-- Exact Changed Content Highlight Banner -->
       <div style="background:${bannerBg};border-bottom:1px solid rgba(255,255,255,0.12);padding:8px 14px;font-size:11px">
         <span style="color:${bannerColor};font-weight:bold">${bannerTitle}</span>
         <div class="mono" style="margin-top:4px;background:rgba(255,255,255,0.06);color:${bannerColor};padding:6px 10px;border-radius:var(--radius-sm);border-left:3px solid ${bannerColor};max-height:90px;overflow-y:auto;white-space:pre-wrap;word-break:break-all">
@@ -1140,12 +1777,10 @@ function renderDiffBoxMarkup(item, prevCallIdx, callIdx, category, targetName, i
         </div>
       </div>
 
-      <!-- 2-Column Side-by-Side Synchronized Scroll Comparison -->
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border)">
-        <!-- Left Column: Request N-1 -->
         <div style="background:var(--bg-2);padding:10px 12px">
           <div style="font-weight:bold;font-size:10.5px;color:var(--red);margin-bottom:6px;display:flex;justify-content:space-between">
-            <span>🔴 BEFORE in Call #${prevCallIdx + 1} (Original)</span>
+            <span>🔴 BEFORE in Call #${prevCallIdx + 1}</span>
             <span class="mono">${fmtBytes(beforeSize)}</span>
           </div>
           <div class="mono pa-sbs-left" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border);max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all">
@@ -1155,10 +1790,9 @@ function renderDiffBoxMarkup(item, prevCallIdx, callIdx, category, targetName, i
           </div>
         </div>
 
-        <!-- Right Column: Request N -->
         <div style="background:var(--bg-2);padding:10px 12px">
           <div style="font-weight:bold;font-size:10.5px;color:var(--green);margin-bottom:6px;display:flex;justify-content:space-between">
-            <span>🟢 AFTER in Call #${callIdx + 1} (Sent Payload)</span>
+            <span>🟢 AFTER in Call #${callIdx + 1}</span>
             <span class="mono">${fmtBytes(afterSize)}</span>
           </div>
           <div class="mono pa-sbs-right" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border);max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all">
@@ -1202,14 +1836,12 @@ function bindSynchronizedScroll(container) {
   });
 }
 
-// ── Context window % swimlane strip under chart ──
 function renderModelSwimlane(calls, container) {
   if (!container || !calls || calls.length === 0) {
     if (container) container.innerHTML = '';
     return;
   }
 
-  // Find unique models in order of first appearance
   const segments = [];
   let segStart = 0;
   let segModel = calls[0].modelId;
@@ -1225,7 +1857,6 @@ function renderModelSwimlane(calls, container) {
 
   const hasMultiple = segments.length > 1 || !segments[0]?.modelId;
   if (!hasMultiple && segments[0]?.modelId) {
-    // Only one model — show a compact single-line info instead of a full strip
     container.innerHTML = `
       <div style="font-size:10px;color:var(--text-3);padding:4px 0 0;text-align:center">
         🤖 Model: <span style="color:var(--text-2);font-family:monospace">${escHtml(segments[0].modelId)}</span>
@@ -1262,71 +1893,72 @@ function renderModelSwimlane(calls, container) {
         }).join('')}
       </div>
     </div>
-    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
-      ${segments.map(seg => {
-        if (!seg.modelId) return '';
-        const color = modelColorMap[seg.modelId] || '#888';
-        return `<span style="font-size:9.5px;color:${color}">■ ${escHtml(seg.modelId)}</span>`;
-      }).join('')}
-    </div>
   `;
 }
 
-// ── Timeline Canvas Drawing ──
-function drawTimelineChart(calls) {
-  const canvas = document.getElementById('pa-timeline-chart');
+// ── Timeline Canvas Drawing (Supports zoom & crosshairs) ──
+function drawTimelineChart(calls, targetCanvas = null, zoomRange = null, crosshairStepIndex = null, customMaxes = null) {
+  const canvas = targetCanvas || document.getElementById('pa-timeline-chart');
   if (!canvas) return;
-  chartCanvas = canvas;
+  if (!targetCanvas) chartCanvas = canvas;
 
   const ctx = canvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.parentElement.getBoundingClientRect();
+  const h = canvas.dataset.height ? parseInt(canvas.dataset.height) : 260;
 
   canvas.width = rect.width * dpr;
-  canvas.height = 260 * dpr;
+  canvas.height = h * dpr;
   canvas.style.width = rect.width + 'px';
-  canvas.style.height = '260px';
+  canvas.style.height = h + 'px';
   ctx.scale(dpr, dpr);
 
   const w = rect.width;
-  const h = 260;
-  const pad = { top: 25, right: 30, bottom: 40, left: 70 };
-  const chartW = w - pad.left - pad.right;
+  const pad = { top: 25, right: 60, bottom: 40, left: 70 };
+
+  // Calculate slice if zoomRange is present
+  let visibleCalls = calls;
+  let startIndex = 0;
+  if (zoomRange && Array.isArray(zoomRange) && (zoomRange[0] > 0 || zoomRange[1] < 100)) {
+    startIndex = Math.floor((zoomRange[0] / 100) * calls.length);
+    let endIndex = Math.ceil((zoomRange[1] / 100) * calls.length);
+    startIndex = Math.max(0, Math.min(calls.length - 1, startIndex));
+    endIndex = Math.max(startIndex + 1, Math.min(calls.length, endIndex));
+    visibleCalls = calls.slice(startIndex, endIndex);
+  }
+
+  if (visibleCalls.length === 0) return;
+
+  const sizes = visibleCalls.map(c => c.requestSize);
+  const cacheReads = visibleCalls.map(c => c.cacheReads);
+  const cacheWrites = visibleCalls.map(c => c.cacheWrites);
+  const costs = visibleCalls.map(c => c.cumulativeCost || c.cost || 0);
+  const latencies = visibleCalls.map(c => (c.latencyMs || 0) / 1000);
+
+  const maxSize = (customMaxes && customMaxes.maxSize) ? customMaxes.maxSize : Math.max(...sizes, 1);
+  const maxCache = (customMaxes && customMaxes.maxCache) ? customMaxes.maxCache : Math.max(...cacheReads, ...cacheWrites, 1);
+  const maxCost = (customMaxes && customMaxes.maxCost) ? customMaxes.maxCost : Math.max(...costs, 0.01);
+  const maxLatency = (customMaxes && customMaxes.maxLatency) ? customMaxes.maxLatency : Math.max(...latencies, 1);
+
+  const chartWeff = w - pad.left - pad.right;
   const chartH = h - pad.top - pad.bottom;
 
   const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
   ctx.fillStyle = isDark ? '#111827' : '#ffffff';
   ctx.fillRect(0, 0, w, h);
 
-  if (calls.length === 0) return;
-
-  const sizes = calls.map(c => c.requestSize);
-  const cacheReads = calls.map(c => c.cacheReads);
-  const cacheWrites = calls.map(c => c.cacheWrites);
-  const ctxPcts = calls.map(c => c.contextUtilizationPct); // null when unknown
-  const hasCtxData = chartSeries.contextWindow && ctxPcts.some(p => p != null);
-
-  const maxSize = Math.max(...sizes, 1);
-  const maxCache = Math.max(...cacheReads, ...cacheWrites, 1);
-
-  const yScale = chartH / maxSize;
-  const yCacheScale = chartH / maxCache;
-
-  // Right-Y axis label area (for context window %) if the series is active
-  const padRight = hasCtxData ? 50 : pad.right;
-  const chartWeff = w - pad.left - padRight;
-
+  // Horizontal Grid lines
   ctx.strokeStyle = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
   ctx.lineWidth = 1;
   for (let i = 0; i <= 5; i++) {
     const y = pad.top + (chartH / 5) * i;
     ctx.beginPath();
     ctx.moveTo(pad.left, y);
-    ctx.lineTo(w - padRight, y);
+    ctx.lineTo(w - pad.right, y);
     ctx.stroke();
   }
 
-  // Left Y-axis labels (request size / cache tokens)
+  // Left Y-axis (request size)
   ctx.fillStyle = isDark ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.5)';
   ctx.font = '10px Inter, sans-serif';
   ctx.textAlign = 'right';
@@ -1336,59 +1968,50 @@ function drawTimelineChart(calls) {
     ctx.fillText(fmtBytes(val), pad.left - 8, y + 3);
   }
 
-  // Right Y-axis labels (context window %)
-  if (hasCtxData) {
-    ctx.fillStyle = '#a78bfa';
-    ctx.textAlign = 'left';
-    for (let i = 0; i <= 5; i++) {
-      const y = pad.top + (chartH / 5) * i;
+  // Right Y-axis (cost $ or %)
+  ctx.textAlign = 'left';
+  ctx.fillStyle = chartSeries.cumulativeCost ? '#ec4899' : '#059669';
+  for (let i = 0; i <= 5; i++) {
+    const y = pad.top + (chartH / 5) * i;
+    if (chartSeries.cumulativeCost) {
+      const val = maxCost - (maxCost / 5) * i;
+      ctx.fillText(fmtCost(val), w - pad.right + 6, y + 3);
+    } else {
       const val = 100 - 20 * i;
-      ctx.fillText(val + '%', w - padRight + 6, y + 3);
+      ctx.fillText(val + '%', w - pad.right + 6, y + 3);
     }
-    // 80% warning threshold line
-    const warn80Y = pad.top + chartH * (1 - 0.8);
-    ctx.save();
-    ctx.strokeStyle = 'rgba(239,68,68,0.35)';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([4, 4]);
-    ctx.beginPath();
-    ctx.moveTo(pad.left, warn80Y);
-    ctx.lineTo(w - padRight, warn80Y);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillStyle = 'rgba(239,68,68,0.6)';
-    ctx.font = '9px Inter, sans-serif';
-    ctx.textAlign = 'left';
-    ctx.fillText('80%', w - padRight + 6, warn80Y + 3);
-    ctx.restore();
   }
 
-  const colWidth = chartWeff / calls.length;
-  const barWidth = Math.max(3, Math.min(20, colWidth - 2));
+  const colWidth = chartWeff / visibleCalls.length;
+  const barWidth = Math.max(2, Math.min(24, colWidth - 2));
 
   const points = [];
 
-  for (let i = 0; i < calls.length; i++) {
+  for (let i = 0; i < visibleCalls.length; i++) {
+    const c = visibleCalls[i];
+    const origIndex = startIndex + i;
     const x = pad.left + i * colWidth + colWidth / 2;
-    const barH = Math.max(2, sizes[i] * yScale);
+
+    const barH = Math.max(2, (c.requestSize / maxSize) * chartH);
     const barY = pad.top + chartH - barH;
 
-    const readY = pad.top + chartH - (cacheReads[i] * yCacheScale);
-    const writeY = pad.top + chartH - (cacheWrites[i] * yCacheScale);
-    const ctxPct = ctxPcts[i]; // may be null
-    const ctxY = ctxPct != null ? pad.top + chartH * (1 - ctxPct / 100) : null;
+    const readY = pad.top + chartH - (c.cacheReads / maxCache) * chartH;
+    const writeY = pad.top + chartH - (c.cacheWrites / maxCache) * chartH;
+    const ctxY = c.contextUtilizationPct != null ? pad.top + chartH * (1 - c.contextUtilizationPct / 100) : null;
+    const costY = pad.top + chartH * (1 - (c.cumulativeCost || 0) / maxCost);
+    const hitPctY = pad.top + chartH * (1 - (c.cacheHitPct || 0) / 100);
+    const latY = pad.top + chartH * (1 - ((c.latencyMs || 0) / 1000) / maxLatency);
 
-    points.push({ x, barY, barH, readY, writeY, ctxY, ctxPct, call: calls[i], index: i });
+    points.push({ x, barY, barH, readY, writeY, ctxY, costY, hitPctY, latY, call: c, index: origIndex, localIndex: i });
 
-    if (hoveredCallIndex === i) {
-      ctx.fillStyle = isDark ? 'rgba(56, 189, 248, 0.15)' : 'rgba(14, 165, 233, 0.12)';
+    const isHighlighted = (hoveredCallIndex === origIndex) || (crosshairStepIndex === origIndex);
+    if (isHighlighted) {
+      ctx.fillStyle = isDark ? 'rgba(56, 189, 248, 0.18)' : 'rgba(14, 165, 233, 0.15)';
       ctx.fillRect(pad.left + i * colWidth, pad.top, colWidth, chartH);
     }
 
     if (chartSeries.requestSize) {
-      const hasHistoricalPruning = calls[i].hasPruning || calls[i].trimmedFromPrevBytes > 100;
-      const isHovered = hoveredCallIndex === i;
-
+      const hasHistoricalPruning = c.hasPruning || c.trimmedFromPrevBytes > 100;
       const grad = ctx.createLinearGradient(x - barWidth / 2, barY, x - barWidth / 2, pad.top + chartH);
 
       if (hasHistoricalPruning) {
@@ -1402,93 +2025,67 @@ function drawTimelineChart(calls) {
       ctx.fillStyle = grad;
       ctx.fillRect(x - barWidth / 2, barY, barWidth, barH);
 
-      if (isHovered) {
+      if (isHighlighted) {
         ctx.strokeStyle = '#38bdf8';
         ctx.lineWidth = 1.5;
         ctx.strokeRect(x - barWidth / 2 - 1, barY - 1, barWidth + 2, barH + 2);
       }
     }
 
-    const step = Math.max(1, Math.floor(calls.length / 15));
-    if (i % step === 0 || i === calls.length - 1) {
+    const step = Math.max(1, Math.floor(visibleCalls.length / 15));
+    if (i % step === 0 || i === visibleCalls.length - 1) {
       ctx.fillStyle = isDark ? 'rgba(255,255,255,0.4)' : 'rgba(0,0,0,0.4)';
       ctx.font = '10px Inter, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(String(i + 1), x, h - pad.bottom + 16);
+      ctx.fillText(String(origIndex + 1), x, h - pad.bottom + 16);
     }
   }
 
+  // Draw Cache Reads line
   if (chartSeries.cacheReads && points.length > 0) {
     ctx.strokeStyle = '#10b981';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    let started = false;
-
-    for (let i = 0; i < points.length; i++) {
-      const pt = points[i];
-      if (!started) {
-        ctx.moveTo(pt.x, Math.max(pt.readY, pad.top));
-        started = true;
-      } else {
-        ctx.lineTo(pt.x, Math.max(pt.readY, pad.top));
-      }
-    }
+    points.forEach((pt, idx) => {
+      const y = Math.max(pt.readY, pad.top);
+      if (idx === 0) ctx.moveTo(pt.x, y);
+      else ctx.lineTo(pt.x, y);
+    });
     ctx.stroke();
-
-    for (const pt of points) {
+    points.forEach(pt => {
       if (pt.call.cacheReads > 0) {
         ctx.fillStyle = '#10b981';
         ctx.beginPath();
-        ctx.arc(pt.x, Math.max(pt.readY, pad.top), 3.5, 0, Math.PI * 2);
+        ctx.arc(pt.x, Math.max(pt.readY, pad.top), 3, 0, Math.PI * 2);
         ctx.fill();
       }
-    }
+    });
   }
 
+  // Draw Cache Writes line
   if (chartSeries.cacheWrites && points.length > 0) {
     ctx.strokeStyle = '#f59e0b';
     ctx.lineWidth = 1.5;
     ctx.setLineDash([3, 3]);
     ctx.beginPath();
-    let started = false;
-
-    for (let i = 0; i < points.length; i++) {
-      const pt = points[i];
-      if (!started) {
-        ctx.moveTo(pt.x, Math.max(pt.writeY, pad.top));
-        started = true;
-      } else {
-        ctx.lineTo(pt.x, Math.max(pt.writeY, pad.top));
-      }
-    }
+    points.forEach((pt, idx) => {
+      const y = Math.max(pt.writeY, pad.top);
+      if (idx === 0) ctx.moveTo(pt.x, y);
+      else ctx.lineTo(pt.x, y);
+    });
     ctx.stroke();
     ctx.setLineDash([]);
-
-    for (const pt of points) {
-      if (pt.call.cacheWrites > 0) {
-        ctx.fillStyle = '#f59e0b';
-        const s = 5;
-        const wy = Math.max(pt.writeY, pad.top);
-        ctx.fillRect(pt.x - s / 2, wy - s / 2, s, s);
-      }
-    }
   }
 
-  // ── Context window % line ──
-  // Drawn last so it sits on top of bars. Uses right Y-axis (0–100%).
-  // Color-coded: purple < 50%, amber 50–80%, red ≥ 80%.
-  if (hasCtxData) {
-    // Draw line segments, coloring each segment by the utilization level
+  // Draw Context Window % line
+  if (chartSeries.contextWindow && points.some(p => p.ctxY != null)) {
     for (let i = 0; i < points.length; i++) {
       const pt = points[i];
       if (pt.ctxY == null) continue;
       const nextPt = i + 1 < points.length ? points[i + 1] : null;
-
-      // Color for this point
-      const pct = pt.ctxPct || 0;
+      const pct = pt.call.contextUtilizationPct || 0;
       const lineColor = pct >= 80 ? '#ef4444' : pct >= 50 ? '#f59e0b' : '#a78bfa';
 
-      // Draw segment to next valid point
       if (nextPt && nextPt.ctxY != null) {
         ctx.beginPath();
         ctx.strokeStyle = lineColor;
@@ -1497,12 +2094,88 @@ function drawTimelineChart(calls) {
         ctx.lineTo(nextPt.x, Math.max(nextPt.ctxY, pad.top));
         ctx.stroke();
       }
-
-      // Dot at each data point
       ctx.fillStyle = lineColor;
       ctx.beginPath();
-      ctx.arc(pt.x, Math.max(pt.ctxY, pad.top), hoveredCallIndex === i ? 5 : 3, 0, Math.PI * 2);
+      ctx.arc(pt.x, Math.max(pt.ctxY, pad.top), (hoveredCallIndex === pt.index) ? 5 : 3, 0, Math.PI * 2);
       ctx.fill();
+    }
+  }
+
+  // Draw Cumulative Cost Line Overlay (Vibrant pink line)
+  if (chartSeries.cumulativeCost && points.length > 0) {
+    ctx.strokeStyle = '#ec4899';
+    ctx.lineWidth = 2.5;
+    ctx.shadowColor = 'rgba(236, 72, 153, 0.5)';
+    ctx.shadowBlur = 4;
+    ctx.beginPath();
+    points.forEach((pt, idx) => {
+      const y = Math.max(pt.costY, pad.top);
+      if (idx === 0) ctx.moveTo(pt.x, y);
+      else ctx.lineTo(pt.x, y);
+    });
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    points.forEach(pt => {
+      ctx.fillStyle = '#ec4899';
+      ctx.beginPath();
+      ctx.arc(pt.x, Math.max(pt.costY, pad.top), (hoveredCallIndex === pt.index) ? 5 : 3, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  }
+
+  // Draw Cache Hit % Line Overlay (Bright Cyan line)
+  if (chartSeries.cacheHitPct && points.length > 0) {
+    ctx.strokeStyle = '#06b6d4';
+    ctx.lineWidth = 2.5;
+    ctx.shadowColor = 'rgba(6, 182, 212, 0.4)';
+    ctx.shadowBlur = 4;
+    ctx.setLineDash([4, 2]);
+    ctx.beginPath();
+    points.forEach((pt, idx) => {
+      const y = Math.max(pt.hitPctY, pad.top);
+      if (idx === 0) ctx.moveTo(pt.x, y);
+      else ctx.lineTo(pt.x, y);
+    });
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.shadowBlur = 0;
+
+    points.forEach(pt => {
+      if (pt.call.cacheHitPct > 0) {
+        ctx.fillStyle = '#06b6d4';
+        ctx.beginPath();
+        ctx.arc(pt.x, Math.max(pt.hitPctY, pad.top), (hoveredCallIndex === pt.index) ? 5 : 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    });
+  }
+
+  // Draw Step Latency Line Overlay
+  if (chartSeries.stepLatency && points.length > 0) {
+    ctx.strokeStyle = '#6366f1';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    points.forEach((pt, idx) => {
+      const y = Math.max(pt.latY, pad.top);
+      if (idx === 0) ctx.moveTo(pt.x, y);
+      else ctx.lineTo(pt.x, y);
+    });
+    ctx.stroke();
+  }
+
+  // Crosshair line for comparison mode
+  if (crosshairStepIndex != null) {
+    const pt = points.find(p => p.index === crosshairStepIndex);
+    if (pt) {
+      ctx.strokeStyle = '#f43f5e';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(pt.x, pad.top);
+      ctx.lineTo(pt.x, pad.top + chartH);
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
   }
 
@@ -1513,7 +2186,7 @@ function drawTimelineChart(calls) {
 
   canvas._chartPoints = points;
   canvas._barWidth = barWidth;
-  canvas._chartMeta = { chartW: chartWeff, padLeft: pad.left, padTop: pad.top, chartH };
+  canvas._chartMeta = { chartW: chartWeff, padLeft: pad.left, padTop: pad.top, chartH, startIndex };
 }
 
 function bindAnalyticsEvents(calls) {
@@ -1576,9 +2249,9 @@ function bindAnalyticsEvents(calls) {
   }
 }
 
-function handleChartHover(e, calls) {
-  const canvas = chartCanvas;
-  const tooltip = document.getElementById('pa-chart-tooltip');
+function handleChartHover(e, calls, targetCanvas = null, tooltipId = 'pa-chart-tooltip') {
+  const canvas = targetCanvas || chartCanvas;
+  const tooltip = document.getElementById(tooltipId);
   if (!canvas || !canvas._chartMeta || !tooltip) return;
 
   const rect = canvas.getBoundingClientRect();
@@ -1589,66 +2262,70 @@ function handleChartHover(e, calls) {
   if (mouseX < padLeft || mouseX > padLeft + chartW) {
     if (hoveredCallIndex !== null) {
       hoveredCallIndex = null;
-      drawTimelineChart(calls);
+      if (canvas.id === 'pa-timeline-chart') drawTimelineChart(calls);
     }
     tooltip.style.display = 'none';
     return;
   }
 
-  const colWidth = chartW / calls.length;
-  let colIdx = Math.floor((mouseX - padLeft) / colWidth);
-  colIdx = Math.max(0, Math.min(calls.length - 1, colIdx));
+  const points = canvas._chartPoints || [];
+  if (points.length === 0) return;
 
-  if (hoveredCallIndex !== colIdx) {
-    hoveredCallIndex = colIdx;
-    drawTimelineChart(calls);
+  const colWidth = chartW / points.length;
+  let localIdx = Math.floor((mouseX - padLeft) / colWidth);
+  localIdx = Math.max(0, Math.min(points.length - 1, localIdx));
+  const origIdx = points[localIdx].index;
+
+  if (hoveredCallIndex !== origIdx) {
+    hoveredCallIndex = origIdx;
+    if (canvas.id === 'pa-timeline-chart') drawTimelineChart(calls);
+    else if (canvas.id === 'pa-fullscreen-canvas') drawTimelineChart(calls, canvas, fullscreenZoomRange);
   }
 
-  const foundPt = canvas._chartPoints[colIdx];
+  const foundPt = points[localIdx];
   if (!foundPt) return;
 
   const c = foundPt.call;
   const prunedStr = c.trimmedFromPrevBytes > 0 ? `✂️ Context Pruned: <strong>${fmtBytes(c.trimmedFromPrevBytes)}</strong>` : 'No context pruning';
 
-  // Context window utilization display
   let ctxStr = '';
   if (c.contextUtilizationPct != null && c.contextWindowSize) {
     const pct = c.contextUtilizationPct.toFixed(1);
     const total = fmtTokens(c.totalTokensInContext);
     const limit = fmtTokens(c.contextWindowSize);
-    const pctColor = c.contextUtilizationPct >= 80 ? '#ef4444'
-      : c.contextUtilizationPct >= 50 ? '#f59e0b' : '#a78bfa';
+    const pctColor = c.contextUtilizationPct >= 80 ? '#ef4444' : c.contextUtilizationPct >= 50 ? '#f59e0b' : '#a78bfa';
     ctxStr = `<div style="color:${pctColor};font-size:10.5px;margin-top:2px">🪟 Context Window: <strong>${pct}%</strong> (${total} / ${limit})</div>`;
-  } else if (c.contextWindowSize == null && c.modelId) {
-    ctxStr = `<div style="color:var(--text-3);font-size:10px;margin-top:2px">🪟 Context Window: unknown (model not in registry)</div>`;
   }
 
-  // Model ID display
-  const modelStr = c.modelId
-    ? `<div style="font-size:10px;color:var(--text-3);margin-top:2px">🤖 ${escHtml(c.modelId)}</div>` : '';
+  const modelStr = c.modelId ? `<div style="font-size:10px;color:var(--text-3);margin-top:2px">🤖 ${escHtml(c.modelId)}</div>` : '';
 
   tooltip.style.display = 'block';
 
-  const tooltipWidth = 270;
+  const tooltipWidth = 280;
   if (mouseX > rect.width / 2) {
     tooltip.style.left = `${Math.max(10, mouseX - tooltipWidth - 15)}px`;
   } else {
     tooltip.style.left = `${Math.min(mouseX + 15, rect.width - tooltipWidth - 10)}px`;
   }
-  tooltip.style.top = `${Math.max(10, Math.min(mouseY - 30, rect.height - 140))}px`;
+  tooltip.style.top = `${Math.max(10, Math.min(mouseY - 30, rect.height - 180))}px`;
+
+  const elapsedStr = c.elapsedSeconds != null ? `+${fmtDuration(c.elapsedSeconds * 1000)}` : '';
+  const latStr = c.latencyMs ? `(step latency ${fmtDuration(c.latencyMs)})` : '';
 
   tooltip.innerHTML = `
     <div style="font-weight:bold;color:var(--text);margin-bottom:4px;display:flex;justify-content:space-between">
       <span>API Call #${foundPt.index + 1}</span>
-      <span style="color:var(--text-3);font-weight:normal">${fmtTime(c.ts)}</span>
+      <span style="color:var(--text-3);font-weight:normal">${fmtTime(c.ts)} ${elapsedStr ? `<strong style="color:#38bdf8">${elapsedStr}</strong>` : ''}</span>
     </div>
     ${modelStr}
-    <div style="color:#38bdf8;font-weight:600">📦 Total Request Size: <strong>${fmtBytes(c.requestSize)}</strong></div>
+    <div style="color:#38bdf8;font-weight:600">📦 Request Size: <strong>${fmtBytes(c.requestSize)}</strong></div>
     ${ctxStr}
-    <div style="color:var(--green);font-size:10.5px">📖 Cache Reads: <strong>${fmtTokens(c.cacheReads)} tokens</strong></div>
-    <div style="color:#f59e0b;font-size:10.5px">✍️ Cache Writes: <strong>${fmtTokens(c.cacheWrites)} tokens</strong></div>
+    <div style="color:#ec4899;font-weight:bold;font-size:10.5px">📈 Cumulative Price: <strong>${fmtCost(c.cumulativeCost || c.cost)}</strong></div>
+    <div style="color:#06b6d4;font-weight:bold;font-size:10.5px">🎯 Cache Hit Rate: <strong>${(c.cacheHitPct || 0).toFixed(1)}%</strong></div>
+    <div style="color:var(--green);font-size:10px">📖 Cache Reads: <strong>${fmtTokens(c.cacheReads)}</strong></div>
+    <div style="color:#f59e0b;font-size:10px">✍️ Cache Writes: <strong>${fmtTokens(c.cacheWrites)}</strong></div>
     <div style="font-size:10px;color:var(--text-2);margin-top:2px">${prunedStr}</div>
-    <div style="font-size:10px;color:var(--text-2)">Cost: <strong>${fmtCost(c.cost)}</strong></div>
+    <div style="font-size:10px;color:var(--text-3)">Call Cost: <strong>${fmtCost(c.cost)}</strong> ${latStr}</div>
   `;
 }
 

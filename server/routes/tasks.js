@@ -222,6 +222,26 @@ module.exports = (db) => {
     res.json(task);
   });
 
+  // PATCH / POST / PUT /api/tasks/:id/label — set/update custom task label
+  const updateLabelHandler = (req, res) => {
+    const taskId = req.params.id;
+    const { label } = req.body || {};
+    const cleanLabel = (typeof label === 'string' && label.trim().length > 0) ? label.trim() : null;
+
+    let task = db.prepare('SELECT id FROM tasks WHERE id = ?').get(taskId);
+    if (!task) {
+      // Upsert task row so label persists even if task originated directly from disk files
+      const now = Date.now();
+      db.prepare('INSERT OR IGNORE INTO tasks (id, source, start_ts, label) VALUES (?, ?, ?, ?)').run(taskId, 'unknown', now, cleanLabel);
+    }
+
+    db.prepare('UPDATE tasks SET label = ? WHERE id = ?').run(cleanLabel, taskId);
+    res.json({ ok: true, id: taskId, label: cleanLabel });
+  };
+  router.patch('/:id/label', updateLabelHandler);
+  router.post('/:id/label', updateLabelHandler);
+  router.put('/:id/label', updateLabelHandler);
+
   // GET /api/tasks/:id/events — events for timeline
   router.get('/:id/events', (req, res) => {
     const { types } = req.query;

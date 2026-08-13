@@ -611,15 +611,56 @@ module.exports = (db, config, getStore) => {
       callCurr.hasPruning = turnSavedBytes > 100;
     }
 
-    // Attach a human-readable explanation of cache behavior to every call
-    // (needs to run after trimmedFromPrevBytes/hasPruning are computed above).
+    // Attach cumulative metrics (cost, elapsed time, latency, cacheHitPct) & explanation to every call
+    let runningCost = 0;
+    const startTs = apiCalls[0]?.ts || 0;
     for (let i = 0; i < apiCalls.length; i++) {
-      apiCalls[i].cacheExplanation = computeCacheExplanation(apiCalls[i], i > 0 ? apiCalls[i - 1] : null, uiMessages);
+      const c = apiCalls[i];
+      runningCost += (c.cost || 0);
+      c.cumulativeCost = runningCost;
+      c.elapsedSeconds = Math.max(0, Math.round(((c.ts - startTs) / 1000) * 10) / 10);
+      c.latencyMs = i > 0 ? Math.max(0, c.ts - apiCalls[i - 1].ts) : 0;
+      const reads = c.cacheReads || 0;
+      const inTok = c.tokensIn || 0;
+      if (reads <= 0) {
+        c.cacheHitPct = 0;
+      } else {
+        const totalPrompt = inTok >= reads ? inTok : (reads + inTok);
+        c.cacheHitPct = totalPrompt > 0 ? Math.min(100, Math.max(0, Math.round((reads / totalPrompt) * 1000) / 10)) : 0;
+      }
+      c.cacheExplanation = computeCacheExplanation(c, i > 0 ? apiCalls[i - 1] : null, uiMessages);
     }
 
 
-    const taskMeta = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+    let taskMeta = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+    if (!taskMeta) {
+      const startTs = apiCalls[0]?.ts || Date.now();
+      const endTs = apiCalls[apiCalls.length - 1]?.ts || Date.now();
+      const dur = Math.max(0, endTs - startTs);
+      const totCost = apiCalls.reduce((s, c) => s + (c.cost || 0), 0);
+      const firstMsg = uiMessages[0]?.content ? (typeof uiMessages[0].content === 'string' ? uiMessages[0].content : JSON.stringify(uiMessages[0].content)) : `Task ${taskId}`;
+      db.prepare('INSERT OR IGNORE INTO tasks (id, source, start_ts, end_ts, duration, total_cost, api_call_count, first_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
+        taskId, 'disk', startTs, endTs, dur, totCost, apiCalls.length, firstMsg.substring(0, 200)
+      );
+      taskMeta = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+    }
 
+    const taskObj = {
+      id: taskId,
+      label: taskMeta?.label || null,
+      source: taskMeta?.source || 'disk',
+      startTs: taskMeta?.start_ts || (apiCalls[0]?.ts || Date.now()),
+      endTs: taskMeta?.end_ts || (apiCalls[apiCalls.length - 1]?.ts || Date.now()),
+      duration: taskMeta?.duration || 0,
+      totalCost: taskMeta?.total_cost || 0,
+      totalTokensIn: taskMeta?.total_tokens_in || 0,
+      totalTokensOut: taskMeta?.total_tokens_out || 0,
+      totalCacheReads: taskMeta?.total_cache_reads || 0,
+      totalCacheWrites: taskMeta?.total_cache_writes || 0,
+      apiCallCount: taskMeta?.api_call_count || apiCalls.length,
+      firstMessage: taskMeta?.first_message || `Task ${taskId}`,
+      status: taskMeta?.status || 'completed',
+    };
 
     const fileCategorySummary = Object.keys(filePruningMap).map(f => ({
       path: f,
@@ -634,21 +675,7 @@ module.exports = (db, config, getStore) => {
     })).sort((a, b) => b.bytesSaved - a.bytesSaved);
 
     res.json({
-      task: taskMeta ? {
-        id: taskMeta.id,
-        source: taskMeta.source,
-        startTs: taskMeta.start_ts,
-        endTs: taskMeta.end_ts,
-        duration: taskMeta.duration,
-        totalCost: taskMeta.total_cost,
-        totalTokensIn: taskMeta.total_tokens_in,
-        totalTokensOut: taskMeta.total_tokens_out,
-        totalCacheReads: taskMeta.total_cache_reads,
-        totalCacheWrites: taskMeta.total_cache_writes,
-        apiCallCount: taskMeta.api_call_count,
-        firstMessage: taskMeta.first_message,
-        status: taskMeta.status,
-      } : null,
+      task: taskObj,
       filePaths: {
         taskPath,
         uiMessagesPath: fs.existsSync(uiPath) ? uiPath : null,
@@ -670,6 +697,27 @@ module.exports = (db, config, getStore) => {
         : 'The system prompt (tool definitions, core instructions) is generated in-memory by the extension at request time and is not persisted to any task file, so it cannot be shown here. Only user/assistant turns from api_conversation_history.json are reconstructed. Enable and use the Network Inspector proxy to capture and persist it.',
     });
   });
+
+  /**
+   * POST / PATCH /api/prompt-analytics/:taskId/label
+   * Set or clear custom task label.
+   */
+  const handlePromptAnalyticsLabel = (req, res) => {
+    const taskId = req.params.taskId;
+    const { label } = req.body || {};
+    const cleanLabel = (typeof label === 'string' && label.trim().length > 0) ? label.trim() : null;
+
+    let task = db.prepare('SELECT id FROM tasks WHERE id = ?').get(taskId);
+    if (!task) {
+      db.prepare('INSERT OR IGNORE INTO tasks (id, source, start_ts, label) VALUES (?, ?, ?, ?)').run(taskId, 'unknown', Date.now(), cleanLabel);
+    }
+
+    db.prepare('UPDATE tasks SET label = ? WHERE id = ?').run(cleanLabel, taskId);
+    res.json({ ok: true, id: taskId, label: cleanLabel });
+  };
+  router.post('/prompt-analytics/:taskId/label', handlePromptAnalyticsLabel);
+  router.patch('/prompt-analytics/:taskId/label', handlePromptAnalyticsLabel);
+  router.put('/prompt-analytics/:taskId/label', handlePromptAnalyticsLabel);
 
 
   /**
