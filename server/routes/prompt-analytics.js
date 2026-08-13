@@ -785,6 +785,33 @@ module.exports = (db, config, getStore) => {
       totalSavedBytes: totalScratchSavedBytes,
     };
 
+    // Calculate Financial Cost Breakdown
+    const modelInfo = getModelInfo(detectedModelId);
+    const inputPricePerM = matchedPricing?.prompt || modelInfo?.inputPrice || 3.0;
+    const outputPricePerM = matchedPricing?.completion || modelInfo?.outputPrice || 15.0;
+    const cacheReadPricePerM = matchedPricing?.cacheRead || (inputPricePerM * 0.1);
+    const cacheWritePricePerM = matchedPricing?.cacheWrite || (inputPricePerM * 1.25);
+
+    const totalTokensIn = apiCalls.reduce((s, c) => s + (c.tokensIn || 0), 0);
+    const totalTokensOut = apiCalls.reduce((s, c) => s + (c.tokensOut || 0), 0);
+    const totalCacheReads = apiCalls.reduce((s, c) => s + (c.cacheReads || 0), 0);
+    const totalCacheWrites = apiCalls.reduce((s, c) => s + (c.cacheWrites || 0), 0);
+    const calculatedTotalCost = apiCalls.reduce((s, c) => s + (c.cost || 0), 0);
+
+    const inputCost = (totalTokensIn / 1e6) * inputPricePerM;
+    const outputCost = (totalTokensOut / 1e6) * outputPricePerM;
+    const cacheReadCost = (totalCacheReads / 1e6) * cacheReadPricePerM;
+    const cacheWriteCost = (totalCacheWrites / 1e6) * cacheWritePricePerM;
+
+    const financialBreakdown = {
+      modelId: detectedModelId || 'unknown',
+      totalCost: calculatedTotalCost || (inputCost + outputCost + cacheReadCost + cacheWriteCost),
+      input: { tokens: totalTokensIn, pricePerM: inputPricePerM, cost: inputCost },
+      output: { tokens: totalTokensOut, pricePerM: outputPricePerM, cost: outputCost },
+      cacheRead: { tokens: totalCacheReads, pricePerM: cacheReadPricePerM, cost: cacheReadCost },
+      cacheWrite: { tokens: totalCacheWrites, pricePerM: cacheWritePricePerM, cost: cacheWriteCost },
+    };
+
     res.json({
       task: taskObj,
       filePaths: {
@@ -795,6 +822,7 @@ module.exports = (db, config, getStore) => {
       },
       apiCalls,
       modelPricing: matchedPricing,
+      financialBreakdown,
       reductionCategories: {
         truncatedFiles: fileCategorySummary,
         truncatedCommands: cmdCategorySummary,

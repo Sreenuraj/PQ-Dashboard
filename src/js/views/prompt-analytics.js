@@ -400,10 +400,86 @@ function renderAnalytics(contentEl) {
 
   const scratchSum = data.scratchSummary || { count: 0, totalSavedBytes: 0 };
   const scratchSaved = scratchSum.totalSavedBytes || 0;
+  const fb = data.financialBreakdown || {
+    modelId: data.task?.model || 'unknown',
+    totalCost: data.task?.totalCost || 0,
+    input: { tokens: calls.reduce((s, c) => s + (c.tokensIn || 0), 0), cost: 0, pricePerM: 3.0 },
+    output: { tokens: calls.reduce((s, c) => s + (c.tokensOut || 0), 0), cost: 0, pricePerM: 15.0 },
+    cacheRead: { tokens: calls.reduce((s, c) => s + (c.cacheReads || 0), 0), cost: 0, pricePerM: 0.30 },
+    cacheWrite: { tokens: calls.reduce((s, c) => s + (c.cacheWrites || 0), 0), cost: 0, pricePerM: 3.75 },
+  };
 
   renderTaskMetricsBar(data.task, calls);
 
   contentEl.innerHTML = `
+    <!-- Financial Cost & Token Breakdown Panel -->
+    <div style="margin-bottom:16px;background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px;box-shadow:var(--shadow-sm)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+        <div style="font-weight:bold;font-size:12.5px;color:var(--text);display:flex;align-items:center;gap:6px">
+          <span>💰 Task Financial Cost & Token Breakdown</span>
+          <span style="background:rgba(56,189,248,0.15);color:#38bdf8;padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:bold" class="mono">🤖 ${escHtml(fb.modelId || 'Model')}</span>
+        </div>
+        <div style="font-size:11px;color:var(--text-3)">
+          Calculated from exact LLM token counts & OpenRouter model rates
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(170px, 1fr));gap:10px">
+        <!-- 1. Input Tokens -->
+        <div style="background:var(--bg-3);border:1px solid var(--border);padding:10px;border-radius:var(--radius-sm);border-top:3px solid #38bdf8">
+          <div style="font-size:10.5px;color:var(--text-3);margin-bottom:4px;font-weight:600">📥 Uncached Input</div>
+          <div class="mono" style="font-size:15px;font-weight:bold;color:var(--text)">${fmtTokens(fb.input?.tokens || 0)}</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:10px">
+            <span style="color:#38bdf8;font-weight:bold">${fmtCost(fb.input?.cost || 0)}</span>
+            <span style="color:var(--text-3)" class="mono">$${(fb.input?.pricePerM || 0).toFixed(2)}/1M</span>
+          </div>
+        </div>
+
+        <!-- 2. Output Tokens -->
+        <div style="background:var(--bg-3);border:1px solid var(--border);padding:10px;border-radius:var(--radius-sm);border-top:3px solid #e879f9">
+          <div style="font-size:10.5px;color:var(--text-3);margin-bottom:4px;font-weight:600">📤 Output Generation</div>
+          <div class="mono" style="font-size:15px;font-weight:bold;color:var(--text)">${fmtTokens(fb.output?.tokens || 0)}</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:10px">
+            <span style="color:#e879f9;font-weight:bold">${fmtCost(fb.output?.cost || 0)}</span>
+            <span style="color:var(--text-3)" class="mono">$${(fb.output?.pricePerM || 0).toFixed(2)}/1M</span>
+          </div>
+        </div>
+
+        <!-- 3. Cache Read Tokens -->
+        <div style="background:var(--bg-3);border:1px solid var(--border);padding:10px;border-radius:var(--radius-sm);border-top:3px solid var(--green)">
+          <div style="font-size:10.5px;color:var(--text-3);margin-bottom:4px;font-weight:600;display:flex;justify-content:space-between">
+            <span>📖 Cache Reads</span>
+            <span style="color:var(--green);font-size:9.5px;font-weight:bold">⚡ 90% Off</span>
+          </div>
+          <div class="mono" style="font-size:15px;font-weight:bold;color:var(--text)">${fmtTokens(fb.cacheRead?.tokens || 0)}</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:10px">
+            <span style="color:var(--green);font-weight:bold">${fmtCost(fb.cacheRead?.cost || 0)}</span>
+            <span style="color:var(--text-3)" class="mono">$${(fb.cacheRead?.pricePerM || 0).toFixed(2)}/1M</span>
+          </div>
+        </div>
+
+        <!-- 4. Cache Write Tokens -->
+        <div style="background:var(--bg-3);border:1px solid var(--border);padding:10px;border-radius:var(--radius-sm);border-top:3px solid #f59e0b">
+          <div style="font-size:10.5px;color:var(--text-3);margin-bottom:4px;font-weight:600">✍️ Cache Writes</div>
+          <div class="mono" style="font-size:15px;font-weight:bold;color:var(--text)">${fmtTokens(fb.cacheWrite?.tokens || 0)}</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:10px">
+            <span style="color:#f59e0b;font-weight:bold">${fmtCost(fb.cacheWrite?.cost || 0)}</span>
+            <span style="color:var(--text-3)" class="mono">$${(fb.cacheWrite?.pricePerM || 0).toFixed(2)}/1M</span>
+          </div>
+        </div>
+
+        <!-- 5. Total Financial Cost -->
+        <div style="background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.3);padding:10px;border-radius:var(--radius-sm);border-top:3px solid var(--green)">
+          <div style="font-size:10.5px;color:var(--green);margin-bottom:4px;font-weight:bold">💵 Total Financial Cost</div>
+          <div class="mono" style="font-size:18px;font-weight:bold;color:var(--green)">${fmtCost(fb.totalCost || data.task?.totalCost || 0)}</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;font-size:10px;color:var(--text-2)">
+            <span>${calls.length} API Calls</span>
+            <span>100% Billable</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Executive Pruning Category Summary Grid -->
     <div style="margin-bottom:16px">
       <div style="font-weight:bold;font-size:12.5px;color:var(--text);margin-bottom:10px">
