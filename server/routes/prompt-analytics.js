@@ -727,6 +727,17 @@ module.exports = (db, config, getStore) => {
             }
           }
 
+          if (promptSnippetText) {
+            const fnameIdx = promptSnippetText.indexOf(fname);
+            if (fnameIdx >= 0) {
+              const start = Math.max(0, fnameIdx - 400);
+              const end = Math.min(promptSnippetText.length, fnameIdx + 1000);
+              promptSnippetText = promptSnippetText.substring(start, end);
+            } else if (promptSnippetText.length > 2000) {
+              promptSnippetText = promptSnippetText.substring(0, 1500) + `\n... [snippet preview]`;
+            }
+          }
+
           const promptBytes = promptSnippetText ? promptSnippetText.length : Math.min(rawBytes, 1500);
           totalScratchPromptBytes += promptBytes;
           const bytesSaved = Math.max(0, rawBytes - promptBytes);
