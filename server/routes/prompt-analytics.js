@@ -485,6 +485,7 @@ module.exports = (db, config, getStore) => {
       const histIdx = resolveMaxMsgIdx(apiCalls.length, rawHistIdx, apiHistory.length);
 
       let requestSize = 0;
+      let turnDeltaSize = 0;
       let messageCount = 0;
 
       if (histIdx >= 0 && apiHistory.length > 0) {
@@ -497,6 +498,14 @@ module.exports = (db, config, getStore) => {
           requestSize += systemPromptCapture.text.length;
         }
         messageCount = effectiveMsgs.length;
+
+        // Calculate turnDeltaSize: Size of new message(s) added in this specific turn
+        const prevCount = apiCalls.length > 0 ? (apiCalls[apiCalls.length - 1]?.messageCount || 0) : 0;
+        const newMsgsCount = apiCalls.length === 0 ? effectiveMsgs.length : Math.max(1, effectiveMsgs.length - prevCount);
+        const newMsgs = effectiveMsgs.slice(Math.max(0, effectiveMsgs.length - newMsgsCount));
+        for (const m of newMsgs) {
+          turnDeltaSize += JSON.stringify(m || {}).length;
+        }
       }
 
       const sizeDelta = apiCalls.length === 0 ? 0 : (requestSize - prevRequestSize);
@@ -529,6 +538,7 @@ module.exports = (db, config, getStore) => {
         historyIndex: histIdx,
         messageCount,
         requestSize,
+        turnDeltaSize: turnDeltaSize || Math.max(0, sizeDelta),
         sizeDelta,
         trimmedFromPrevBytes: 0,
         hasPruning: false,

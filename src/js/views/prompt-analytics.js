@@ -73,6 +73,8 @@ let chartSeries = {
   stepLatency: false,
 };
 
+let requestSizeMode = 'accumulated'; // 'accumulated' | 'delta'
+
 let fullscreenZoomRange = [0, 100];
 
 // ── Main Render ──
@@ -489,7 +491,10 @@ function renderAnalytics(contentEl) {
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <div class="pa-chart-legend" style="display:flex;gap:4px;flex-wrap:wrap">
             <button class="pa-legend-chip ${chartSeries.requestSize ? 'active' : ''}" data-series="requestSize">
-              <span class="pa-legend-color" style="background:#38bdf8"></span> Request Size (Bars)
+              <span class="pa-legend-color" style="background:#38bdf8"></span> Request Size
+            </button>
+            <button id="pa-toggle-size-mode-btn" class="action-btn secondary" style="padding:2px 8px;font-size:10.5px;margin-right:4px;border:1px solid rgba(56,189,248,0.4);color:#38bdf8;font-weight:bold" title="Toggle between Total Accumulated Context Payload vs Per-Turn New Input Delta">
+              ${requestSizeMode === 'accumulated' ? '📦 Accumulated Context' : '⚡ Per-Turn New Input'}
             </button>
             <button class="pa-legend-chip ${chartSeries.cacheReads ? 'active' : ''}" data-series="cacheReads">
               <span class="pa-legend-color" style="background:#10b981"></span> Cache Reads
@@ -1972,7 +1977,8 @@ function drawTimelineChart(calls, targetCanvas = null, zoomRange = null, crossha
 
   if (visibleCalls.length === 0) return;
 
-  const sizes = visibleCalls.map(c => c.requestSize);
+  const requestSizeMode = window.requestSizeMode || 'accumulated';
+  const sizes = visibleCalls.map(c => requestSizeMode === 'accumulated' ? c.requestSize : (c.turnDeltaSize || Math.max(1, c.sizeDelta)));
   const cacheReads = visibleCalls.map(c => c.cacheReads);
   const cacheWrites = visibleCalls.map(c => c.cacheWrites);
   const costs = visibleCalls.map(c => c.cumulativeCost || c.cost || 0);
@@ -2035,7 +2041,8 @@ function drawTimelineChart(calls, targetCanvas = null, zoomRange = null, crossha
     const origIndex = startIndex + i;
     const x = pad.left + i * colWidth + colWidth / 2;
 
-    const barH = Math.max(2, (c.requestSize / maxSize) * chartH);
+    const targetSize = requestSizeMode === 'accumulated' ? c.requestSize : (c.turnDeltaSize || Math.max(1, c.sizeDelta));
+    const barH = Math.max(2, (targetSize / maxSize) * chartH);
     const barY = pad.top + chartH - barH;
 
     const readY = pad.top + chartH - (c.cacheReads / maxCache) * chartH;
@@ -2246,6 +2253,17 @@ function drawTimelineChart(calls, targetCanvas = null, zoomRange = null, crossha
 }
 
 function bindAnalyticsEvents(calls) {
+  const modeBtn = document.getElementById('pa-toggle-size-mode-btn');
+  if (modeBtn && !modeBtn._hasBound) {
+    modeBtn._hasBound = true;
+    modeBtn.addEventListener('click', () => {
+      requestSizeMode = requestSizeMode === 'accumulated' ? 'delta' : 'accumulated';
+      window.requestSizeMode = requestSizeMode;
+      modeBtn.innerHTML = requestSizeMode === 'accumulated' ? '📦 Accumulated Context' : '⚡ Per-Turn New Input';
+      drawTimelineChart(calls);
+    });
+  }
+
   document.querySelectorAll('.pa-legend-chip').forEach(chip => {
     chip.addEventListener('click', () => {
       const seriesKey = chip.dataset.series;
@@ -2421,7 +2439,8 @@ function handleChartHover(e, calls, targetCanvas = null, tooltipId = 'pa-chart-t
       <span style="color:var(--text-3);font-weight:normal">${fmtTime(c.ts)} ${elapsedStr ? `<strong style="color:#38bdf8">${elapsedStr}</strong>` : ''}</span>
     </div>
     ${modelStr}
-    <div style="color:#38bdf8;font-weight:600">📦 Request Size: <strong>${fmtBytes(c.requestSize)}</strong></div>
+    <div style="color:#38bdf8;font-weight:600;font-size:10.5px">📦 Accumulated Payload: <strong>${fmtBytes(c.requestSize)}</strong></div>
+    <div style="color:#38bdf8;font-size:10.5px">⚡ Per-Turn New Input: <strong>${fmtBytes(c.turnDeltaSize || Math.max(0, c.sizeDelta))}</strong></div>
     ${scratchStr}
     ${ctxStr}
     <div style="color:#ec4899;font-weight:bold;font-size:10.5px">📈 Cumulative Price: <strong>${fmtCost(c.cumulativeCost || c.cost)}</strong></div>
