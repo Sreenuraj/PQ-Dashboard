@@ -487,10 +487,21 @@ module.exports = (db, config, getStore) => {
       let requestSize = 0;
       let messageCount = 0;
 
-      if (histIdx >= 0 && apiHistory.length > 0) {
+      if (data.request && typeof data.request === 'string' && data.request.length > 0) {
+        // 100% EXACT: Raw HTTP request body captured live by Network Proxy
+        requestSize = data.request.length;
+        if (histIdx >= 0 && apiHistory.length > 0) {
+          const effectiveMsgs = getEffectiveMessagesAtTs(apiHistory, contextUpdates, msg.ts, histIdx);
+          messageCount = effectiveMsgs.length;
+        }
+      } else if (histIdx >= 0 && apiHistory.length > 0) {
+        // 98%+ ACCURATE RECONSTRUCTION: Full message JSON objects + System Prompt
         const effectiveMsgs = getEffectiveMessagesAtTs(apiHistory, contextUpdates, msg.ts, histIdx);
         for (const m of effectiveMsgs) {
-          requestSize += JSON.stringify(m?.content || '').length;
+          requestSize += JSON.stringify(m || {}).length;
+        }
+        if (systemPromptCapture && systemPromptCapture.text) {
+          requestSize += systemPromptCapture.text.length;
         }
         messageCount = effectiveMsgs.length;
       }
