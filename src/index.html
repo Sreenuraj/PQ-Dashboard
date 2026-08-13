@@ -81,18 +81,16 @@
         </nav>
 
         <div class="sidebar-footer">
-          <div id="auto-refresh-wrapper" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;padding:0 2px;font-size:11px;color:var(--text-2)">
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none" title="Automatically scan and update dashboard data every 10 seconds without interrupting your view">
-              <input type="checkbox" id="auto-refresh-checkbox" style="cursor:pointer;accent-color:#38bdf8">
-              <span>⚡ Auto Refresh</span>
-            </label>
-            <span id="auto-refresh-timer" style="font-size:10px;color:#38bdf8;font-family:monospace;font-weight:bold"></span>
+          <div class="refresh-widget" id="refresh-widget">
+            <button id="refresh-btn" class="refresh-btn" title="Refresh Data (Click to scan manually)">
+              <span class="refresh-icon">↻</span>
+              <span id="refresh-label">Refresh Data</span>
+            </button>
+            <button id="auto-refresh-toggle-btn" class="auto-refresh-pill" title="Toggle 10s Auto Refresh">
+              <span class="auto-icon">⚡</span>
+              <span id="auto-refresh-timer">10s</span>
+            </button>
           </div>
-
-          <button id="refresh-btn" class="refresh-btn">
-            <span class="refresh-icon">↻</span>
-            <span id="refresh-label">Refresh Data</span>
-          </button>
           <div id="refresh-status" class="refresh-status"></div>
           <div id="refresh-hint" style="font-size:10px;color:var(--text-3);text-align:center;margin-top:3px">
             Only scans new/changed tasks

@@ -122,15 +122,17 @@ window.addEventListener('daterange:change', () => {
 window.addEventListener('hashchange', navigate);
 
 // ── Refresh & Auto-Refresh Controls ──
+const refreshWidget = document.getElementById('refresh-widget');
 const refreshBtn = document.getElementById('refresh-btn');
 const refreshLabel = document.getElementById('refresh-label');
 const refreshStatus = document.getElementById('refresh-status');
-const autoRefreshCb = document.getElementById('auto-refresh-checkbox');
+const autoRefreshBtn = document.getElementById('auto-refresh-toggle-btn');
 const autoRefreshTimerEl = document.getElementById('auto-refresh-timer');
 
 let isRefreshing = false;
 let autoRefreshTimer = null;
 let countdownVal = 10;
+let isAutoRefreshActive = false;
 
 async function executeRefresh({ isSilent = false } = {}) {
   if (isRefreshing) return;
@@ -177,19 +179,34 @@ refreshBtn?.addEventListener('click', () => {
   executeRefresh({ isSilent: false });
 });
 
-// Load saved auto-refresh state
-const savedAutoRefresh = localStorage.getItem('pq_auto_refresh') === 'true';
-if (autoRefreshCb) {
-  autoRefreshCb.checked = savedAutoRefresh;
-  autoRefreshCb.addEventListener('change', () => {
-    localStorage.setItem('pq_auto_refresh', autoRefreshCb.checked ? 'true' : 'false');
-    if (autoRefreshCb.checked) startAutoRefresh();
-    else stopAutoRefresh();
-  });
+autoRefreshBtn?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  toggleAutoRefresh();
+});
+
+function toggleAutoRefresh(enable = null) {
+  isAutoRefreshActive = enable !== null ? enable : !isAutoRefreshActive;
+  localStorage.setItem('pq_auto_refresh', isAutoRefreshActive ? 'true' : 'false');
+  updateAutoRefreshUI();
+  if (isAutoRefreshActive) startAutoRefresh();
+  else stopAutoRefresh();
+}
+
+function updateAutoRefreshUI() {
+  if (refreshWidget) refreshWidget.classList.toggle('auto-active', isAutoRefreshActive);
+  if (autoRefreshBtn) autoRefreshBtn.classList.toggle('active', isAutoRefreshActive);
+  if (refreshBtn) {
+    const title = isAutoRefreshActive
+      ? 'Refresh Data (⚡ Auto 10s Active — Click for manual scan)'
+      : 'Refresh Data (Click to scan manually)';
+    refreshBtn.setAttribute('title', title);
+  }
 }
 
 function startAutoRefresh() {
   stopAutoRefresh();
+  isAutoRefreshActive = true;
+  updateAutoRefreshUI();
   countdownVal = 10;
   if (autoRefreshTimerEl) autoRefreshTimerEl.textContent = '10s';
 
@@ -206,13 +223,17 @@ function startAutoRefresh() {
 }
 
 function stopAutoRefresh() {
+  isAutoRefreshActive = false;
+  updateAutoRefreshUI();
   if (autoRefreshTimer) {
     clearInterval(autoRefreshTimer);
     autoRefreshTimer = null;
   }
-  if (autoRefreshTimerEl) autoRefreshTimerEl.textContent = '';
+  if (autoRefreshTimerEl) autoRefreshTimerEl.textContent = '10s';
 }
 
+// Load saved auto-refresh state
+const savedAutoRefresh = localStorage.getItem('pq_auto_refresh') === 'true';
 if (savedAutoRefresh) {
   startAutoRefresh();
 }
