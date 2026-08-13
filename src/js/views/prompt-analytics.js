@@ -557,9 +557,15 @@ function renderAnalytics(contentEl) {
     <!-- Dedicated Scratch Offload Inspector Panel -->
     <div id="pa-scratch-section" class="panel pa-comparison-panel-full" style="margin-top:16px">
       <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
-        <span>⚡ Immediate Write-Time Scratch Offload Inspector (${(data.scratchEvents || []).length} offloaded outputs)</span>
-        <div style="font-size:11px;color:var(--text-3)">
-          Comparing raw tool logs in <code style="color:#38bdf8">scratch/*.log</code> vs retained prompt preview payload sent to AI model
+        <div style="display:flex;align-items:center;gap:10px">
+          <span>⚡ Immediate Write-Time Scratch Offload Inspector (${(data.scratchEvents || []).length} offloaded outputs)</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="display:flex;align-items:center;gap:6px;font-size:11px">
+            <span style="color:var(--text-3)">Sort Order:</span>
+            <button id="pa-scratch-sort-chrono" class="action-btn secondary active" style="padding:2px 8px;font-size:10.5px">⏱️ Chronological (Call #)</button>
+            <button id="pa-scratch-sort-bytes" class="action-btn secondary" style="padding:2px 8px;font-size:10.5px">💾 Largest Saved</button>
+          </div>
         </div>
       </div>
       <div id="pa-scratch-body" class="panel-body" style="padding:16px">
@@ -2560,6 +2566,8 @@ export async function silentRefreshPromptAnalytics() {
   }
 }
 
+let scratchSortMode = 'chrono';
+
 function renderScratchInspector(container, scratchEvents) {
   if (!container) return;
   if (!scratchEvents || scratchEvents.length === 0) {
@@ -2571,9 +2579,32 @@ function renderScratchInspector(container, scratchEvents) {
     return;
   }
 
+  const sortedEvents = [...scratchEvents].sort((a, b) => {
+    if (scratchSortMode === 'bytes') return b.bytesSaved - a.bytesSaved;
+    return a.callIndex - b.callIndex || a.filename.localeCompare(b.filename);
+  });
+
+  const chronoBtn = document.getElementById('pa-scratch-sort-chrono');
+  const bytesBtn = document.getElementById('pa-scratch-sort-bytes');
+  if (chronoBtn && bytesBtn && !chronoBtn._hasBoundSort) {
+    chronoBtn._hasBoundSort = true;
+    chronoBtn.addEventListener('click', () => {
+      scratchSortMode = 'chrono';
+      chronoBtn.classList.add('active');
+      bytesBtn.classList.remove('active');
+      renderScratchInspector(container, scratchEvents);
+    });
+    bytesBtn.addEventListener('click', () => {
+      scratchSortMode = 'bytes';
+      bytesBtn.classList.add('active');
+      chronoBtn.classList.remove('active');
+      renderScratchInspector(container, scratchEvents);
+    });
+  }
+
   container.innerHTML = `
     <div style="display:flex;flex-direction:column;gap:14px">
-      ${scratchEvents.map(evt => {
+      ${sortedEvents.map(evt => {
         const rawSizeStr = fmtBytes(evt.rawBytes);
         const promptSizeStr = fmtBytes(evt.promptBytes);
         const savedStr = fmtBytes(evt.bytesSaved);

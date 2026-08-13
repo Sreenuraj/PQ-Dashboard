@@ -738,7 +738,19 @@ module.exports = (db, config, getStore) => {
       }
     }
 
-    scratchEvents.sort((a, b) => b.bytesSaved - a.bytesSaved);
+    scratchEvents.sort((a, b) => a.callIndex - b.callIndex || a.filename.localeCompare(b.filename));
+
+    const fileCategorySummary = Object.keys(filePruningMap).map(f => ({
+      path: f,
+      count: filePruningMap[f].count,
+      bytesSaved: filePruningMap[f].bytesSaved,
+    })).sort((a, b) => b.bytesSaved - a.bytesSaved);
+
+    const cmdCategorySummary = Object.keys(cmdPruningMap).map(c => ({
+      command: c,
+      count: cmdPruningMap[c].count,
+      bytesSaved: cmdPruningMap[c].bytesSaved,
+    })).sort((a, b) => b.bytesSaved - a.bytesSaved);
 
     const totalScratchSavedBytes = Math.max(0, totalScratchRawBytes - totalScratchPromptBytes);
     const scratchSummary = {
