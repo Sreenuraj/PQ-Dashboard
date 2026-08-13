@@ -2050,9 +2050,14 @@ function drawTimelineChart(calls, targetCanvas = null, zoomRange = null, crossha
 
     if (chartSeries.requestSize) {
       const hasHistoricalPruning = c.hasPruning || c.trimmedFromPrevBytes > 100;
+      const hasScratchOffload = (c.scratchOffloadedBytes || 0) > 50;
+
       const grad = ctx.createLinearGradient(x - barWidth / 2, barY, x - barWidth / 2, pad.top + chartH);
 
-      if (hasHistoricalPruning) {
+      if (hasScratchOffload) {
+        grad.addColorStop(0, '#e879f9');
+        grad.addColorStop(1, 'rgba(232, 121, 249, 0.35)');
+      } else if (hasHistoricalPruning) {
         grad.addColorStop(0, '#10b981');
         grad.addColorStop(1, 'rgba(16,185,129,0.35)');
       } else {
@@ -2063,8 +2068,15 @@ function drawTimelineChart(calls, targetCanvas = null, zoomRange = null, crossha
       ctx.fillStyle = grad;
       ctx.fillRect(x - barWidth / 2, barY, barWidth, barH);
 
+      if (hasScratchOffload) {
+        ctx.fillStyle = '#e879f9';
+        ctx.font = 'bold 9.5px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('⚡', x, Math.max(pad.top + 8, barY - 3));
+      }
+
       if (isHighlighted) {
-        ctx.strokeStyle = '#38bdf8';
+        ctx.strokeStyle = hasScratchOffload ? '#e879f9' : '#38bdf8';
         ctx.lineWidth = 1.5;
         ctx.strokeRect(x - barWidth / 2 - 1, barY - 1, barWidth + 2, barH + 2);
       }
@@ -2393,6 +2405,10 @@ function handleChartHover(e, calls, targetCanvas = null, tooltipId = 'pa-chart-t
   const elapsedStr = c.elapsedSeconds != null ? `+${fmtDuration(c.elapsedSeconds * 1000)}` : '';
   const latStr = c.latencyMs ? `(step latency ${fmtDuration(c.latencyMs)})` : '';
 
+  const scratchStr = (c.scratchOffloadedBytes || 0) > 0
+    ? `<div style="color:#e879f9;font-weight:bold;font-size:10.5px">⚡ Scratch Offloaded: <strong>${fmtBytes(c.scratchOffloadedBytes)}</strong></div>`
+    : '';
+
   tooltip.innerHTML = `
     <div style="font-weight:bold;color:var(--text);margin-bottom:4px;display:flex;justify-content:space-between">
       <span>API Call #${foundPt.index + 1}</span>
@@ -2400,6 +2416,7 @@ function handleChartHover(e, calls, targetCanvas = null, tooltipId = 'pa-chart-t
     </div>
     ${modelStr}
     <div style="color:#38bdf8;font-weight:600">📦 Request Size: <strong>${fmtBytes(c.requestSize)}</strong></div>
+    ${scratchStr}
     ${ctxStr}
     <div style="color:#ec4899;font-weight:bold;font-size:10.5px">📈 Cumulative Price: <strong>${fmtCost(c.cumulativeCost || c.cost)}</strong></div>
     <div style="color:#06b6d4;font-weight:bold;font-size:10.5px">🎯 Cache Hit Rate: <strong>${(c.cacheHitPct || 0).toFixed(1)}%</strong></div>
@@ -2555,15 +2572,34 @@ function renderScratchInspector(container, scratchEvents) {
   }
 
   container.innerHTML = `
-    <div style="display:flex;flex-direction:column;gap:16px">
+    <div style="display:flex;flex-direction:column;gap:14px">
       ${scratchEvents.map(evt => {
         const rawSizeStr = fmtBytes(evt.rawBytes);
         const promptSizeStr = fmtBytes(evt.promptBytes);
         const savedStr = fmtBytes(evt.bytesSaved);
         const savingsPct = evt.rawBytes > 0 ? ((evt.bytesSaved / evt.rawBytes) * 100).toFixed(1) : '0';
 
+        const rawText = evt.rawPreviewText || '';
+        const promptText = evt.promptSnippetText || '';
+
+        // Compute exact diff chunks
+        let prefixLen = 0;
+        const maxPrefix = Math.min(rawText.length, promptText.length);
+        while (prefixLen < maxPrefix && rawText[prefixLen] === promptText[prefixLen]) prefixLen++;
+
+        let suffixLen = 0;
+        const maxSuffix = Math.min(rawText.length - prefixLen, promptText.length - prefixLen);
+        while (suffixLen < maxSuffix && rawText[rawText.length - 1 - suffixLen] === promptText[promptText.length - 1 - suffixLen]) suffixLen++;
+
+        const prefix = rawText.substring(0, prefixLen);
+        const removedText = rawText.substring(prefixLen, rawText.length - suffixLen);
+        const insertedText = promptText.substring(prefixLen, promptText.length - suffixLen);
+        const suffix = rawText.substring(rawText.length - suffixLen);
+
+        const bannerText = removedText.length > 500 ? removedText.substring(0, 500) + `\n... [${removedText.length - 500} more chars offloaded to disk]` : (removedText || rawText.substring(0, 500));
+
         return `
-          <div class="panel" style="border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-2)">
+          <div class="pa-sbs-card panel" data-call="${evt.callIndex}" data-target="${escHtml(evt.filename)}" style="border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-2)">
             <div style="background:var(--bg-3);padding:10px 14px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);flex-wrap:wrap;gap:8px">
               <div style="display:flex;align-items:center;gap:10px">
                 <span style="background:rgba(232,121,249,0.15);color:#e879f9;padding:2px 8px;border-radius:12px;font-size:10.5px;font-weight:bold;border:1px solid rgba(232,121,249,0.3)">
@@ -2572,33 +2608,44 @@ function renderScratchInspector(container, scratchEvents) {
                 <strong style="color:var(--text);font-size:11.5px" class="mono">${escHtml(evt.filename)}</strong>
                 <span style="color:var(--text-3);font-size:11px">Call #${evt.callIndex + 1}</span>
               </div>
-              <div style="display:flex;align-items:center;gap:8px">
-                <span class="mono" style="color:#e879f9;font-size:11.5px;font-weight:bold">
+              <div>
+                <span class="mono" style="color:#e879f9;font-weight:bold;font-size:12px;background:rgba(232,121,249,0.1);padding:3px 10px;border-radius:var(--radius-sm);border:1px solid rgba(232,121,249,0.25)">
                   Saved ${savedStr} (${savingsPct}%)
                 </span>
               </div>
             </div>
 
+            <!-- Banner Highlight -->
+            <div style="background:rgba(232,121,249,0.08);border-bottom:1px solid rgba(255,255,255,0.12);padding:8px 14px;font-size:11px">
+              <span style="color:#e879f9;font-weight:bold">✂️ EXACT BULK OUTPUT OFFLOADED TO DISK (scratch/${escHtml(evt.filename)}):</span>
+              <div class="mono" style="margin-top:4px;background:rgba(255,255,255,0.06);color:#e879f9;padding:6px 10px;border-radius:var(--radius-sm);border-left:3px solid #e879f9;max-height:90px;overflow-y:auto;white-space:pre-wrap;word-break:break-all">
+                ${escHtml(bannerText)}
+              </div>
+            </div>
+
+            <!-- Side-by-Side Diff Panes -->
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border)">
-              <!-- Left Pane: Raw Output in scratch/*.log -->
               <div style="background:var(--bg-2);padding:10px 12px">
                 <div style="font-weight:bold;font-size:10.5px;color:var(--red);margin-bottom:6px;display:flex;justify-content:space-between">
                   <span>🔴 RAW UNTRUNCATED OUTPUT (scratch/${escHtml(evt.filename)})</span>
                   <span class="mono">${rawSizeStr}</span>
                 </div>
-                <div class="mono pa-sbs-left" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border);max-height:240px;overflow:auto;white-space:pre-wrap;word-break:break-all">
-                  ${escHtml(evt.rawPreviewText || '(Empty output)')}
+                <div class="mono pa-sbs-left" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border);max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all">
+                  ${escHtml(prefix.length > 150 ? '...' + prefix.substring(prefix.length - 150) : prefix)}
+                  ${removedText ? `<span style="background:rgba(239,68,68,0.25);color:var(--red);font-weight:bold;padding:2px 4px;border-radius:2px">${escHtml(removedText.length > 500 ? removedText.substring(0, 500) + '\n... [' + (removedText.length - 500) + ' more chars]' : removedText)}</span>` : ''}
+                  ${escHtml(suffix.length > 150 ? suffix.substring(0, 150) + '...' : suffix)}
                 </div>
               </div>
 
-              <!-- Right Pane: Retained Prompt Payload Snippet -->
               <div style="background:var(--bg-2);padding:10px 12px">
                 <div style="font-weight:bold;font-size:10.5px;color:var(--green);margin-bottom:6px;display:flex;justify-content:space-between">
                   <span>🟢 RETAINED PROMPT PAYLOAD (Sent to LLM)</span>
                   <span class="mono">${promptSizeStr}</span>
                 </div>
-                <div class="mono pa-sbs-right" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border);max-height:240px;overflow:auto;white-space:pre-wrap;word-break:break-all">
-                  ${escHtml(evt.promptSnippetText || '(Snippet in prompt payload)')}
+                <div class="mono pa-sbs-right" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border);max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all">
+                  ${escHtml(prefix.length > 150 ? '...' + prefix.substring(prefix.length - 150) : prefix)}
+                  ${insertedText ? `<span style="background:rgba(34,197,94,0.25);color:var(--green);font-weight:bold;padding:2px 4px;border-radius:2px">${escHtml(insertedText.length > 500 ? insertedText.substring(0, 500) + '\n... [' + (insertedText.length - 500) + ' more chars]' : insertedText)}</span>` : ''}
+                  ${escHtml(suffix.length > 150 ? suffix.substring(0, 150) + '...' : suffix)}
                 </div>
               </div>
             </div>
