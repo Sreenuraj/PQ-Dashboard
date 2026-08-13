@@ -14,7 +14,7 @@ import { renderBaselineEnrich } from './views/baseline-enrich.js';
 import { renderTest } from './views/test.js';
 import { renderDeepCompare } from './views/deep-compare.js';
 import { renderNetwork } from './views/network.js';
-import { renderPromptAnalytics } from './views/prompt-analytics.js';
+import { renderPromptAnalytics, silentRefreshPromptAnalytics } from './views/prompt-analytics.js';
 import { api }            from './api.js';
 import { getDateRange, initDatePicker } from './components/date-picker.js';
 import { applyChartTheme } from './components/charts.js';
@@ -121,33 +121,101 @@ window.addEventListener('daterange:change', () => {
 
 window.addEventListener('hashchange', navigate);
 
-// ── Refresh button ──
-const refreshBtn    = document.getElementById('refresh-btn');
-const refreshLabel  = document.getElementById('refresh-label');
+// ── Refresh & Auto-Refresh Controls ──
+const refreshBtn = document.getElementById('refresh-btn');
+const refreshLabel = document.getElementById('refresh-label');
 const refreshStatus = document.getElementById('refresh-status');
+const autoRefreshCb = document.getElementById('auto-refresh-checkbox');
+const autoRefreshTimerEl = document.getElementById('auto-refresh-timer');
 
-refreshBtn?.addEventListener('click', async () => {
-  refreshBtn.disabled = true;
-  refreshBtn.classList.add('spinning');
-  refreshLabel.textContent = 'Refreshing...';
-  refreshStatus.textContent = '';
+let isRefreshing = false;
+let autoRefreshTimer = null;
+let countdownVal = 10;
+
+async function executeRefresh({ isSilent = false } = {}) {
+  if (isRefreshing) return;
+  isRefreshing = true;
+
+  if (refreshBtn) {
+    refreshBtn.classList.add('spinning');
+    if (!isSilent && refreshLabel) refreshLabel.textContent = 'Refreshing...';
+  }
 
   try {
     await api.refresh();
-    refreshStatus.textContent = 'Scanning new tasks...';
+    if (refreshStatus) refreshStatus.textContent = 'Scanning new tasks...';
     await pollRefresh();
-    refreshStatus.textContent = '✓ Done!';
-    refreshLabel.textContent = 'Refresh Data';
-    setTimeout(() => { refreshStatus.textContent = ''; }, 4000);
-    navigate(); // re-render current view with fresh data
+    if (refreshStatus) {
+      refreshStatus.textContent = isSilent ? '✓ Updated' : '✓ Done!';
+      setTimeout(() => { if (refreshStatus) refreshStatus.textContent = ''; }, 3000);
+    }
+
+    const view = currentView();
+    if (view === 'prompt-analytics' && typeof silentRefreshPromptAnalytics === 'function') {
+      await silentRefreshPromptAnalytics();
+    } else if (isSilent) {
+      const queryStr = window.location.hash.split('?')[1] || '';
+      const params = new URLSearchParams(queryStr);
+      const render = routes[view];
+      if (render) await render(params);
+    } else {
+      navigate();
+    }
   } catch (e) {
-    refreshStatus.textContent = '✕ Error: ' + e.message;
-    refreshLabel.textContent = 'Refresh Data';
+    console.error('Refresh error:', e);
+    if (refreshStatus) refreshStatus.textContent = '✕ Error: ' + e.message;
   } finally {
-    refreshBtn.classList.remove('spinning');
-    refreshBtn.disabled = false;
+    if (refreshBtn) {
+      refreshBtn.classList.remove('spinning');
+      if (refreshLabel) refreshLabel.textContent = 'Refresh Data';
+    }
+    isRefreshing = false;
   }
+}
+
+refreshBtn?.addEventListener('click', () => {
+  executeRefresh({ isSilent: false });
 });
+
+// Load saved auto-refresh state
+const savedAutoRefresh = localStorage.getItem('pq_auto_refresh') === 'true';
+if (autoRefreshCb) {
+  autoRefreshCb.checked = savedAutoRefresh;
+  autoRefreshCb.addEventListener('change', () => {
+    localStorage.setItem('pq_auto_refresh', autoRefreshCb.checked ? 'true' : 'false');
+    if (autoRefreshCb.checked) startAutoRefresh();
+    else stopAutoRefresh();
+  });
+}
+
+function startAutoRefresh() {
+  stopAutoRefresh();
+  countdownVal = 10;
+  if (autoRefreshTimerEl) autoRefreshTimerEl.textContent = '10s';
+
+  autoRefreshTimer = setInterval(async () => {
+    countdownVal--;
+    if (countdownVal <= 0) {
+      countdownVal = 10;
+      if (autoRefreshTimerEl) autoRefreshTimerEl.textContent = '10s';
+      await executeRefresh({ isSilent: true });
+    } else {
+      if (autoRefreshTimerEl) autoRefreshTimerEl.textContent = `${countdownVal}s`;
+    }
+  }, 1000);
+}
+
+function stopAutoRefresh() {
+  if (autoRefreshTimer) {
+    clearInterval(autoRefreshTimer);
+    autoRefreshTimer = null;
+  }
+  if (autoRefreshTimerEl) autoRefreshTimerEl.textContent = '';
+}
+
+if (savedAutoRefresh) {
+  startAutoRefresh();
+}
 
 async function pollRefresh() {
   for (let i = 0; i < 120; i++) {

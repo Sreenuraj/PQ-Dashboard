@@ -81,6 +81,14 @@
         </nav>
 
         <div class="sidebar-footer">
+          <div id="auto-refresh-wrapper" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;padding:0 2px;font-size:11px;color:var(--text-2)">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none" title="Automatically scan and update dashboard data every 10 seconds without interrupting your view">
+              <input type="checkbox" id="auto-refresh-checkbox" style="cursor:pointer;accent-color:#38bdf8">
+              <span>⚡ Auto Refresh</span>
+            </label>
+            <span id="auto-refresh-timer" style="font-size:10px;color:#38bdf8;font-family:monospace;font-weight:bold"></span>
+          </div>
+
           <button id="refresh-btn" class="refresh-btn">
             <span class="refresh-icon">↻</span>
             <span id="refresh-label">Refresh Data</span>

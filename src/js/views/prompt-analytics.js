@@ -2358,3 +2358,97 @@ function handleChartClick(e, calls) {
     }
   }
 }
+
+export async function silentRefreshPromptAnalytics() {
+  try {
+    const result = await api.tasks({ limit: 100, page: 1 });
+    allTasksList = result.tasks || [];
+    allTasksList.forEach(t => {
+      t.label = getSavedTaskLabel(t.id, t.label);
+    });
+
+    const select = document.getElementById('pa-task-select');
+    if (select) {
+      const selectedVal = select.value || currentTaskId;
+      select.innerHTML = `
+        <option value="">— Choose a task to analyze —</option>
+        ${allTasksList.map(t => {
+          const displayName = t.label ? `🏷️ ${escHtml(t.label)}` : escHtml(t.first_message ? t.first_message.substring(0, 75) : 'Task ' + t.id);
+          return `
+            <option value="${t.id}" ${t.id === selectedVal ? 'selected' : ''}>
+              ${displayName} (${t.api_call_count || 0} calls, ${fmtCost(t.total_cost)})
+            </option>
+          `;
+        }).join('')}
+      `;
+    }
+
+    if (activeMode === 'single' && currentTaskId) {
+      const res = await api.promptAnalytics(currentTaskId);
+      if (res && res.apiCalls) {
+        analyticsData = res;
+        renderTaskMetricsBar(analyticsData.task, analyticsData.apiCalls);
+        drawTimelineChart(analyticsData.apiCalls);
+        renderModelSwimlane(analyticsData.apiCalls, document.getElementById('pa-chart-swimlane'));
+
+        const modal = document.getElementById('pa-fullscreen-modal');
+        if (modal && modal.style.display === 'flex') {
+          const fsCanvas = document.getElementById('pa-fullscreen-canvas');
+          if (fsCanvas) {
+            drawTimelineChart(analyticsData.apiCalls, fsCanvas, fullscreenZoomRange);
+          }
+        }
+      }
+    } else if (activeMode === 'compare' && compareSelectedTaskIds.length > 0) {
+      for (const id of compareSelectedTaskIds) {
+        try {
+          const res = await api.promptAnalytics(id);
+          if (res && res.apiCalls) {
+            if (!res.task) res.task = { id };
+            const taskItem = allTasksList.find(x => x.id === id);
+            const label = taskItem?.label || res.task.label || getSavedTaskLabel(id, null);
+            res.task.label = label;
+            compareDataMap[id] = res;
+          }
+        } catch {}
+      }
+
+      const validIds = Object.keys(compareDataMap);
+      if (validIds.length > 0) {
+        const getGlobalCompareMaxes = () => {
+          if (!useSharedCompareScale) return null;
+          let maxCost = 0.01;
+          let maxSize = 1;
+          let maxCache = 1;
+          let maxLatency = 1;
+
+          validIds.forEach(id => {
+            const calls = compareDataMap[id]?.apiCalls || [];
+            calls.forEach(c => {
+              const costVal = c.cumulativeCost || c.cost || 0;
+              if (costVal > maxCost) maxCost = costVal;
+              if ((c.requestSize || 0) > maxSize) maxSize = c.requestSize;
+              if ((c.cacheReads || 0) > maxCache) maxCache = c.cacheReads;
+              if ((c.cacheWrites || 0) > maxCache) maxCache = c.cacheWrites;
+              if (((c.latencyMs || 0) / 1000) > maxLatency) maxLatency = (c.latencyMs || 0) / 1000;
+            });
+          });
+
+          return { maxCost, maxSize, maxCache, maxLatency };
+        };
+
+        const sharedMaxes = getGlobalCompareMaxes();
+        validIds.forEach(id => {
+          const canvas = document.getElementById(`pa-compare-canvas-${id}`);
+          if (canvas && compareDataMap[id]) {
+            drawTimelineChart(compareDataMap[id].apiCalls, canvas, null, compareStepIndex, sharedMaxes);
+          }
+        });
+
+        drawCombinedCompareChart(validIds, compareStepIndex, sharedMaxes);
+      }
+    }
+  } catch (e) {
+    console.error('Silent refresh failed:', e);
+  }
+}
