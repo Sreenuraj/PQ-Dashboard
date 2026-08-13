@@ -332,6 +332,19 @@ html, body {
   justify-content: center;
 }
 
+#sidebar-wrapper.unpinned:not(:hover) #auto-refresh-wrapper {
+  justify-content: center;
+  margin-bottom: 6px;
+}
+
+#sidebar-wrapper.unpinned:not(:hover) #auto-refresh-wrapper span {
+  display: none !important;
+}
+
+#sidebar-wrapper.unpinned:not(:hover) #auto-refresh-wrapper label {
+  gap: 0;
+}
+
 .refresh-status {
   font-size: 10.5px;
   color: var(--text-3);
