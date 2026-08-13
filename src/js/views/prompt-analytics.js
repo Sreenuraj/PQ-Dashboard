@@ -848,7 +848,7 @@ function renderCompareAnalyticsView(contentEl, taskIds) {
               const displayName = label ? `🏷️ ${escHtml(label)}` : escHtml(t.firstMessage ? t.firstMessage.substring(0, 50) : id);
 
               const calls = d.apiCalls || [];
-              const totalCost = t.totalCost || calls.reduce((s, c) => s + c.cost, 0);
+              const totalCost = d.financialBreakdown?.totalCost || calls.reduce((s, c) => s + (c.cost || 0), 0) || t.totalCost || 0;
               const durationMs = t.duration || (calls.length > 1 ? (calls[calls.length - 1].ts - calls[0].ts) : 0);
 
               const { pct: cacheHitPct } = computeOverallCacheHitPct(calls);
@@ -856,9 +856,10 @@ function renderCompareAnalyticsView(contentEl, taskIds) {
               const cats = d.reductionCategories || {};
               const fileSaved = (cats.truncatedFiles || []).reduce((s, f) => s + f.bytesSaved, 0);
               const cmdSaved = (cats.truncatedCommands || []).reduce((s, c) => s + c.bytesSaved, 0);
-              const totalPruned = fileSaved + cmdSaved + (cats.environmentSnapshots?.bytesSaved || 0);
+              const scratchSaved = d.scratchSummary?.totalSavedBytes || 0;
+              const totalPruned = fileSaved + cmdSaved + (cats.environmentSnapshots?.bytesSaved || 0) + scratchSaved;
 
-              const modelLabel = calls.find(c => c.modelId)?.modelId || 'Unknown';
+              const modelLabel = d.financialBreakdown?.modelId || calls.find(c => c.modelId)?.modelId || 'Unknown';
 
               return `
                 <tr style="border-bottom:1px solid var(--border)">
@@ -1249,7 +1250,10 @@ function renderCompareStepInspector(taskIds, stepIdx) {
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:10.5px;background:var(--bg-3);padding:8px;border-radius:var(--radius-sm)">
           <div>
-            <span style="color:var(--text-3)">Request Size:</span> <strong style="color:#38bdf8">${fmtBytes(call.requestSize)}</strong>
+            <span style="color:var(--text-3)">📦 Payload:</span> <strong style="color:#38bdf8">${fmtBytes(call.requestSize)}</strong>
+          </div>
+          <div>
+            <span style="color:var(--text-3)">⚡ New Input:</span> <strong style="color:#38bdf8">${fmtBytes(call.turnDeltaSize || Math.max(0, call.sizeDelta))}</strong>
           </div>
           <div>
             <span style="color:var(--text-3)">Call Cost:</span> <strong style="color:var(--green)">${fmtCost(call.cost)}</strong>
@@ -1260,6 +1264,10 @@ function renderCompareStepInspector(taskIds, stepIdx) {
           <div>
             <span style="color:var(--text-3)">Cache Reads:</span> <strong style="color:#10b981">${fmtTokens(call.cacheReads)}</strong>
           </div>
+          <div>
+            <span style="color:var(--text-3)">Cache Writes:</span> <strong style="color:#f59e0b">${fmtTokens(call.cacheWrites)}</strong>
+          </div>
+          ${(call.scratchOffloadedBytes || 0) > 0 ? `<div style="grid-column:span 2;color:#e879f9;font-weight:bold"><span style="color:var(--text-3)">⚡ Scratch Offload:</span> ${fmtBytes(call.scratchOffloadedBytes)}</div>` : ''}
         </div>
         ${call.modelId ? `<div style="font-size:9.5px;color:var(--text-3);margin-top:6px;font-family:monospace">🤖 ${escHtml(call.modelId)}</div>` : ''}
       </div>
