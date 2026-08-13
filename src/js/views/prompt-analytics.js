@@ -645,15 +645,19 @@ function openFullscreenChartModal(calls, task) {
   });
 
   if (fsCanvas) {
-    fsCanvas.addEventListener('mousemove', (e) => {
-      handleChartHover(e, calls, fsCanvas, 'pa-fullscreen-tooltip');
-    });
-    fsCanvas.addEventListener('mouseleave', () => {
-      hoveredCallIndex = null;
-      updateFsChart();
-      const tt = document.getElementById('pa-fullscreen-tooltip');
-      if (tt) tt.style.display = 'none';
-    });
+    fsCanvas._calls = calls;
+    if (!fsCanvas._hasHoverBound) {
+      fsCanvas._hasHoverBound = true;
+      fsCanvas.addEventListener('mousemove', (e) => {
+        handleChartHover(e, fsCanvas._calls, fsCanvas, 'pa-fullscreen-tooltip');
+      });
+      fsCanvas.addEventListener('mouseleave', () => {
+        fsCanvas._hoveredIndex = null;
+        updateFsChart();
+        const tt = document.getElementById('pa-fullscreen-tooltip');
+        if (tt) tt.style.display = 'none';
+      });
+    }
   }
 }
 
@@ -913,15 +917,16 @@ function renderCompareAnalyticsView(contentEl, taskIds) {
     taskIds.forEach(id => {
       const canvas = document.getElementById(`pa-compare-canvas-${id}`);
       if (canvas && compareDataMap[id]) {
-        drawTimelineChart(compareDataMap[id].apiCalls, canvas, null, stepIdx, sharedMaxes);
+        canvas._calls = compareDataMap[id].apiCalls;
+        drawTimelineChart(canvas._calls, canvas, null, stepIdx, sharedMaxes);
         if (!canvas._hasHoverBound) {
           canvas._hasHoverBound = true;
           canvas.addEventListener('mousemove', (e) => {
-            handleChartHover(e, compareDataMap[id].apiCalls, canvas, 'pa-compare-tooltip');
+            handleChartHover(e, canvas._calls, canvas, 'pa-compare-tooltip');
           });
           canvas.addEventListener('mouseleave', () => {
-            hoveredCallIndex = null;
-            updateAllCompareCharts(compareStepIndex);
+            canvas._hoveredIndex = null;
+            redrawTargetCanvas(canvas, canvas._calls);
             const tt = document.getElementById('pa-compare-tooltip');
             if (tt) tt.style.display = 'none';
           });
@@ -2004,7 +2009,8 @@ function drawTimelineChart(calls, targetCanvas = null, zoomRange = null, crossha
 
     points.push({ x, barY, barH, readY, writeY, ctxY, costY, hitPctY, latY, call: c, index: origIndex, localIndex: i });
 
-    const isHighlighted = (hoveredCallIndex === origIndex) || (crosshairStepIndex === origIndex);
+    const hoveredIdx = canvas._hoveredIndex != null ? canvas._hoveredIndex : null;
+    const isHighlighted = (hoveredIdx === origIndex) || (crosshairStepIndex === origIndex);
     if (isHighlighted) {
       ctx.fillStyle = isDark ? 'rgba(56, 189, 248, 0.18)' : 'rgba(14, 165, 233, 0.15)';
       ctx.fillRect(pad.left + i * colWidth, pad.top, colWidth, chartH);
@@ -2234,18 +2240,56 @@ function bindAnalyticsEvents(calls) {
 
   const chartEl = document.getElementById('pa-timeline-chart');
   if (chartEl) {
-    chartEl.addEventListener('mousemove', (e) => {
-      handleChartHover(e, calls);
-    });
-    chartEl.addEventListener('mouseleave', () => {
-      hoveredCallIndex = null;
-      drawTimelineChart(calls);
-      const tooltip = document.getElementById('pa-chart-tooltip');
-      if (tooltip) tooltip.style.display = 'none';
-    });
-    chartEl.addEventListener('click', (e) => {
-      handleChartClick(e, calls);
-    });
+    chartEl._calls = calls;
+    if (!chartEl._hasBoundEvents) {
+      chartEl._hasBoundEvents = true;
+      chartEl.addEventListener('mousemove', (e) => {
+        handleChartHover(e, chartEl._calls, chartEl, 'pa-chart-tooltip');
+      });
+      chartEl.addEventListener('mouseleave', () => {
+        chartEl._hoveredIndex = null;
+        redrawTargetCanvas(chartEl, chartEl._calls);
+        const tooltip = document.getElementById('pa-chart-tooltip');
+        if (tooltip) tooltip.style.display = 'none';
+      });
+      chartEl.addEventListener('click', (e) => {
+        handleChartClick(e, chartEl._calls);
+      });
+    }
+  }
+}
+
+function redrawTargetCanvas(canvas, calls) {
+  if (!canvas) return;
+  if (canvas.id === 'pa-timeline-chart') {
+    drawTimelineChart(calls, canvas);
+  } else if (canvas.id === 'pa-fullscreen-canvas') {
+    drawTimelineChart(calls, canvas, fullscreenZoomRange);
+  } else if (canvas.id && canvas.id.startsWith('pa-compare-canvas-')) {
+    const stepIdx = (compareStepIndex != null) ? compareStepIndex : 0;
+    const validIds = Object.keys(compareDataMap);
+    const getGlobalCompareMaxes = () => {
+      if (!useSharedCompareScale) return null;
+      let maxCost = 0.01;
+      let maxSize = 1;
+      let maxCache = 1;
+      let maxLatency = 1;
+
+      validIds.forEach(id => {
+        const cList = compareDataMap[id]?.apiCalls || [];
+        cList.forEach(c => {
+          const costVal = c.cumulativeCost || c.cost || 0;
+          if (costVal > maxCost) maxCost = costVal;
+          if ((c.requestSize || 0) > maxSize) maxSize = c.requestSize;
+          if ((c.cacheReads || 0) > maxCache) maxCache = c.cacheReads;
+          if ((c.cacheWrites || 0) > maxCache) maxCache = c.cacheWrites;
+          if (((c.latencyMs || 0) / 1000) > maxLatency) maxLatency = (c.latencyMs || 0) / 1000;
+        });
+      });
+
+      return { maxCost, maxSize, maxCache, maxLatency };
+    };
+    drawTimelineChart(calls, canvas, null, stepIdx, getGlobalCompareMaxes());
   }
 }
 
@@ -2260,9 +2304,9 @@ function handleChartHover(e, calls, targetCanvas = null, tooltipId = 'pa-chart-t
 
   const { chartW, padLeft } = canvas._chartMeta;
   if (mouseX < padLeft || mouseX > padLeft + chartW) {
-    if (hoveredCallIndex !== null) {
-      hoveredCallIndex = null;
-      if (canvas.id === 'pa-timeline-chart') drawTimelineChart(calls);
+    if (canvas._hoveredIndex !== null && canvas._hoveredIndex !== undefined) {
+      canvas._hoveredIndex = null;
+      redrawTargetCanvas(canvas, calls);
     }
     tooltip.style.display = 'none';
     return;
@@ -2276,10 +2320,9 @@ function handleChartHover(e, calls, targetCanvas = null, tooltipId = 'pa-chart-t
   localIdx = Math.max(0, Math.min(points.length - 1, localIdx));
   const origIdx = points[localIdx].index;
 
-  if (hoveredCallIndex !== origIdx) {
-    hoveredCallIndex = origIdx;
-    if (canvas.id === 'pa-timeline-chart') drawTimelineChart(calls);
-    else if (canvas.id === 'pa-fullscreen-canvas') drawTimelineChart(calls, canvas, fullscreenZoomRange);
+  if (canvas._hoveredIndex !== origIdx) {
+    canvas._hoveredIndex = origIdx;
+    redrawTargetCanvas(canvas, calls);
   }
 
   const foundPt = points[localIdx];
