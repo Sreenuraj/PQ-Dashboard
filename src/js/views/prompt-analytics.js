@@ -1989,6 +1989,7 @@ function renderReductionSequenceFeed(body, events) {
           target: key,
           events: [],
           totalSaved: 0,
+          cumulativeCost: 0,
           toolName: e.toolName,
           category: e.category,
           isScratch: e.isScratch,
@@ -2482,17 +2483,41 @@ function drawTimelineChart(calls, targetCanvas = null, zoomRange = null, crossha
     }
 
     if (chartSeries.requestSize) {
-      const hasHistoricalPruning = c.hasPruning || c.trimmedFromPrevBytes > 100;
+      const hasFilePruning = (c.fileTruncationBytes || 0) > 50 || c.hasFilePruning;
+      const hasCommandPruning = (c.commandTruncationBytes || 0) > 50 || c.hasCommandPruning;
+      const hasHistoricalPruning = c.hasPruning || (c.trimmedFromPrevBytes || 0) > 100;
       const hasScratchOffload = (c.scratchOffloadedBytes || 0) > 50;
 
       const grad = ctx.createLinearGradient(x - barWidth / 2, barY, x - barWidth / 2, pad.top + chartH);
 
-      if (hasScratchOffload) {
-        grad.addColorStop(0, '#e879f9');
-        grad.addColorStop(1, 'rgba(232, 121, 249, 0.45)');
+      let barBorderColor = 'rgba(56, 189, 248, 0.85)';
+      let badgeIcon = '';
+      let badgeColor = '#38bdf8';
+
+      if (hasFilePruning) {
+        grad.addColorStop(0, '#10b981');
+        grad.addColorStop(1, 'rgba(16, 185, 129, 0.45)');
+        barBorderColor = 'rgba(16, 185, 129, 0.9)';
+        badgeIcon = hasScratchOffload ? '📁⚡' : '📁';
+        badgeColor = '#10b981';
+      } else if (hasCommandPruning) {
+        grad.addColorStop(0, '#06b6d4');
+        grad.addColorStop(1, 'rgba(6, 182, 212, 0.45)');
+        barBorderColor = 'rgba(6, 182, 212, 0.9)';
+        badgeIcon = hasScratchOffload ? '💻⚡' : '💻';
+        badgeColor = '#06b6d4';
       } else if (hasHistoricalPruning) {
         grad.addColorStop(0, '#10b981');
         grad.addColorStop(1, 'rgba(16, 185, 129, 0.45)');
+        barBorderColor = 'rgba(16, 185, 129, 0.9)';
+        badgeIcon = '✂️';
+        badgeColor = '#10b981';
+      } else if (hasScratchOffload) {
+        grad.addColorStop(0, '#e879f9');
+        grad.addColorStop(1, 'rgba(232, 121, 249, 0.45)');
+        barBorderColor = 'rgba(232, 121, 249, 0.9)';
+        badgeIcon = '⚡';
+        badgeColor = '#e879f9';
       } else {
         grad.addColorStop(0, '#38bdf8');
         grad.addColorStop(1, 'rgba(14, 165, 233, 0.45)');
@@ -2501,15 +2526,15 @@ function drawTimelineChart(calls, targetCanvas = null, zoomRange = null, crossha
       ctx.fillStyle = grad;
       ctx.fillRect(x - barWidth / 2, barY, barWidth, barH);
 
-      ctx.strokeStyle = hasScratchOffload ? 'rgba(232, 121, 249, 0.85)' : (hasHistoricalPruning ? 'rgba(16, 185, 129, 0.85)' : 'rgba(56, 189, 248, 0.85)');
+      ctx.strokeStyle = barBorderColor;
       ctx.lineWidth = 1;
       ctx.strokeRect(x - barWidth / 2, barY, barWidth, barH);
 
-      if (hasScratchOffload) {
-        ctx.fillStyle = '#e879f9';
-        ctx.font = 'bold 9.5px Inter, sans-serif';
+      if (badgeIcon) {
+        ctx.fillStyle = badgeColor;
+        ctx.font = 'bold 8.5px Inter, sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText('⚡', x, Math.max(pad.top + 8, barY - 3));
+        ctx.fillText(badgeIcon, x, Math.max(pad.top + 8, barY - 3));
       }
 
       if (isHighlighted) {
@@ -2820,6 +2845,17 @@ function handleChartHover(e, calls, targetCanvas = null, tooltipId = 'pa-chart-t
   const c = foundPt.call;
   const prunedStr = c.trimmedFromPrevBytes > 0 ? `✂️ Context Pruned: <strong>${fmtBytes(c.trimmedFromPrevBytes)}</strong>` : 'No context pruning';
 
+  let reductionBadges = [];
+  if ((c.fileTruncationBytes || 0) > 0) reductionBadges.push(`<span style="color:#10b981">📁 File Read Truncated: <strong>-${fmtBytes(c.fileTruncationBytes)}</strong></span>`);
+  if ((c.commandTruncationBytes || 0) > 0) reductionBadges.push(`<span style="color:#06b6d4">💻 Terminal Truncated: <strong>-${fmtBytes(c.commandTruncationBytes)}</strong></span>`);
+  if ((c.trimmedFromPrevBytes || 0) > 0) reductionBadges.push(`<span style="color:#10b981">✂️ Context Pruned: <strong>-${fmtBytes(c.trimmedFromPrevBytes)}</strong></span>`);
+  if ((c.scratchOffloadedBytes || 0) > 0 && !c.fileTruncationBytes && !c.commandTruncationBytes) {
+    reductionBadges.push(`<span style="color:#e879f9">⚡ Scratch Offload: <strong>-${fmtBytes(c.scratchOffloadedBytes)}</strong></span>`);
+  }
+  const reductionHtml = reductionBadges.length > 0
+    ? `<div style="font-size:10.5px;margin-top:4px;padding-top:4px;border-top:1px dashed rgba(255,255,255,0.15)">${reductionBadges.join('<br>')}</div>`
+    : '';
+
   let ctxStr = '';
   if (c.contextUtilizationPct != null && c.contextWindowSize) {
     const pct = c.contextUtilizationPct.toFixed(1);
@@ -2856,7 +2892,7 @@ function handleChartHover(e, calls, targetCanvas = null, tooltipId = 'pa-chart-t
     ${modelStr}
     <div style="color:#38bdf8;font-weight:600;font-size:10.5px">📦 Accumulated Payload: <strong>${fmtBytes(c.requestSize)}</strong></div>
     <div style="color:#38bdf8;font-size:10.5px">⚡ Per-Turn New Input: <strong>${fmtBytes(c.turnDeltaSize || Math.max(0, c.sizeDelta))}</strong></div>
-    ${scratchStr}
+    ${reductionHtml || scratchStr}
     ${ctxStr}
     <div style="color:#ec4899;font-weight:bold;font-size:10.5px">📈 Cumulative Price: <strong>${fmtCost(c.cumulativeCost || c.cost)}</strong></div>
     <div style="color:#06b6d4;font-weight:bold;font-size:10.5px">🎯 Cache Hit Rate: <strong>${(c.cacheHitPct || 0).toFixed(1)}%</strong></div>

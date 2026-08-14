@@ -551,6 +551,10 @@ module.exports = (db, config, getStore) => {
         sizeDelta,
         trimmedFromPrevBytes: 0,
         hasPruning: false,
+        fileTruncationBytes: 0,
+        commandTruncationBytes: 0,
+        hasFilePruning: false,
+        hasCommandPruning: false,
         requestText: data.request || null,
         modelId: mId,
         providerId: msg.modelInfo?.providerId || null,
@@ -830,6 +834,14 @@ module.exports = (db, config, getStore) => {
 
           if (matchedCallIndex >= 0 && apiCalls[matchedCallIndex]) {
             apiCalls[matchedCallIndex].scratchOffloadedBytes = (apiCalls[matchedCallIndex].scratchOffloadedBytes || 0) + bytesSaved;
+            if (toolName === 'read_file' || reductionCategory.includes('File')) {
+              apiCalls[matchedCallIndex].fileTruncationBytes = (apiCalls[matchedCallIndex].fileTruncationBytes || 0) + bytesSaved;
+              apiCalls[matchedCallIndex].hasFilePruning = true;
+            }
+            if (toolName === 'execute_command' || reductionCategory.includes('Terminal')) {
+              apiCalls[matchedCallIndex].commandTruncationBytes = (apiCalls[matchedCallIndex].commandTruncationBytes || 0) + bytesSaved;
+              apiCalls[matchedCallIndex].hasCommandPruning = true;
+            }
           }
         }
       } catch (e) {
