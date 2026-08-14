@@ -292,7 +292,8 @@ async function loadTaskAnalytics(taskId) {
   hoveredCallIndex = null;
   activeCategoryFilter = 'ALL';
   reductionSearchQuery = '';
-  reductionViewMode = 'timeline';
+  reductionViewMode = 'explorer';
+  selectedExplorerEventIndex = 0;
   reductionFeedLimit = 30;
 
   const contentEl = document.getElementById('pa-content');
@@ -2426,7 +2427,7 @@ function bindMatrixViewEvents(body) {
       e.stopPropagation();
       const callIdx = parseInt(pill.dataset.call, 10);
       activeCallFocusIndex = callIdx;
-      reductionViewMode = 'timeline';
+      selectedExplorerEventIndex = 0;
       renderReductionSequenceFeed(body, analyticsData?.reductionEvents || []);
       if (chartCanvas && analyticsData?.apiCalls) redrawTargetCanvas(chartCanvas, analyticsData.apiCalls);
       const compSec = document.getElementById('pa-comparison-section');
@@ -2647,7 +2648,7 @@ function renderCallPillsStrip(calls, container) {
         activeCallFocusIndex = null;
       } else {
         activeCallFocusIndex = callIdx;
-        reductionViewMode = 'timeline';
+        selectedExplorerEventIndex = 0;
         activeCategoryFilter = 'ALL';
       }
       renderReductionSequenceFeed(document.getElementById('pa-comparison-body'), analyticsData?.reductionEvents || []);
@@ -3336,7 +3337,7 @@ function handleChartClick(e, calls) {
     showChartToast(`Showing all calls`);
   } else {
     activeCallFocusIndex = colIdx;
-    reductionViewMode = 'timeline';
+    selectedExplorerEventIndex = 0;
     reductionSearchQuery = '';
     activeCategoryFilter = 'ALL';
     const allEvs = analyticsData?.reductionEvents || [];
