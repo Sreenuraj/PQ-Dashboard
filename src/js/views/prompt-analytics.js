@@ -63,9 +63,10 @@ let chartCanvas = null;
 
 let activeCategoryFilter = 'ALL';
 let reductionSearchQuery = '';
-let reductionViewMode = 'timeline'; // 'timeline' | 'grouped'
+let reductionViewMode = 'explorer'; // 'explorer' | 'timeline' | 'matrix' | 'grouped'
 let reductionFeedLimit = 30;
 let activeCallFocusIndex = null; // null = all calls, number = focused on specific API call index
+let selectedExplorerEventIndex = 0;
 
 let chartSeries = {
   requestSize: true,
@@ -685,8 +686,9 @@ function renderAnalytics(contentEl) {
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <span>📜 Context Reductions (<span id="pa-seq-total-count">${events.length}</span> total events)</span>
           <div style="display:inline-flex;background:var(--bg-3);border:1px solid var(--border);border-radius:4px;padding:2px">
-            <button id="pa-btn-mode-timeline" class="pa-viewmode-btn action-btn ${reductionViewMode === 'timeline' ? 'primary' : 'secondary'}" data-mode="timeline" style="padding:2px 8px;font-size:10.5px;cursor:pointer">📜 Feed</button>
+            <button id="pa-btn-mode-explorer" class="pa-viewmode-btn action-btn ${reductionViewMode === 'explorer' ? 'primary' : 'secondary'}" data-mode="explorer" style="padding:2px 8px;font-size:10.5px;cursor:pointer">🪟 Explorer</button>
             <button id="pa-btn-mode-matrix" class="pa-viewmode-btn action-btn ${reductionViewMode === 'matrix' ? 'primary' : 'secondary'}" data-mode="matrix" style="padding:2px 8px;font-size:10.5px;cursor:pointer">📁 File Matrix</button>
+            <button id="pa-btn-mode-timeline" class="pa-viewmode-btn action-btn ${reductionViewMode === 'timeline' ? 'primary' : 'secondary'}" data-mode="timeline" style="padding:2px 8px;font-size:10.5px;cursor:pointer">📜 Feed</button>
             <button id="pa-btn-mode-grouped" class="pa-viewmode-btn action-btn ${reductionViewMode === 'grouped' ? 'primary' : 'secondary'}" data-mode="grouped" style="padding:2px 8px;font-size:10.5px;cursor:pointer">🗂️ Grouped</button>
           </div>
         </div>
@@ -2035,7 +2037,11 @@ function renderReductionSequenceFeed(body, events) {
     return;
   }
 
-  if (reductionViewMode === 'matrix') {
+  if (reductionViewMode === 'explorer') {
+    // ── TWO-PANE SPLIT EXPLORER VIEW ──
+    body.innerHTML = callFocusBanner + renderSplitExplorerView(filteredEvents);
+    bindExplorerViewEvents(body, filteredEvents, allEvents);
+  } else if (reductionViewMode === 'matrix') {
     // ── FILE IMPACT MATRIX VIEW ──
     body.innerHTML = callFocusBanner + renderFileImpactMatrixView(filteredEvents);
     bindMatrixViewEvents(body);
@@ -2173,6 +2179,116 @@ function renderReductionSequenceFeed(body, events) {
       activeCallFocusIndex = null;
       renderReductionSequenceFeed(body, allEvents);
       if (typeof redrawTargetCanvas === 'function' && typeof analyticsData !== 'undefined') redrawTargetCanvas(document.getElementById('pa-target-chart'), analyticsData.apiCalls);
+    };
+  }
+}
+
+function renderSplitExplorerView(filteredEvents) {
+  if (!filteredEvents || filteredEvents.length === 0) return '<div class="empty-state" style="padding:24px;text-align:center"><p style="color:var(--text-3)">No reduction events match your filter.</p></div>';
+  const selectedIdx = Math.max(0, Math.min(filteredEvents.length - 1, selectedExplorerEventIndex || 0));
+  const activeEv = filteredEvents[selectedIdx];
+
+  return `
+    <div class="pa-split-explorer" style="display:grid;grid-template-columns:340px 1fr;gap:12px;background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;min-height:550px">
+      <!-- Left Sidebar: Event / File List -->
+      <div style="background:var(--bg-3);border-right:1px solid var(--border);display:flex;flex-direction:column;max-height:720px">
+        <div style="padding:10px 12px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;background:var(--bg-2)">
+          <span style="font-weight:bold;font-size:11.5px;color:var(--text)">📁 Event Explorer (${filteredEvents.length})</span>
+          <span style="font-size:10.5px;color:var(--text-3)">Select to inspect</span>
+        </div>
+        <div style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:1px;background:var(--border)">
+          ${filteredEvents.map((ev, idx) => {
+            const isSelected = idx === selectedIdx;
+            let icon = '📁';
+            let catColor = 'var(--green)';
+            if (ev.isSystemPrompt || ev.category.includes('System')) { icon = '🛡️'; catColor = '#38bdf8'; }
+            else if (ev.toolName === 'execute_command' || ev.category.includes('Terminal')) { icon = '💻'; catColor = '#38bdf8'; }
+            else if (ev.toolName === 'postqode_browser_agent' || ev.category.includes('Browser')) { icon = '🌐'; catColor = '#06b6d4'; }
+            else if (ev.toolName === 'use_skill' || ev.category.includes('Skill')) { icon = '⚡'; catColor = '#e879f9'; }
+            else if (ev.toolName === 'replace_in_file') { icon = '📝'; catColor = '#a78bfa'; }
+            else if (ev.isScratch) { icon = '⚡'; catColor = '#e879f9'; }
+
+            const savedStr = ev.bytesSaved > 0 ? `-${fmtBytes(ev.bytesSaved)}` : `${fmtBytes(ev.beforeSize || 0)}`;
+            const bg = isSelected ? '#0284c7' : 'var(--bg-2)';
+            const textColor = isSelected ? '#ffffff' : 'var(--text)';
+            const subColor = isSelected ? 'rgba(255,255,255,0.85)' : 'var(--text-3)';
+
+            return `
+              <div class="pa-explorer-item" data-eidx="${idx}" style="background:${bg};padding:9px 12px;cursor:pointer;user-select:none;transition:all 0.12s;display:flex;flex-direction:column;gap:3px;border-left:3px solid ${isSelected ? '#38bdf8' : 'transparent'}">
+                <div style="display:flex;justify-content:space-between;align-items:center;overflow:hidden">
+                  <span style="font-size:11.5px;font-weight:600;color:${textColor};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:215px;font-family:monospace" title="${escHtml(ev.targetName || '')}">
+                    ${icon} ${escHtml(ev.targetName ? ev.targetName.split('/').pop() : 'Event #' + (idx+1))}
+                  </span>
+                  <span class="mono" style="font-size:10px;font-weight:bold;color:${isSelected ? '#ffffff' : (ev.bytesSaved > 0 ? 'var(--green)' : '#38bdf8')}">
+                    ${savedStr}
+                  </span>
+                </div>
+                <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;color:${subColor}">
+                  <span>Call #${ev.callIndex + 1} (${ev.role})</span>
+                  <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px">${escHtml(ev.category)}</span>
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </div>
+
+      <!-- Right Main Pane: Active File Diff Inspector -->
+      <div style="padding:14px;overflow-y:auto;max-height:720px;display:flex;flex-direction:column;gap:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:10px;border-bottom:1px solid var(--border);flex-wrap:wrap;gap:8px">
+          <div>
+            <div style="font-size:13px;font-weight:bold;color:var(--text);font-family:monospace;display:flex;align-items:center;gap:6px">
+              <span>${escHtml(activeEv?.targetName || 'Event Details')}</span>
+            </div>
+            <div style="font-size:11px;color:var(--text-3);margin-top:2px">
+              Call #${(activeEv?.callIndex || 0) + 1} (${activeEv?.role || 'user'}) • Category: <strong style="color:#38bdf8">${escHtml(activeEv?.category || '')}</strong>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <button id="pa-exp-prev-btn" class="action-btn secondary" style="padding:3px 10px;font-size:11px;cursor:pointer" ${selectedIdx === 0 ? 'disabled' : ''}>◀ Prev</button>
+            <span style="font-size:11px;color:var(--text-3);font-weight:bold">${selectedIdx + 1} of ${filteredEvents.length}</span>
+            <button id="pa-exp-next-btn" class="action-btn secondary" style="padding:3px 10px;font-size:11px;cursor:pointer" ${selectedIdx === filteredEvents.length - 1 ? 'disabled' : ''}>Next ▶</button>
+          </div>
+        </div>
+
+        <div>
+          ${activeEv ? renderReductionEventCard(activeEv, true) : '<p style="color:var(--text-3)">No event selected.</p>'}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function bindExplorerViewEvents(body, filteredEvents, allEvents) {
+  if (!body) return;
+
+  bindSynchronizedScroll(body);
+
+  body.querySelectorAll('.pa-explorer-item').forEach(item => {
+    item.onclick = () => {
+      const idx = parseInt(item.dataset.eidx, 10);
+      selectedExplorerEventIndex = idx;
+      renderReductionSequenceFeed(body, allEvents);
+    };
+  });
+
+  const prevBtn = document.getElementById('pa-exp-prev-btn');
+  if (prevBtn) {
+    prevBtn.onclick = () => {
+      if (selectedExplorerEventIndex > 0) {
+        selectedExplorerEventIndex--;
+        renderReductionSequenceFeed(body, allEvents);
+      }
+    };
+  }
+
+  const nextBtn = document.getElementById('pa-exp-next-btn');
+  if (nextBtn) {
+    nextBtn.onclick = () => {
+      if (selectedExplorerEventIndex < filteredEvents.length - 1) {
+        selectedExplorerEventIndex++;
+        renderReductionSequenceFeed(body, allEvents);
+      }
     };
   }
 }
@@ -2438,13 +2554,6 @@ function renderDiffBoxMarkup(item, prevCallIdx, callIdx, category, targetName, i
             </div>
           </div>
         ` : `
-          <div style="background:${bannerBg};border-bottom:1px solid rgba(255,255,255,0.12);padding:8px 14px;font-size:11px">
-            <span style="color:${bannerColor};font-weight:bold">${bannerTitle}</span>
-            <div class="mono" style="margin-top:4px;background:rgba(255,255,255,0.06);color:${bannerColor};padding:6px 10px;border-radius:var(--radius-sm);border-left:3px solid ${bannerColor};max-height:90px;overflow-y:auto;white-space:pre-wrap;word-break:break-all">
-              ${escHtml(bannerText)}
-            </div>
-          </div>
-
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border)">
             <div style="background:var(--bg-2);padding:10px 12px">
               <div style="font-weight:bold;font-size:10.5px;color:var(--red);margin-bottom:6px;display:flex;justify-content:space-between">
