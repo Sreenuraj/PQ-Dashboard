@@ -2289,31 +2289,37 @@ function bindSynchronizedScroll(container) {
   });
 }
 
+function fmtContextWindow(tokens) {
+  if (!tokens || tokens <= 0) return 'unknown';
+  if (tokens >= 1000000) return `${(tokens / 1000000).toFixed(tokens >= 1048000 && tokens <= 1049000 ? 0 : 1)}M tokens`;
+  if (tokens >= 1000) return `${(tokens / 1000).toFixed(0)}K tokens`;
+  return `${tokens} tokens`;
+}
+
 function renderModelSwimlane(calls, container) {
-  if (!container || !calls || calls.length === 0) {
-    if (container) container.innerHTML = '';
-    return;
-  }
+  if (!container || !calls || calls.length === 0) return;
 
   const segments = [];
-  let segStart = 0;
-  let segModel = calls[0].modelId;
-
-  for (let i = 1; i <= calls.length; i++) {
-    const model = i < calls.length ? calls[i].modelId : null;
-    if (model !== segModel || i === calls.length) {
-      segments.push({ modelId: segModel, from: segStart, to: i - 1, count: i - segStart });
-      segStart = i;
-      segModel = model;
+  let current = null;
+  for (let i = 0; i < calls.length; i++) {
+    const m = calls[i].modelId;
+    if (!current || current.modelId !== m) {
+      if (current) segments.push(current);
+      current = { modelId: m, from: i, to: i, count: 1 };
+    } else {
+      current.to = i;
+      current.count++;
     }
   }
+  if (current) segments.push(current);
 
   const hasMultiple = segments.length > 1 || !segments[0]?.modelId;
   if (!hasMultiple && segments[0]?.modelId) {
+    const cw = calls[0].contextWindowSize;
     container.innerHTML = `
-      <div style="font-size:10px;color:var(--text-3);padding:4px 0 0;text-align:center">
-        🤖 Model: <span style="color:var(--text-2);font-family:monospace">${escHtml(segments[0].modelId)}</span>
-        — Context Window: <span style="color:#a78bfa;font-weight:bold">${calls[0].contextWindowSize ? (calls[0].contextWindowSize / 1000).toFixed(0) + 'K tokens' : 'unknown'}</span>
+      <div style="font-size:10.5px;color:var(--text-3);padding:6px 0 0;text-align:center">
+        🤖 Model: <span style="color:var(--text);font-family:monospace;font-weight:600">${escHtml(segments[0].modelId)}</span>
+        — Context Window: <span style="color:#a78bfa;font-weight:bold">${fmtContextWindow(cw)}</span>
       </div>
     `;
     return;
@@ -2336,7 +2342,7 @@ function renderModelSwimlane(calls, container) {
           const pct = (seg.count / calls.length * 100).toFixed(1);
           const label = seg.modelId ? seg.modelId.split('/').pop() : 'unknown';
           const cw = seg.modelId ? calls[seg.from]?.contextWindowSize : null;
-          const cwLabel = cw ? `${(cw / 1000).toFixed(0)}K ctx` : '';
+          const cwLabel = cw ? fmtContextWindow(cw) : '';
           return `
             <div style="flex:${seg.count};background:${color}22;border-right:1px solid var(--border);display:flex;align-items:center;justify-content:center;overflow:hidden;min-width:0" title="Model: ${escHtml(seg.modelId || 'unknown')} | Calls ${seg.from + 1}–${seg.to + 1} (${pct}%) | Context Window: ${cwLabel || 'unknown'}">
               <span style="font-size:9px;color:${color};font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">
