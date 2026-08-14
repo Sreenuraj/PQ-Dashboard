@@ -1,6 +1,6 @@
 # PQ Dashboard
 
-A local-first observability dashboard for analyzing PostQode AI agent task history. PQ Dashboard provides behavioral analytics, model ranking, agent-aware filtering, error classification, tool usage statistics, and deterministic evaluation metrics — all computed from log traces without LLM judge calls.
+A local-first observability dashboard for analyzing PostQode AI agent task history. PQ Dashboard provides behavioral analytics, model ranking, prompt analytics & context reduction tracking, live network traffic inspection, error classification, tool usage statistics, and deterministic evaluation metrics — all computed locally from log traces without LLM judge calls.
 
 ---
 
@@ -8,9 +8,29 @@ A local-first observability dashboard for analyzing PostQode AI agent task histo
 
 ### Core Analytics
 - **Incremental Parsing** — Only new or changed tasks are processed on refresh. A lightweight SQLite caching layer ensures sub-second reloads even with thousands of sessions.
-- **Config-Driven Sources** — Centralized `pq-config.yaml` manages multiple IDE sources (VS Code, VS Code Insiders, Cursor, etc.) with per-source enable/disable.
+- **Config-Driven Sources** — Centralized `pq-config.yaml` manages multiple IDE sources (VS Code, VS Code Insiders, Cursor, Windsurf, etc.) with automatic cross-platform OS path resolution (macOS, Windows, Linux).
 - **Interactive Timelines** — Per-task drill-down revealing step-by-step reasoning traces, API calls, tool usage sequences, and agent handoffs.
-- **Advanced Visualizations** — D3.js Sankey diagram for task execution flow, Chart.js radar charts for model efficiency, and heatmaps for model × agent cross-analysis.
+- **Advanced Visualizations** — D3.js Sankey diagrams for task execution flow, Chart.js radar charts for model efficiency, and heatmaps for model × agent cross-analysis.
+
+### Prompt Analytics & Context Reduction Observability
+A comprehensive subsystem for reconstructing and inspecting the exact prompt payloads sent to the LLM at every API turn:
+
+- **Exact Prompt Reconstruction** — Merges base `api_conversation_history.json` with Layer 2 context overlays (`context_history.json`) and live network captures to reconstruct the exact byte payload and message structure sent at each turn.
+- **Context Reduction Tracking** — Tracks four distinct types of context reductions:
+  - 📁 **File Read Truncations** — Source code files capped by `read_file` to preserve context window.
+  - 💻 **Command Output Truncations** — Terminal command logs capped to compact head/tail snippets.
+  - 🌲 **Environment Snapshots Pruned** — Historical workspace directory snapshots purged to eliminate duplication.
+  - ⚡ **Immediate Scratch Offloads** — Bulk tool logs written directly to `scratch/` files on disk at write-time, keeping only compact summaries in the prompt.
+- **4-Way Flexible Layout Switcher**:
+  - **🪟 Explorer (Default)** — Two-pane Master-Detail inspector: browse through 100+ context reduction events in the sidebar while viewing synchronized side-by-side before/after diffs in the main pane without endless vertical scrolling.
+  - **📁 File Matrix** — Compact, sortable overview table of all files/targets sorted by highest context space saved, with clickable turn pills and inline accordion diff expansion.
+  - **📜 Feed** — Streamlined chronological stream of diff cards with synchronized scrolling and redundant banner elimination.
+  - **🗂️ Grouped** — Target-centric folder grouping with turn count badges.
+- **Interactive Timeline Graph** — Multi-series canvas visualizing Request Size (KB), Cumulative Cost ($), Cache Reads/Writes, Latency, and Context Window Utilization (%) with section zoom and interactive call isolation.
+- **Step Quick-Jump Navigation** — Mini turn selector strip (`[#1] [#2] [#3⚡] [#4📁⚡] ...`) for instant turn-by-turn inspection.
+- **Dynamic Live Model Registry** — Auto-syncs live pricing, context windows (e.g. Gemini 3.7 Flash 1.0M tokens, Claude 3.7 Sonnet 200K, etc.), and provider metadata from OpenRouter API (`https://openrouter.ai/api/v1/models`) with offline cache ingestion and heuristic fallbacks.
+- **Side-by-Side Task Comparison (`#/prompt-analytics?mode=compare`)** — Compare up to 5 tasks side-by-side with shared proportional Y-axis scaling, combined cost curves, per-turn step scrubbers, and locally-scoped chart tooltips.
+- **Prompt Cache Hit Observability & Scratch Inspector** — Detailed breakdown of prompt caching savings (90% read discounts, cache write costs) and a dedicated scratch file log viewer.
 
 ### Agent-Aware Analytics
 PQ Dashboard treats agents as first-class entities. Every session records which agent(s) handled the work (`web_agent`, `plan`, `agent`, `mobile_agent`, etc.), and the dashboard surfaces this across every view:
@@ -24,9 +44,7 @@ PQ Dashboard treats agents as first-class entities. Every session records which 
 
 ### Model Ranking — PQ-Score Algorithm
 
-The dashboard computes a **PQ-Score (0–100)** for every model — a weighted composite that balances quality, cost, reliability, and usage confidence. This replaces naive session-count ordering to surface truly top-performing models.
-
-#### How PQ-Score Works
+The dashboard computes a **PQ-Score (0–100)** for every model — a weighted composite that balances quality, cost, reliability, and usage confidence:
 
 | Component | Weight | What It Measures |
 |-----------|--------|------------------|
@@ -38,29 +56,14 @@ The dashboard computes a **PQ-Score (0–100)** for every model — a weighted c
 | **Usage Confidence** | 10% | More sessions = more trustworthy score. `min(sessions / 10, 1) × 100` |
 | **Error Rate (inverse)** | 5% | Penalizes error-prone models. `100 − (errors_per_session / max) × 100` |
 
-#### Bayesian Smoothing
-
-To prevent a model with 1 perfect session from outranking a model with 30 good sessions, PQ-Score applies **Bayesian smoothing**:
-
-```
-smoothed = (sessions × raw_score + 5 × global_avg) / (sessions + 5)
-```
-
-A model with 1 session at 100% completion gets pulled toward the global average, while a model with 30 sessions at 80% stays close to 80%. The `5` acts as a "virtual sample" of average-quality data.
-
-#### Fairness Safeguards
-
-- **Low Confidence Flag** — Models with fewer than 2 sessions show a `LOW CONF` badge. They're ranked but visually distinguished so you know the score is provisional.
-- **Free-Tier Handling** — Models with `:free` suffix receive the median cost score (50) instead of infinite cost efficiency, preventing distortion.
-- **Score Breakdown Tooltip** — Hover over any PQ-Score to see the exact contribution of each component.
-
-#### Example Ranking
-
-With real data, a model like `grok-4.1-fast` (PQ=80) can outrank `claude-sonnet-4.5` (PQ=75) despite having fewer total sessions — because its much lower cost ($0.05/session vs $1.14/session), decent completion rate, and high usage confidence produce a better composite score.
+#### Bayesian Smoothing & Fairness
+- **Bayesian Smoothing**: `smoothed = (sessions × raw_score + 5 × global_avg) / (sessions + 5)` prevents models with 1 session from skewing rankings.
+- **Low Confidence Flag**: Models with fewer than 2 sessions show a `LOW CONF` badge.
+- **Free-Tier Handling**: Models with `:free` suffix receive the median cost score (50) instead of infinite cost efficiency.
 
 ### Heuristic Evaluation Metrics
 
-Four deterministic metrics are computed per session from log traces — no LLM judge calls required. These are defined once in `server/analytics/metrics.js` and used consistently across all views.
+Four deterministic metrics computed per session directly from log traces:
 
 | Metric | Short | Formula | Interpretation |
 |--------|-------|---------|----------------|
@@ -69,83 +72,22 @@ Four deterministic metrics are computed per session from log traces — no LLM j
 | **Context Efficiency** | CE | `100 − avg(context_pct)` | Higher = context window used more sparingly. 100 = never filled. |
 | **Error Recovery** | ERR | `100` if no errors or completed despite errors, else `0` | Completed sessions always score 100, even with many errors. |
 
-These metrics power the PQ-Score algorithm, the radar chart on the Models page, sortable columns on Overview and Models, and per-session evaluation reports.
-
-### Activity Intelligence
-- **Activity Classification** — Deterministic heuristics classify sessions into categories (coding, debugging, testing, exploration, planning, etc.) from tool usage, shell commands, and prompt keywords.
-- **One-Shot Rate** — Percentage of edit turns that succeeded on the first try, surfaced per activity category.
-- **Retry Cycles & Shell Commands** — Track how often the agent retried operations and which shell commands were executed most frequently.
-- **Daily Activity Trends** — Cost and session counts broken down by activity category over time.
-
 ### Session Testing & Baselines
 
 A standalone behavioral testing workflow for managing baselines, customizing execution boundaries, tracking agent reliability, and scoring completions:
 
-- **Editable Baselines** — Create standalone baselines from any session. The Baseline Editor provides a dual-list curator for expected/excluded tools, required/excluded keywords, essential step toggles, and file scope enforcement.
-- **Essential vs Optional** — Each expected tool and contract keyword can be marked **Essential** (must be present — missing causes a score penalty) or **Optional** (noted but no penalty). Essential items show a ★ badge.
-- **Excluded Files** — Define glob patterns (`**/.env`, `*.key`, `src/internal/**`) for files the agent should not access. Violations incur scope penalties.
-- **Enrichment & Merging** — Compare any session trace against a baseline to discover new tools/keywords, then selectively merge them back.
-- **Session Health Tracking** — Automatically tracks user interruptions and context resets, applying tiered behavioral penalties.
-- **Star Ratings** — Rate task execution quality on a 1–5 scale. The rating blends into the overall score (70% automated / 30% human judgment).
-
-#### Behavioral Test Patterns
-
-Six deterministic patterns evaluated natively from log traces:
-
-| Pattern | What It Checks |
-|---------|---------------|
-| **Tool Invocation Assertion (TIA)** | Essential tools called, excluded tools avoided, unexpected tools flagged |
-| **Behavior Contract Validation (BCV)** | Essential keywords present, code blocks exist, length bounds met, forbidden keywords absent |
-| **Multi-Step Trace Verification (MTV)** | Coverage of essential steps, tool usage efficiency vs baseline |
-| **Boundary/Scope Enforcement (BSE)** | Command safety (no `rm -rf /`), max tool footprint, excluded file access violations |
-| **Error Recovery Coherence (ERC)** | Agent adaptation after errors, blind retry loop detection |
-| **Context Efficiency Compliance (CEC)** | Context usage relative to token limits |
-
-#### Key Views
-
-| Route | Purpose |
-|-------|---------|
-| `#/baselines` | Manage baselines, edit tags, copy prompt chains |
-| `#/baseline-editor?id=<id>` | Edit tools, keywords, essential steps, excluded files |
-| `#/baseline-enrich?id=<id>` | Compare a session against a baseline, merge diffs |
-| `#/test?task=<id>` | Run behavioral tests for a task |
-| `#/deepcompare?tasks=<id1>,<id2>` | Side-by-side comparison with ranked performance index |
-| `#/network` | Live network traffic inspector |
+- **Editable Baselines** — Create standalone baselines from any session with expected/excluded tools, required/excluded keywords, essential step toggles, and file scope enforcement.
+- **Behavioral Test Patterns** — Six deterministic patterns: Tool Invocation Assertion (TIA), Behavior Contract Validation (BCV), Multi-Step Trace Verification (MTV), Boundary/Scope Enforcement (BSE), Error Recovery Coherence (ERC), and Context Efficiency Compliance (CEC).
+- **Star Ratings** — Rate task execution quality on a 1–5 scale, blending into the overall score (70% automated / 30% human judgment).
 
 ### Network Inspector
 
-A built-in MITM proxy that captures live HTTP/HTTPS network traffic from the PostQode VS Code extension. Since PostQode runs in the Extension Host process (a separate Node.js process), VS Code's Developer Tools Network tab cannot see its traffic. The Network Inspector solves this by routing VS Code through a local proxy.
+A built-in MITM proxy (`port 3457`) that captures live HTTP/HTTPS network traffic from PostQode:
 
-- **Built-in Proxy** — Runs on port `3457` alongside the dashboard server. No external tools required.
-- **Live Streaming** — Requests appear in real-time via WebSocket as PostQode makes API calls.
-- **AI Provider Tagging** — Automatically tags requests by provider (PostQode, OpenAI, Anthropic, Google, Groq, etc.).
-- **Chrome DevTools–style UI** — Record/Pause, Clear, Export HAR, filter by domain/method/status, row limit dropdown selector (Last 5, Last 10, Last 15, All), search by URL.
-- **Vertical Scrolling & Sticky Headers** — Gracefully handles overflow with a dedicated scrollable table body container and sticky positioning for table headers.
-- **Zlib Payload Decompression** — Automatically detects and decompresses payloads encoded with `Gzip`, `Deflate`, or `Brotli` (br) on the fly, rendering readable JSON text instead of binary gibberish.
-- **Right-Click Context Menu** — Right-click on any request to filter by path/host, copy the URL, replay the request, copy code snippets, or perform side-by-side payload comparisons.
-- **Copy Code Snippets** — Instantly generate and copy request snippets formatted as shell **cURL**, **Node.js Fetch**, or standard **Browser Fetch**.
-- **LLM Token & Cost Counter** — Automatically parses prompt and response payloads to extract token usage from OpenAI, Anthropic, and Google Gemini metadata, calculating estimated USD cost using pricing rate sheets.
-- **Mock Interception & Delay Simulator** — Hijack matching proxy request patterns to return custom status codes, response bodies, and mock delays directly from the local proxy, with rule management through a collapsible front-end panel.
-- **Request Breakpoints** — Intercept mode that pauses each proxied request for manual review. Users can forward the request as-is, edit the method/URL/headers/body and send modified, or drop it entirely. Features include URL pattern filtering (intercept only matching requests), a live pending queue with elapsed timers, bulk "Forward All" action, and a 5-minute auto-timeout safety net. Intercepted requests display `EDITED`, `DROPPED`, or `BP` badges in the request table.
-- **Side-by-Side Payload Diff Tool** — Select a baseline request and visually compare request/response payloads or headers side-by-side in a modal overlay with synchronized scrolling.
-- **Request Replay Option** — Replay any captured request with a single click. The request executes directly from the dashboard server and shows up instantly in the dashboard list with a `REPLAY` badge.
-- **Request Detail Panel** — Inspect headers, request body, response body (syntax-highlighted JSON), and timing.
-- **In-Page Setup Guide** — Step-by-step instructions for configuring VS Code's proxy settings.
-
-#### Setup
-
-1. Start PQ Dashboard (the proxy starts automatically on port `3457`)
-2. In VS Code, set `"http.proxy": "http://localhost:3457"` and `"http.proxyStrictSSL": false`. (Optional: Add `"api.postqode.ai"` to `"http.noProxy"` if you want to bypass the proxy for logins/syncing, but note that if you are using the 'PostQode' API Provider to route AI calls, bypassing it will prevent capturing those requests).
-3. To proxy all HTTPS requests without errors, trust the proxy CA cert globally:
-   - **macOS (Terminal)**: `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "<workspace-path>/data/proxy-certs/certs/ca.pem"` (Or double-click the certificate file and set it to **Always Trust** in Keychain Access).
-   - **Windows (Admin PowerShell)**: `Import-Certificate -FilePath "<workspace-path>/data/proxy-certs/certs/ca.pem" -CertStoreLocation Cert:\LocalMachine\Root`
-   - *Alternative (Terminal)*: Launch VS Code with `NODE_EXTRA_CA_CERTS="<workspace-path>/data/proxy-certs/certs/ca.pem" code` or `NODE_TLS_REJECT_UNAUTHORIZED=0 code`.
-4. Open the **Network** tab in PQ Dashboard → requests appear live
-
-### Task Investigation & Comparison
-- **Investigation View** — Full observability trace viewer with tool invocations, logic breakdowns, payloads, and live search across all events. Color-coded by active agent.
-- **Task Comparison** — Side-by-side comparison of cost/duration, automated scorecard metrics, behavioral test results, and tool sequences.
-- **Deep Compare** — Multi-task comparison with baseline switching, interactive detail modals, and ranked performance bars.
+- **Real-Time WebSocket Streaming** — Live request stream with AI provider tagging (PostQode, OpenAI, Anthropic, Google, Groq, etc.).
+- **Chrome DevTools UI** — Record/Pause, Clear, Export HAR, filter by host/method/status, search by URL, vertical scrolling with sticky headers.
+- **Zlib Payload Decompression** — Automatically decompresses `Gzip`, `Deflate`, and `Brotli` payloads on the fly.
+- **Request Breakpoints & Mock Interception** — Intercept, edit, replay, or mock responses directly from the local proxy.
 
 ---
 
@@ -161,24 +103,51 @@ git clone <repo-url> && cd PQ-Dashboard
 npm install
 ```
 
-Check and adjust IDE source paths in `pq-config.yaml` to point to your PostQode task directories.
+---
 
 ## Running the Dashboard
 
+### macOS / Linux (1-Click)
 ```bash
-# Start backend + frontend + open browser
 ./start.sh
 ```
 
-Or run manually in two terminals:
+### Windows (1-Click)
+Run in Command Prompt / PowerShell or double-click:
+```cmd
+start.cmd
+```
+*(Or double-click `start.bat`)*
 
+The Windows script automatically:
+1. Checks for Node.js and npm in your `PATH`.
+2. Runs `scripts/init-platform-config.js` to scan `%APPDATA%` and auto-configure `pq-config.yaml` with valid Windows IDE paths.
+3. Kills any stale processes on dashboard ports.
+4. Starts backend and frontend servers, then opens `http://localhost:5173` in your default browser.
+
+### Manual Startup (Two Terminals)
 ```bash
-# Terminal 1: Backend (port 3456) + initial parse
+# Terminal 1: Backend (port 3456)
 npm start
 
 # Terminal 2: Frontend dev server (port 5173)
 npm run dev
 ```
+
+---
+
+## HTTPS / SSL Proxy Certificate Trust
+
+VS Code extensions run in separate processes and require trusting the proxy CA certificate for HTTPS interception:
+
+- **macOS (Terminal)**:
+  ```bash
+  sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "data/proxy-certs/certs/ca.pem"
+  ```
+- **Windows (Admin PowerShell)**:
+  ```powershell
+  Import-Certificate -FilePath "data\proxy-certs\certs\ca.pem" -CertStoreLocation Cert:\LocalMachine\Root
+  ```
 
 ---
 
@@ -188,9 +157,9 @@ npm run dev
 PQ-Dashboard/
 ├── server/                     # Express.js backend
 │   ├── index.js                # Entry point
-│   ├── config.js               # pq-config.yaml loader
+│   ├── config.js               # pq-config.yaml loader & path resolver
 │   ├── classifier.js           # Deterministic activity classification
-│   ├── model-registry.js       # OpenRouter/Vercel model metadata cache
+│   ├── model-registry.js       # Live OpenRouter model sync, cache scanning & inference
 │   ├── analytics/
 │   │   └── metrics.js          # Single source of truth: TUE/RD/CE/ERR definitions + PQ-Score
 │   ├── baselines/              # Baseline extraction (prompts, tools, contracts)
@@ -198,117 +167,70 @@ PQ-Dashboard/
 │   │   └── db.js               # SQLite schema, migrations, parser denormalization
 │   ├── parser/                 # Incremental task parser (ui_messages.json → events)
 │   ├── proxy/
-│   │   ├── index.js            # MITM proxy server (HTTP/HTTPS interception)
+│   │   ├── index.js            # MITM proxy server (HTTP/HTTPS interception on 3457)
 │   │   ├── store.js            # In-memory circular buffer for captured requests
 │   │   └── ws.js               # WebSocket server for real-time streaming
 │   ├── routes/
 │   │   ├── analytics.js        # /api/analytics/* (overview, models, agents, errors, etc.)
 │   │   ├── baselines.js        # /api/baselines/*
 │   │   ├── network.js          # /api/network/* (proxy status, captured requests, export)
+│   │   ├── prompt-analytics.js # /api/prompt-analytics/* (turn diffs, reductions, metrics)
 │   │   └── tasks.js            # /api/tasks/* (list, detail, evaluate, test)
 │   └── testing/                # Behavioral test runner (TIA/BCV/MTV/BSE/ERC/CEC)
+├── scripts/
+│   └── init-platform-config.js # Auto-scans OS IDE task paths for pq-config.yaml
 ├── src/                        # Vite frontend
 │   ├── index.html
 │   ├── css/                    # PostQode-matched dark theme
 │   ├── js/
-│   │   ├── app.js              # Router, view lifecycle
+│   │   ├── app.js              # Router, auto-refresh lifecycle
 │   │   ├── api.js              # API client
 │   │   ├── utils.js            # Agent colors, formatting, chip rendering
-│   │   ├── components/
-│   │   │   ├── charts.js       # Chart.js (radar, bar, line, doughnut)
-│   │   │   ├── date-picker.js  # Date range picker
-│   │   │   └── metric-tooltip.js # Metric definition tooltips
-│   │   └── views/              # One file per page (overview, models, sessions, etc.)
+│   │   ├── components/         # Reusable chart & UI components
+│   │   └── views/              # Page views (prompt-analytics, overview, models, etc.)
 │   └── img/
-├── data/                       # SQLite database (WAL mode)
-├── docs/                       # Design documents
-├── pq-config.yaml              # IDE source configuration
-├── test-rules.yaml             # Fallback behavioral test rules
+├── data/                       # SQLite database (WAL mode) & proxy certs
+├── pq-config.yaml              # IDE source configuration (macOS/Windows/Linux)
+├── start.sh                    # macOS / Linux 1-click startup script
+├── start.cmd                   # Windows 1-click startup script
+├── start.bat                   # Windows batch alias
 └── vite.config.js              # Vite config with API proxy
 ```
-
-### Key Design Decisions
-
-- **All metrics are deterministic.** No LLM judge calls — everything is computed from log trace data (tool calls, errors, reasoning events, context usage).
-- **Agent = display name for `mode`.** The DB stores `mode` as the column name; the UI displays it as "Agent" everywhere. The mapping is centralized in `utils.js`.
-- **Pre-computed session metrics.** The `session_metrics` table caches TUE/RD/CE/ERR per session at parse time, making per-model aggregations a cheap `GROUP BY` instead of per-request recomputation.
-- **PQ-Score is server-side.** The composite ranking is computed in `analytics.js` so the Overview and Models pages always agree on ordering.
-
----
-
-## Data Model
-
-### Core Tables
-
-| Table | Purpose |
-|-------|---------|
-| `tasks` | One row per session. Stores cost, tokens, errors, status, activity category, agent metadata (`primary_agent`, `agent_count`, `is_multi_agent`, `agent_sequence_json`). |
-| `events` | One row per parsed event (API call, tool use, error, reasoning). Stores `mode` (agent), `model_id`, cost, tokens, error classification. |
-| `task_models` | Junction table: one row per (task, model, agent) combination. Powers the model analytics queries. |
-| `session_metrics` | Cached per-session heuristic scores (TUE, RD, CE, ERR). Populated by the parser. |
-
-### Supporting Tables
-
-| Table | Purpose |
-|-------|---------|
-| `baselines` | Editable behavioral baselines with prompt chains, tool sets, contracts, and excluded files. |
-| `test_results` | Behavioral test scores per task (TIA, BCV, MTV, BSE, ERC, CEC). |
-| `task_shell_commands` | Shell command frequency per task. |
-| `parse_meta` | File hash tracking for incremental parsing. |
 
 ---
 
 ## API Reference
 
-### Analytics
+### Analytics & Tasks
 
 | Endpoint | Description |
 |----------|-------------|
 | `GET /api/analytics/overview` | Aggregate stats (sessions, cost, tokens, errors, completion). Supports `?agent=` filter. |
-| `GET /api/analytics/models` | Per-model breakdown with PQ-Score, heuristic metrics, and `low_confidence` flag. Supports `?agent=` filter. |
+| `GET /api/analytics/models` | Per-model breakdown with PQ-Score, heuristic metrics, and `low_confidence` flag. |
 | `GET /api/analytics/agents` | Per-agent breakdown with sub-breakdowns (top models, activity mix, longest sessions). |
-| `GET /api/analytics/agent-matrix` | Sparse pivot: agents × models/activities/statuses. `?dimension=model\|activity\|status` |
+| `GET /api/analytics/agent-matrix` | Sparse pivot: agents × models/activities/statuses. |
 | `GET /api/analytics/errors` | Error breakdown by category, model, and time. |
-| `GET /api/analytics/tools` | Top tools and shell commands. Supports `?agent=` filter. |
-| `GET /api/analytics/activity` | Activity category breakdown with one-shot rates. Supports `?agent=` filter. |
-| `GET /api/analytics/reasoning` | With-reasoning vs without-reasoning comparison. |
-| `GET /api/analytics/metric-defs` | TUE/RD/CE/ERR definitions for UI tooltips (single source of truth). |
+| `GET /api/tasks` | Session list with filtering (`?agent=`, `?multi_agent=1`, `?model_id=`, `?status=`). |
+| `GET /api/tasks/:id` | Session detail with events trace. |
 
-### Tasks
+### Prompt Analytics
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /api/tasks` | Session list with filtering (`?agent=`, `?multi_agent=1`, `?model_id=`, `?status=`, etc.) |
-| `GET /api/tasks/:id` | Session detail with events. |
-| `GET /api/tasks/:id/evaluate` | Per-session heuristic evaluation (TUE, RD, CE, ERR). |
-| `GET /api/tasks/:id/test` | Run behavioral tests against baseline. |
+| `GET /api/prompt-analytics/:taskId` | Full prompt analytics: reconstructed turns, context reductions, scratch logs, financial breakdown. |
+| `GET /api/prompt-analytics/compare` | Multi-task comparative analytics data (`?tasks=id1,id2`). |
+| `GET /api/prompt-analytics/models` | Model pricing registry cache and context window lookup. |
+| `POST /api/prompt-analytics/label/:taskId` | Update custom user label for a task. |
 
-### Baselines
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET/POST /api/baselines` | List and create baselines. |
-| `GET/PUT/DELETE /api/baselines/:id` | CRUD operations on baselines. |
-| `POST /api/baselines/:id/enrich` | Enrich baseline from another session's trace. |
-
-### Network Inspector
+### Baselines & Network Inspector
 
 | Endpoint | Description |
 |----------|-------------|
+| `GET/POST /api/baselines` | List and create behavioral baselines. |
 | `GET /api/network/status` | Proxy status (running/stopped, port, buffer count, connected clients). |
-| `GET /api/network/requests` | Paginated captured requests. Supports `?host=`, `?method=`, `?status=`, `?search=`. |
-| `GET /api/network/requests/:id` | Full request detail (headers, body, timing). |
-| `POST /api/network/replay/:id` | Replay a captured request and log/broadcast the result. |
-| `POST /api/network/clear` | Clear the captured request buffer. |
+| `GET /api/network/requests` | Paginated captured HTTP/HTTPS requests with provider tags and payload diffs. |
+| `POST /api/network/replay/:id` | Replay a captured request. |
 | `GET /api/network/export` | Export all buffered requests as HAR file. |
-| `GET /api/network/mocks` | Fetch all active and inactive mock rules. |
-| `POST /api/network/mocks` | Create or update a mock rule. |
-| `DELETE /api/network/mocks/:id` | Delete a mock rule by its unique ID. |
-| `GET /api/network/intercept` | Get intercept state (enabled, filters, pending requests). |
-| `PUT /api/network/intercept` | Set intercept mode enabled/disabled and URL filters. |
-| `POST /api/network/intercept/:id/forward` | Forward an intercepted request (optionally with modified method/url/headers/body). |
-| `POST /api/network/intercept/:id/drop` | Drop/cancel an intercepted request. |
-| `POST /api/network/intercept/forward-all` | Release all pending intercepted requests at once. |
 
 ---
 
@@ -316,12 +238,9 @@ PQ-Dashboard/
 
 | Problem | Solution |
 |---------|----------|
-| No data visible | Check `pq-config.yaml` — ensure source paths are correct and `enabled: true`. |
-| EADDRINUSE error | Ports 3456/5173 are in use. Run `pkill -f "node server/index.js"` and `pkill -f "vite"`. |
-| Stale data after schema change | Delete `data/dashboard.db` and restart the server to trigger a fresh parse. |
-| Agent data missing | Agent metadata is computed at parse time. If sessions were parsed before agent support was added, delete the DB and re-parse. |
-| Network tab shows no requests | Ensure VS Code has `http.proxy` set to `http://localhost:3457`, `http.proxyStrictSSL` is `false`, and `http.noProxy` includes `"localhost"` and `"127.0.0.1"`. Restart VS Code after changing proxy settings. |
-| Network proxy won't start | Check if port 3457 is already in use: `lsof -ti:3457`. Kill any conflicting process. |
-| HTTPS requests fail through proxy | Set `"http.proxyStrictSSL": false` and add `"localhost"`/`"127.0.0.1"` to `"http.noProxy"` in VS Code settings, or add the CA cert from `data/proxy-certs/` to your system keychain. |
-| Intercepted request times out | Intercepted requests auto-drop after 5 minutes. Forward or edit them within that window. The client making the request may also have a shorter timeout. |
-| Intercept mode not catching requests | Ensure the intercept toggle is enabled (🛑 button). If you have URL filters set, the request URL must match one of them. |
+| **No data visible** | Check `pq-config.yaml` — ensure source paths are correct and `enabled: true`. On Windows, run `scripts/init-platform-config.js` to auto-detect paths. |
+| **Port in use error (EADDRINUSE)** | Ports 3456 or 5173 are occupied. Run `./start.sh` (macOS) or `start.cmd` (Windows) which automatically terminates stale port listeners. |
+| **Model Context Window Unknown** | The Model Registry automatically fetches live context windows from OpenRouter on startup. Ensure internet connectivity on launch or check local cache. |
+| **HTTPS requests fail through proxy** | Add the CA cert from `data/proxy-certs/certs/ca.pem` to your system keychain (macOS) or Windows Certificate Store (`Import-Certificate`). |
+| **Stale data after schema change** | Delete `data/dashboard.db` and trigger a refresh to perform a clean initial parse. |
+
