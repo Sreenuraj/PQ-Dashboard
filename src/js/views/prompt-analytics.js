@@ -65,6 +65,7 @@ let activeCategoryFilter = 'ALL';
 let reductionSearchQuery = '';
 let reductionViewMode = 'timeline'; // 'timeline' | 'grouped'
 let reductionFeedLimit = 30;
+let activeCallFocusIndex = null; // null = all calls, number = focused on specific API call index
 
 let chartSeries = {
   requestSize: true,
@@ -652,6 +653,19 @@ function renderAnalytics(contentEl) {
         </div>
       </div>
       <div class="panel-body">
+        <!-- Visual Bar Color Key & Interactive Click Hint -->
+        <div style="display:flex;align-items:center;justify-content:space-between;background:var(--bg-3);padding:6px 12px;border-radius:4px;border:1px solid var(--border);margin-bottom:10px;font-size:11px;color:var(--text-2);flex-wrap:wrap;gap:8px">
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+            <span style="font-weight:600;color:var(--text)">Chart Bar Key:</span>
+            <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:2px;background:#38bdf8;display:inline-block"></span> Normal Input</span>
+            <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:2px;background:#10b981;display:inline-block"></span> 📁 File Truncated</span>
+            <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:2px;background:#06b6d4;display:inline-block"></span> 💻 Cmd Truncated</span>
+            <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:2px;background:#e879f9;display:inline-block"></span> ⚡ Scratch Offloaded</span>
+            <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:2px;background:#10b981;display:inline-block"></span> ✂️ History Pruned</span>
+          </div>
+          <span style="color:#38bdf8;font-weight:600;font-size:11px">💡 Tip: Click any bar in the graph to isolate & view that turn's files</span>
+        </div>
+
         <div class="pa-chart-container" style="position:relative">
           <canvas id="pa-timeline-chart"></canvas>
           <div id="pa-chart-tooltip" class="pa-chart-tooltip" style="display:none;pointer-events:none;z-index:100;position:absolute"></div>
@@ -1876,13 +1890,18 @@ function renderReductionSequenceFeed(body, events) {
   if (!body) return;
   const allEvents = events || [];
 
-  const queryFiltered = reductionSearchQuery ? allEvents.filter(e => {
+  // If focused on a specific call, filter to events belonging to that turn
+  const callScopeEvents = activeCallFocusIndex !== null
+    ? allEvents.filter(e => e.callIndex === activeCallFocusIndex)
+    : allEvents;
+
+  const queryFiltered = reductionSearchQuery ? callScopeEvents.filter(e => {
     const q = reductionSearchQuery.trim().toLowerCase();
     return (e.targetName && e.targetName.toLowerCase().includes(q)) ||
            (e.scratchFilename && e.scratchFilename.toLowerCase().includes(q)) ||
            (e.toolName && e.toolName.toLowerCase().includes(q)) ||
            (e.category && e.category.toLowerCase().includes(q));
-  }) : allEvents;
+  }) : callScopeEvents;
 
   let filteredEvents = filterReductionEvents(queryFiltered, activeCategoryFilter);
 
@@ -1961,6 +1980,26 @@ function renderReductionSequenceFeed(body, events) {
     };
   }
 
+  const callFocusBanner = activeCallFocusIndex !== null ? `
+    <div class="pa-call-focus-banner" style="background:linear-gradient(90deg, rgba(16,185,129,0.18), rgba(56,189,248,0.18));border:1px solid #10b981;border-radius:6px;padding:10px 14px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;box-shadow:0 0 16px rgba(16,185,129,0.25)">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:16px">🎯</span>
+        <div>
+          <div style="font-size:12.5px;font-weight:bold;color:#ffffff">
+            Inspecting API Call #${activeCallFocusIndex + 1}
+            <span style="font-size:11px;font-weight:normal;color:#38bdf8;margin-left:8px">(${filteredEvents.length} reduction event${filteredEvents.length === 1 ? '' : 's'} on this turn)</span>
+          </div>
+          <div style="font-size:10.5px;color:var(--text-2);margin-top:2px">
+            Showing all files and diffs for Call #${activeCallFocusIndex + 1}. All cards are expanded below.
+          </div>
+        </div>
+      </div>
+      <button id="pa-clear-call-focus-btn" class="action-btn" style="background:#0284c7;color:#fff;border:1px solid #38bdf8;padding:4px 12px;font-size:11px;cursor:pointer;font-weight:bold;border-radius:4px;white-space:nowrap">
+        ✖ Show All Calls
+      </button>
+    </div>
+  ` : '';
+
   document.querySelectorAll('.pa-viewmode-btn').forEach(btn => {
     btn.onclick = () => {
       reductionViewMode = btn.dataset.mode;
@@ -1972,10 +2011,20 @@ function renderReductionSequenceFeed(body, events) {
 
   if (filteredEvents.length === 0) {
     body.innerHTML = `
+      ${callFocusBanner}
       <div class="empty-state" style="padding:24px;text-align:center">
-        <p style="color:var(--text-3);font-size:12px">No reduction events match the current filter / search query.</p>
+        <p style="color:var(--text-3);font-size:12px">No reduction events on this turn or matching the search query.</p>
+        ${activeCallFocusIndex !== null ? `<button id="pa-clear-call-focus-empty-btn" class="action-btn primary" style="padding:4px 12px;font-size:11px;margin-top:10px;cursor:pointer">✖ Show All Calls</button>` : ''}
       </div>
     `;
+    const clearBtn = document.getElementById('pa-clear-call-focus-empty-btn') || document.getElementById('pa-clear-call-focus-btn');
+    if (clearBtn) {
+      clearBtn.onclick = () => {
+        activeCallFocusIndex = null;
+        renderReductionSequenceFeed(body, allEvents);
+        if (typeof redrawTargetCanvas === 'function' && typeof analyticsData !== 'undefined') redrawTargetCanvas(document.getElementById('pa-target-chart'), analyticsData.apiCalls);
+      };
+    }
     return;
   }
 
@@ -2002,6 +2051,7 @@ function renderReductionSequenceFeed(body, events) {
     const sortedGroups = Object.values(groups).sort((a, b) => b.totalSaved - a.totalSaved || b.events.length - a.events.length);
 
     body.innerHTML = `
+      ${callFocusBanner}
       <div style="font-size:11px;color:var(--text-3);margin-bottom:12px;padding:0 4px;display:flex;justify-content:space-between;align-items:center">
         <span>Grouped into <strong>${sortedGroups.length}</strong> unique targets (${filteredEvents.length} total events):</span>
       </div>
@@ -2028,8 +2078,8 @@ function renderReductionSequenceFeed(body, events) {
                   <button class="action-btn secondary pa-toggle-group-btn" data-gidx="${gIdx}" style="padding:2px 8px;font-size:10.5px">▼ Toggle Diffs (${g.events.length})</button>
                 </div>
               </div>
-              <div class="pa-grouped-body" id="pa-grouped-body-${gIdx}" style="padding:10px;display:flex;flex-direction:column;gap:10px;border-top:1px solid var(--border)">
-                ${g.events.map(ev => renderReductionEventCard(ev)).join('')}
+              <div class="pa-grouped-body" id="pa-grouped-body-${gIdx}" style="padding:10px;display:${(activeCallFocusIndex !== null || gIdx === 0) ? 'flex' : 'none'};flex-direction:column;gap:10px;border-top:1px solid var(--border)">
+                ${g.events.map(ev => renderReductionEventCard(ev, true)).join('')}
               </div>
             </div>
           `;
@@ -2042,7 +2092,7 @@ function renderReductionSequenceFeed(body, events) {
     body.querySelectorAll('.pa-grouped-header, .pa-toggle-group-btn').forEach(el => {
       el.onclick = (e) => {
         e.stopPropagation();
-        const gidx = el.dataset.gidx;
+        const gidx = el.closest('.pa-grouped-target-card').querySelector('.pa-grouped-header').dataset.gidx;
         const gBody = document.getElementById(`pa-grouped-body-${gidx}`);
         if (gBody) {
           const isHidden = gBody.style.display === 'none';
@@ -2053,10 +2103,12 @@ function renderReductionSequenceFeed(body, events) {
 
   } else {
     // ── TIMELINE VIEW ──
-    const visibleSlice = filteredEvents.slice(0, reductionFeedLimit);
-    const hasMore = filteredEvents.length > visibleSlice.length;
+    const isLimited = (activeCallFocusIndex === null) && (filteredEvents.length > reductionFeedLimit);
+    const visibleSlice = isLimited ? filteredEvents.slice(0, reductionFeedLimit) : filteredEvents;
+    const hasMore = isLimited && visibleSlice.length < filteredEvents.length;
 
     body.innerHTML = `
+      ${callFocusBanner}
       <div style="font-size:11px;color:var(--text-3);margin-bottom:12px;padding:0 4px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
         <span>Showing <strong>${visibleSlice.length}</strong> of <strong>${filteredEvents.length}</strong> context reduction events:</span>
         <div style="display:flex;align-items:center;gap:6px">
@@ -2067,7 +2119,7 @@ function renderReductionSequenceFeed(body, events) {
       </div>
 
       <div style="display:flex;flex-direction:column;gap:12px">
-        ${visibleSlice.map((ev, idx) => renderReductionEventCard(ev, idx < 3)).join('')}
+        ${visibleSlice.map((ev, idx) => renderReductionEventCard(ev, (activeCallFocusIndex !== null) || (idx < 5))).join('')}
       </div>
 
       ${hasMore ? `
@@ -2100,6 +2152,15 @@ function renderReductionSequenceFeed(body, events) {
       reductionFeedLimit += 50;
       renderReductionSequenceFeed(body, allEvents);
     });
+  }
+
+  const clearFocusBtn = document.getElementById('pa-clear-call-focus-btn');
+  if (clearFocusBtn) {
+    clearFocusBtn.onclick = () => {
+      activeCallFocusIndex = null;
+      renderReductionSequenceFeed(body, allEvents);
+      if (typeof redrawTargetCanvas === 'function' && typeof analyticsData !== 'undefined') redrawTargetCanvas(document.getElementById('pa-target-chart'), analyticsData.apiCalls);
+    };
   }
 }
 
@@ -2476,9 +2537,9 @@ function drawTimelineChart(calls, targetCanvas = null, zoomRange = null, crossha
     points.push({ x, barY, barH, readY, writeY, ctxY, costY, hitPctY, latY, call: c, index: origIndex, localIndex: i });
 
     const hoveredIdx = canvas._hoveredIndex != null ? canvas._hoveredIndex : null;
-    const isHighlighted = (hoveredIdx === origIndex) || (crosshairStepIndex === origIndex);
+    const isHighlighted = (hoveredIdx === origIndex) || (crosshairStepIndex === origIndex) || (activeCallFocusIndex === origIndex);
     if (isHighlighted) {
-      ctx.fillStyle = isDark ? 'rgba(56, 189, 248, 0.18)' : 'rgba(14, 165, 233, 0.15)';
+      ctx.fillStyle = (activeCallFocusIndex === origIndex) ? 'rgba(16, 185, 129, 0.25)' : (isDark ? 'rgba(56, 189, 248, 0.18)' : 'rgba(14, 165, 233, 0.15)');
       ctx.fillRect(pad.left + i * colWidth, pad.top, colWidth, chartH);
     }
 
@@ -2960,37 +3021,30 @@ function handleChartClick(e, calls) {
     return;
   }
 
-  // 1. Reset timeline mode & search query so the card is visible
-  reductionViewMode = 'timeline';
-  reductionSearchQuery = '';
-  activeCategoryFilter = 'ALL';
-  reductionFeedLimit = Math.max(reductionFeedLimit, (analyticsData?.reductionEvents || []).length);
+  // Toggle or focus on the clicked API call
+  if (activeCallFocusIndex === colIdx) {
+    activeCallFocusIndex = null;
+    showChartToast(`Showing all calls`);
+  } else {
+    activeCallFocusIndex = colIdx;
+    reductionViewMode = 'timeline';
+    reductionSearchQuery = '';
+    activeCategoryFilter = 'ALL';
+    const allEvs = analyticsData?.reductionEvents || [];
+    const matching = allEvs.filter(e => e.callIndex === colIdx);
+    showChartToast(`🎯 Call #${colIdx + 1}: ${matching.length} event${matching.length === 1 ? '' : 's'} inspected`);
+  }
 
   const searchInput = document.getElementById('pa-seq-search-input');
   if (searchInput) searchInput.value = '';
 
   renderReductionSequenceFeed(document.getElementById('pa-comparison-body'), analyticsData?.reductionEvents || []);
+  redrawTargetCanvas(canvas, calls);
 
-  // 2. Locate matching card in DOM
-  setTimeout(() => {
-    const targetCard = document.querySelector(`.pa-sbs-card[data-call="${colIdx}"]`);
-    if (targetCard) {
-      const bodyEl = targetCard.querySelector('.pa-sbs-body');
-      if (bodyEl) bodyEl.style.display = 'block';
-      const btn = targetCard.querySelector('.pa-card-toggle-btn');
-      if (btn) btn.innerText = '▲ Hide Diff';
-
-      targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      targetCard.style.outline = '3px solid #10b981';
-      targetCard.style.boxShadow = '0 0 24px rgba(16, 185, 129, 0.7)';
-      setTimeout(() => {
-        targetCard.style.outline = 'none';
-        targetCard.style.boxShadow = 'none';
-      }, 3500);
-    } else {
-      showChartToast(`Call #${colIdx + 1}: ${fmtBytes(calls[colIdx]?.requestSize || 0)} (No context reductions on this turn)`);
-    }
-  }, 50);
+  const compSection = document.getElementById('pa-comparison-section');
+  if (compSection) {
+    compSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
 }
 
 export async function silentRefreshPromptAnalytics() {
