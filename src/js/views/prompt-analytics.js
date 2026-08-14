@@ -2207,24 +2207,27 @@ function renderDiffBoxMarkup(item, prevCallIdx, callIdx, category, targetName, i
       </div>
 
       <div class="pa-sbs-body" style="display:${isInitiallyExpanded ? 'block' : 'none'}">
-        <div style="background:${bannerBg};border-bottom:1px solid rgba(255,255,255,0.12);padding:8px 14px;font-size:11px">
-          <span style="color:${bannerColor};font-weight:bold">${bannerTitle}</span>
-          <div class="mono" style="margin-top:4px;background:rgba(255,255,255,0.06);color:${bannerColor};padding:6px 10px;border-radius:var(--radius-sm);border-left:3px solid ${bannerColor};max-height:90px;overflow-y:auto;white-space:pre-wrap;word-break:break-all">
-            ${escHtml(bannerText)}
-          </div>
-        </div>
-
         ${isSys ? `
-          <div style="padding:10px 14px;background:var(--bg-2)">
-            <div style="font-weight:bold;font-size:10.5px;color:#38bdf8;margin-bottom:6px;display:flex;justify-content:space-between">
+          <div style="padding:12px 14px;background:var(--bg-2)">
+            <div style="font-weight:bold;font-size:11px;color:#38bdf8;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
               <span>🛡️ INITIAL SYSTEM PROMPT INSTRUCTIONS (Static Base Context)</span>
-              <span class="mono">${fmtBytes(beforeSize)}</span>
+              <div style="display:flex;align-items:center;gap:10px">
+                <span class="mono" style="color:var(--text-3);font-size:10.5px">Size: <strong>${fmtBytes(beforeSize)}</strong></span>
+                <button class="action-btn secondary pa-copy-sysprompt-btn" style="padding:2px 8px;font-size:10px;color:#38bdf8;cursor:pointer" onclick="navigator.clipboard.writeText(this.closest('.pa-sbs-body').querySelector('.mono-prompt').innerText); this.innerText = '✓ Copied'; setTimeout(() => this.innerText = '📋 Copy', 1500);">📋 Copy</button>
+              </div>
             </div>
-            <div class="mono" style="font-size:10.5px;line-height:1.45;color:var(--text);background:var(--bg-1);padding:10px;border-radius:var(--radius-sm);border:1px solid var(--border);max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-all">
+            <div class="mono mono-prompt" style="font-size:10.5px;line-height:1.45;color:var(--text);background:var(--bg-1);padding:10px 12px;border-radius:var(--radius-sm);border:1px solid var(--border);max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all">
               ${escHtml(item.diffChunks?.insertedText || '')}
             </div>
           </div>
         ` : `
+          <div style="background:${bannerBg};border-bottom:1px solid rgba(255,255,255,0.12);padding:8px 14px;font-size:11px">
+            <span style="color:${bannerColor};font-weight:bold">${bannerTitle}</span>
+            <div class="mono" style="margin-top:4px;background:rgba(255,255,255,0.06);color:${bannerColor};padding:6px 10px;border-radius:var(--radius-sm);border-left:3px solid ${bannerColor};max-height:90px;overflow-y:auto;white-space:pre-wrap;word-break:break-all">
+              ${escHtml(bannerText)}
+            </div>
+          </div>
+
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border)">
             <div style="background:var(--bg-2);padding:10px 12px">
               <div style="font-weight:bold;font-size:10.5px;color:var(--red);margin-bottom:6px;display:flex;justify-content:space-between">
