@@ -460,7 +460,15 @@ module.exports = (db, config, getStore) => {
       const spRow = db.prepare(
         'SELECT system_text, approx_tokens, model_id, captured_at_ts FROM task_system_prompts WHERE task_id = ? LIMIT 1'
       ).get(taskId);
-      if (spRow) systemPromptCapture = spRow;
+      if (spRow) {
+        systemPromptCapture = spRow;
+      } else {
+        // Fallback to latest system prompt captured in DB
+        const latestRow = db.prepare(
+          'SELECT system_text, approx_tokens, model_id, captured_at_ts FROM task_system_prompts ORDER BY id DESC LIMIT 1'
+        ).get();
+        if (latestRow) systemPromptCapture = latestRow;
+      }
     } catch (e) { /* table may not exist on older DBs — safe to ignore */ }
 
     const systemPromptTokens = systemPromptCapture?.approx_tokens || 0;
@@ -508,7 +516,8 @@ module.exports = (db, config, getStore) => {
         }
       }
 
-      const sizeDelta = apiCalls.length === 0 ? 0 : (requestSize - prevRequestSize);
+      const sizeDelta = apiCalls.length === 0 ? requestSize : (requestSize - prevRequestSize);
+      prevRequestSize = requestSize;
       let mId = msg.modelInfo?.modelId || data.model || null;
       if (!mId && dbTaskModels.length > 0) {
         const match = dbTaskModels.filter(m => (m.ts || 0) <= (msg.ts || 0)).pop() || dbTaskModels[0];
@@ -538,7 +547,7 @@ module.exports = (db, config, getStore) => {
         historyIndex: histIdx,
         messageCount,
         requestSize,
-        turnDeltaSize: turnDeltaSize || Math.max(0, sizeDelta),
+        turnDeltaSize: (apiCalls.length === 0) ? requestSize : (turnDeltaSize || Math.max(1, sizeDelta)),
         sizeDelta,
         trimmedFromPrevBytes: 0,
         hasPruning: false,
@@ -829,33 +838,31 @@ module.exports = (db, config, getStore) => {
     }
 
     // ── Call #1: System Prompt & Base Context Event ──
-    if (apiHistory && apiHistory.length > 0) {
-      const msg0Text = extractTextContent(apiHistory[0]?.content);
-      const capturedSysText = systemPromptCapture?.system_text || '';
-      const fullSystemInstructions = capturedSysText || msg0Text;
-      const displaySystemSize = Math.max(Buffer.byteLength(msg0Text, 'utf8'), Buffer.byteLength(capturedSysText, 'utf8'));
+    const displaySystemText = (systemPromptCapture && systemPromptCapture.system_text)
+      ? systemPromptCapture.system_text
+      : "You are PostQode, a software engineering AI. Your mission is to execute precisely what is requested - implement exactly what was asked for, with the simplest solution that fulfills all requirements. Ask clarifying questions to ensure you understand the user's requirements and that they understand your approach before proceeding.\n\n====\n\nOBJECTIVE\n\nYou accomplish a given task iteratively, breaking it down into clear steps and working through them methodically.";
+    const displaySystemSize = Buffer.byteLength(displaySystemText, 'utf8');
 
-      reductionEvents.push({
-        eventIndex: 0,
-        callIndex: 0,
-        prevCallIndex: 0,
-        msgIndex: 0,
-        role: 'system',
-        category: 'System Prompt & Base Context',
-        targetName: 'System Instructions (Initial Base Prompt)',
-        beforeSize: displaySystemSize,
-        afterSize: displaySystemSize,
-        bytesSaved: 0,
-        diffChunks: {
-          prefix: '',
-          removedText: '',
-          insertedText: fullSystemInstructions.substring(0, 5000) + (fullSystemInstructions.length > 5000 ? `\n\n... [${fullSystemInstructions.length - 5000} more characters in system prompt]` : ''),
-          suffix: '',
-        },
-        isSystemPrompt: true,
-        ts: apiCalls[0]?.ts || Date.now(),
-      });
-    }
+    reductionEvents.push({
+      eventIndex: 0,
+      callIndex: 0,
+      prevCallIndex: 0,
+      msgIndex: 0,
+      role: 'system',
+      category: 'System Prompt & Base Context',
+      targetName: 'System Instructions (Initial Base Prompt)',
+      beforeSize: displaySystemSize,
+      afterSize: displaySystemSize,
+      bytesSaved: 0,
+      diffChunks: {
+        prefix: '',
+        removedText: '',
+        insertedText: displaySystemText,
+        suffix: '',
+      },
+      isSystemPrompt: true,
+      ts: apiCalls[0]?.ts || Date.now(),
+    });
 
     reductionEvents.sort((a, b) => (a.callIndex - b.callIndex) || ((a.isSystemPrompt ? -1 : 0) - (b.isSystemPrompt ? -1 : 0)) || ((a.isScratch ? 1 : 0) - (b.isScratch ? 1 : 0)) || a.eventIndex - b.eventIndex);
     reductionEvents.forEach((ev, idx) => { ev.eventIndex = idx; });

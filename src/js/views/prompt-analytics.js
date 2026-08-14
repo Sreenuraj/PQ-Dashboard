@@ -2382,10 +2382,11 @@ function drawTimelineChart(calls, targetCanvas = null, zoomRange = null, crossha
 
   const reqMode = window.requestSizeMode || requestSizeMode || 'accumulated';
   const getTargetSize = (c) => {
-    if (reqMode === 'accumulated') return c.requestSize || 1;
+    if (reqMode === 'accumulated') return c.requestSize || Math.max(10, (c.tokensIn || 0) * 4);
     if (c.turnDeltaSize != null && c.turnDeltaSize > 0) return c.turnDeltaSize;
-    if (c.sizeDelta != null && c.sizeDelta !== 0) return Math.abs(c.sizeDelta);
-    return Math.max(1, (c.tokensIn || 0) * 4);
+    if (c.sizeDelta != null && c.sizeDelta > 0) return c.sizeDelta;
+    if (c.index === 0 && c.requestSize > 0) return c.requestSize;
+    return Math.max(10, (c.tokensIn || 0) * 4);
   };
 
   const sizes = visibleCalls.map(c => getTargetSize(c));
@@ -2452,7 +2453,7 @@ function drawTimelineChart(calls, targetCanvas = null, zoomRange = null, crossha
     const x = pad.left + i * colWidth + colWidth / 2;
 
     const targetSize = getTargetSize(c);
-    const barH = Math.max(3, (targetSize / maxSize) * chartH);
+    const barH = Math.max(6, (targetSize / maxSize) * chartH);
     const barY = pad.top + chartH - barH;
 
     const readY = pad.top + chartH - (c.cacheReads / maxCache) * chartH;
@@ -2479,17 +2480,21 @@ function drawTimelineChart(calls, targetCanvas = null, zoomRange = null, crossha
 
       if (hasScratchOffload) {
         grad.addColorStop(0, '#e879f9');
-        grad.addColorStop(1, 'rgba(232, 121, 249, 0.35)');
+        grad.addColorStop(1, 'rgba(232, 121, 249, 0.45)');
       } else if (hasHistoricalPruning) {
         grad.addColorStop(0, '#10b981');
-        grad.addColorStop(1, 'rgba(16,185,129,0.35)');
+        grad.addColorStop(1, 'rgba(16, 185, 129, 0.45)');
       } else {
         grad.addColorStop(0, '#38bdf8');
-        grad.addColorStop(1, 'rgba(14,165,233,0.2)');
+        grad.addColorStop(1, 'rgba(14, 165, 233, 0.45)');
       }
 
       ctx.fillStyle = grad;
       ctx.fillRect(x - barWidth / 2, barY, barWidth, barH);
+
+      ctx.strokeStyle = hasScratchOffload ? 'rgba(232, 121, 249, 0.85)' : (hasHistoricalPruning ? 'rgba(16, 185, 129, 0.85)' : 'rgba(56, 189, 248, 0.85)');
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x - barWidth / 2, barY, barWidth, barH);
 
       if (hasScratchOffload) {
         ctx.fillStyle = '#e879f9';
@@ -2499,7 +2504,7 @@ function drawTimelineChart(calls, targetCanvas = null, zoomRange = null, crossha
       }
 
       if (isHighlighted) {
-        ctx.strokeStyle = hasScratchOffload ? '#e879f9' : '#38bdf8';
+        ctx.strokeStyle = '#ffffff';
         ctx.lineWidth = 1.5;
         ctx.strokeRect(x - barWidth / 2 - 1, barY - 1, barWidth + 2, barH + 2);
       }
