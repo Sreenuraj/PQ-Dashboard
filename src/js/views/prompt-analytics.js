@@ -1035,8 +1035,7 @@ function renderCompareAnalyticsView(contentEl, taskIds) {
     </div>
 
     <!-- Side-by-Side Timeline Charts -->
-    <div style="display:grid;grid-template-columns:1fr;gap:16px;position:relative">
-      <div id="pa-compare-tooltip" class="pa-chart-tooltip" style="display:none;pointer-events:none;z-index:100;position:absolute"></div>
+    <div style="display:grid;grid-template-columns:1fr;gap:16px">
       ${taskIds.map(id => {
         const d = compareDataMap[id];
         const t = d.task || { id };
@@ -1059,8 +1058,9 @@ function renderCompareAnalyticsView(contentEl, taskIds) {
               </div>
             </div>
             <div class="panel-body">
-              <div style="position:relative">
+              <div class="pa-chart-container" style="position:relative">
                 <canvas id="pa-compare-canvas-${id}" data-task-id="${id}" data-height="200"></canvas>
+                <div id="pa-compare-tooltip-${id}" class="pa-chart-tooltip" style="display:none;pointer-events:none;z-index:100;position:absolute"></div>
               </div>
             </div>
           </div>
@@ -1112,12 +1112,12 @@ function renderCompareAnalyticsView(contentEl, taskIds) {
         if (!canvas._hasHoverBound) {
           canvas._hasHoverBound = true;
           canvas.addEventListener('mousemove', (e) => {
-            handleChartHover(e, canvas._calls, canvas, 'pa-compare-tooltip');
+            handleChartHover(e, canvas._calls, canvas, `pa-compare-tooltip-${id}`);
           });
           canvas.addEventListener('mouseleave', () => {
             canvas._hoveredIndex = null;
             redrawTargetCanvas(canvas, canvas._calls);
-            const tt = document.getElementById('pa-compare-tooltip');
+            const tt = document.getElementById(`pa-compare-tooltip-${id}`);
             if (tt) tt.style.display = 'none';
           });
         }
