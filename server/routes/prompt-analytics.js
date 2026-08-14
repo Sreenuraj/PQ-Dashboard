@@ -568,61 +568,63 @@ module.exports = (db, config, getStore) => {
     let envPruningCount = 0;
     let envPruningBytes = 0;
 
-    for (let i = 1; i < apiCalls.length; i++) {
-      const callPrev = apiCalls[i - 1];
-      const callCurr = apiCalls[i];
+    if (contextUpdates.length > 0) {
+      for (let i = 1; i < apiCalls.length; i++) {
+        const callPrev = apiCalls[i - 1];
+        const callCurr = apiCalls[i];
 
-      const msgsPrev = getEffectiveMessagesAtTs(apiHistory, contextUpdates, callPrev.ts, callPrev.historyIndex);
-      const msgsCurr = getEffectiveMessagesAtTs(apiHistory, contextUpdates, callCurr.ts, callPrev.historyIndex);
+        const msgsPrev = getEffectiveMessagesAtTs(apiHistory, contextUpdates, callPrev.ts, callPrev.historyIndex);
+        const msgsCurr = getEffectiveMessagesAtTs(apiHistory, contextUpdates, callCurr.ts, callPrev.historyIndex);
 
-      let turnSavedBytes = 0;
+        let turnSavedBytes = 0;
 
-      for (let mIdx = 0; mIdx < msgsPrev.length; mIdx++) {
-        const sPrev = JSON.stringify(msgsPrev[mIdx]?.content || '').length;
-        const sCurr = JSON.stringify(msgsCurr[mIdx]?.content || '').length;
-        const bytesSaved = sPrev - sCurr;
+        for (let mIdx = 0; mIdx < msgsPrev.length; mIdx++) {
+          const sPrev = JSON.stringify(msgsPrev[mIdx]?.content || '').length;
+          const sCurr = JSON.stringify(msgsCurr[mIdx]?.content || '').length;
+          const bytesSaved = sPrev - sCurr;
 
-        if (bytesSaved > 50) {
-          turnSavedBytes += bytesSaved;
-          const contentPrevStr = extractTextContent(msgsPrev[mIdx]?.content);
-          const contentCurrStr = extractTextContent(msgsCurr[mIdx]?.content);
+          if (bytesSaved > 50) {
+            turnSavedBytes += bytesSaved;
+            const contentPrevStr = extractTextContent(msgsPrev[mIdx]?.content);
+            const contentCurrStr = extractTextContent(msgsCurr[mIdx]?.content);
 
-          const { category, targetName } = detectReductionCategory(contentPrevStr, contentCurrStr);
+            const { category, targetName } = detectReductionCategory(contentPrevStr, contentCurrStr);
 
-          if (category === 'File Read Truncated') {
-            if (!filePruningMap[targetName]) filePruningMap[targetName] = { count: 0, bytesSaved: 0 };
-            filePruningMap[targetName].count++;
-            filePruningMap[targetName].bytesSaved += bytesSaved;
-          } else if (category === 'Terminal Output Truncated') {
-            if (!cmdPruningMap[targetName]) cmdPruningMap[targetName] = { count: 0, bytesSaved: 0 };
-            cmdPruningMap[targetName].count++;
-            cmdPruningMap[targetName].bytesSaved += bytesSaved;
-          } else if (category === 'Stale Environment Snapshot Removed') {
-            envPruningCount++;
-            envPruningBytes += bytesSaved;
+            if (category === 'File Read Truncated') {
+              if (!filePruningMap[targetName]) filePruningMap[targetName] = { count: 0, bytesSaved: 0 };
+              filePruningMap[targetName].count++;
+              filePruningMap[targetName].bytesSaved += bytesSaved;
+            } else if (category === 'Terminal Output Truncated') {
+              if (!cmdPruningMap[targetName]) cmdPruningMap[targetName] = { count: 0, bytesSaved: 0 };
+              cmdPruningMap[targetName].count++;
+              cmdPruningMap[targetName].bytesSaved += bytesSaved;
+            } else if (category === 'Stale Environment Snapshot Removed') {
+              envPruningCount++;
+              envPruningBytes += bytesSaved;
+            }
+
+            const diffChunks = computeExactDiffChunks(contentPrevStr, contentCurrStr);
+
+            reductionEvents.push({
+              eventIndex: reductionEvents.length,
+              callIndex: i,
+              prevCallIndex: i - 1,
+              msgIndex: mIdx,
+              role: msgsPrev[mIdx]?.role || 'unknown',
+              category,
+              targetName,
+              beforeSize: sPrev,
+              afterSize: sCurr,
+              bytesSaved,
+              diffChunks,
+              ts: callCurr.ts,
+            });
           }
-
-          const diffChunks = computeExactDiffChunks(contentPrevStr, contentCurrStr);
-
-          reductionEvents.push({
-            eventIndex: reductionEvents.length,
-            callIndex: i,
-            prevCallIndex: i - 1,
-            msgIndex: mIdx,
-            role: msgsPrev[mIdx]?.role || 'unknown',
-            category,
-            targetName,
-            beforeSize: sPrev,
-            afterSize: sCurr,
-            bytesSaved,
-            diffChunks,
-            ts: callCurr.ts,
-          });
         }
-      }
 
-      callCurr.trimmedFromPrevBytes = turnSavedBytes;
-      callCurr.hasPruning = turnSavedBytes > 100;
+        callCurr.trimmedFromPrevBytes = turnSavedBytes;
+        callCurr.hasPruning = turnSavedBytes > 100;
+      }
     }
 
     // Attach cumulative metrics (cost, elapsed time, latency, cacheHitPct) & explanation to every call
@@ -647,34 +649,6 @@ module.exports = (db, config, getStore) => {
 
 
     let taskMeta = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
-    if (!taskMeta) {
-      const startTs = apiCalls[0]?.ts || Date.now();
-      const endTs = apiCalls[apiCalls.length - 1]?.ts || Date.now();
-      const dur = Math.max(0, endTs - startTs);
-      const totCost = apiCalls.reduce((s, c) => s + (c.cost || 0), 0);
-      const firstMsg = uiMessages[0]?.content ? (typeof uiMessages[0].content === 'string' ? uiMessages[0].content : JSON.stringify(uiMessages[0].content)) : `Task ${taskId}`;
-      db.prepare('INSERT OR IGNORE INTO tasks (id, source, start_ts, end_ts, duration, total_cost, api_call_count, first_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
-        taskId, 'disk', startTs, endTs, dur, totCost, apiCalls.length, firstMsg.substring(0, 200)
-      );
-      taskMeta = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
-    }
-
-    const taskObj = {
-      id: taskId,
-      label: taskMeta?.label || null,
-      source: taskMeta?.source || 'disk',
-      startTs: taskMeta?.start_ts || (apiCalls[0]?.ts || Date.now()),
-      endTs: taskMeta?.end_ts || (apiCalls[apiCalls.length - 1]?.ts || Date.now()),
-      duration: taskMeta?.duration || 0,
-      totalCost: taskMeta?.total_cost || 0,
-      totalTokensIn: taskMeta?.total_tokens_in || 0,
-      totalTokensOut: taskMeta?.total_tokens_out || 0,
-      totalCacheReads: taskMeta?.total_cache_reads || 0,
-      totalCacheWrites: taskMeta?.total_cache_writes || 0,
-      apiCallCount: taskMeta?.api_call_count || apiCalls.length,
-      firstMessage: taskMeta?.first_message || `Task ${taskId}`,
-      status: taskMeta?.status || 'completed',
-    };
 
     // ── Scan scratch/ directory for write-time offloaded logs ──
     const scratchDir = path.join(taskPath, 'scratch');
@@ -685,6 +659,19 @@ module.exports = (db, config, getStore) => {
     if (fs.existsSync(scratchDir)) {
       try {
         const scratchFiles = fs.readdirSync(scratchDir).filter(f => f.endsWith('.log'));
+
+        // Fast pre-index of apiHistory and uiMessages once
+        const indexedHistory = apiHistory.map((m, idx) => ({
+          msgIndex: idx,
+          role: m?.role || 'user',
+          text: extractTextContent(m?.content),
+        }));
+
+        const indexedUi = uiMessages.map((m, idx) => ({
+          msgIndex: idx,
+          text: extractTextContent(m?.text || m?.content),
+        }));
+
         for (const fname of scratchFiles) {
           const fpath = path.join(scratchDir, fname);
           const stat = fs.statSync(fpath);
@@ -694,7 +681,7 @@ module.exports = (db, config, getStore) => {
           let rawPreviewText = '';
           try {
             const rawText = fs.readFileSync(fpath, 'utf8');
-            rawPreviewText = rawText.length > 2500 ? rawText.substring(0, 2500) + `\n... [${rawText.length - 2500} more chars]` : rawText;
+            rawPreviewText = rawText.length > 2000 ? rawText.substring(0, 2000) + `\n... [${rawText.length - 2000} more chars]` : rawText;
           } catch {}
 
           let toolName = 'tool_output';
@@ -704,28 +691,61 @@ module.exports = (db, config, getStore) => {
           let promptSnippetText = '';
           let matchedCallIndex = -1;
           let matchedMsgIndex = -1;
+          let targetPath = null;
 
-          for (let cIdx = 0; cIdx < apiCalls.length; cIdx++) {
-            const call = apiCalls[cIdx];
-            const msgs = getEffectiveMessagesAtTs(apiHistory, contextUpdates, call.ts, call.historyIndex);
-            for (let mIdx = 0; mIdx < msgs.length; mIdx++) {
-              const str = extractTextContent(msgs[mIdx]?.content);
-              if (str.includes(fname) || (str.includes('scratch') && str.includes(toolName))) {
+          // 1. Fast match in indexedHistory
+          for (const item of indexedHistory) {
+            if (item.text.includes(fname)) {
+              matchedMsgIndex = item.msgIndex;
+              promptSnippetText = item.text;
+              const lines = item.text.split('\n');
+              const fLineIdx = lines.findIndex(l => l.includes(fname));
+              if (fLineIdx >= 0) {
+                for (let l = fLineIdx; l >= Math.max(0, fLineIdx - 5); l--) {
+                  const m = lines[l].match(/\[([a-z_]+)\s+for\s+['\"]([^'\"]+)['\"]\]/i);
+                  if (m) {
+                    targetPath = m[2];
+                    break;
+                  }
+                }
+              }
+              break;
+            }
+          }
+
+          // 2. Fast match in indexedUi if not found
+          if (!targetPath || !promptSnippetText) {
+            for (const item of indexedUi) {
+              if (item.text.includes(fname)) {
+                if (!promptSnippetText) promptSnippetText = item.text;
+                if (!targetPath) {
+                  const lines = item.text.split('\n');
+                  const fLineIdx = lines.findIndex(l => l.includes(fname));
+                  if (fLineIdx >= 0) {
+                    for (let l = fLineIdx; l >= Math.max(0, fLineIdx - 5); l--) {
+                      const m = lines[l].match(/\[([a-z_]+)\s+for\s+['\"]([^'\"]+)['\"]\]/i);
+                      if (m) {
+                        targetPath = m[2];
+                        break;
+                      }
+                    }
+                  }
+                }
+                if (targetPath && promptSnippetText) break;
+              }
+            }
+          }
+
+          // 3. Find matched callIndex by historyIndex
+          if (matchedMsgIndex >= 0) {
+            for (let cIdx = 0; cIdx < apiCalls.length; cIdx++) {
+              if (apiCalls[cIdx].historyIndex >= matchedMsgIndex) {
                 matchedCallIndex = cIdx;
-                matchedMsgIndex = mIdx;
-                promptSnippetText = str;
                 break;
               }
             }
-            if (matchedCallIndex >= 0) break;
           }
-
-          if (!promptSnippetText) {
-            const uiMatch = uiMessages.find(m => (m.text && typeof m.text === 'string' && m.text.includes(fname)));
-            if (uiMatch) {
-              promptSnippetText = extractTextContent(uiMatch.text);
-            }
-          }
+          if (matchedCallIndex < 0) matchedCallIndex = 0;
 
           if (promptSnippetText) {
             const fnameIdx = promptSnippetText.indexOf(fname);
@@ -742,9 +762,54 @@ module.exports = (db, config, getStore) => {
           totalScratchPromptBytes += promptBytes;
           const bytesSaved = Math.max(0, rawBytes - promptBytes);
 
+          let displayTarget = targetPath || fname;
+          if (displayTarget.includes('/scratch/')) {
+            const base = displayTarget.split('/scratch/').pop();
+            displayTarget = `[Nested Scratch: ${base}]`;
+          }
+
+          // If tool is read_file and target is a real file, register in filePruningMap
+          if (toolName === 'read_file' && targetPath && !targetPath.includes('/scratch/')) {
+            if (!filePruningMap[targetPath]) filePruningMap[targetPath] = { count: 0, bytesSaved: 0 };
+            filePruningMap[targetPath].count++;
+            filePruningMap[targetPath].bytesSaved += bytesSaved;
+          } else if (toolName === 'execute_command' && targetPath) {
+            if (!cmdPruningMap[targetPath]) cmdPruningMap[targetPath] = { count: 0, bytesSaved: 0 };
+            cmdPruningMap[targetPath].count++;
+            cmdPruningMap[targetPath].bytesSaved += bytesSaved;
+          }
+
+          const diffChunks = computeExactDiffChunks(rawPreviewText, promptSnippetText || '');
+
+          let reductionCategory = 'Scratch Offload';
+          if (toolName === 'read_file') reductionCategory = 'File Read Truncated';
+          else if (toolName === 'execute_command') reductionCategory = 'Terminal Output Truncated';
+          else if (toolName === 'postqode_browser_agent') reductionCategory = 'Browser Snapshot Offloaded';
+          else if (toolName === 'use_skill') reductionCategory = 'Skill Instructions Truncated';
+          else if (toolName === 'replace_in_file') reductionCategory = 'File Edit Output Truncated';
+
+          reductionEvents.push({
+            eventIndex: reductionEvents.length,
+            callIndex: matchedCallIndex >= 0 ? matchedCallIndex : 0,
+            prevCallIndex: matchedCallIndex > 0 ? matchedCallIndex - 1 : 0,
+            msgIndex: matchedMsgIndex >= 0 ? matchedMsgIndex : 0,
+            role: 'user',
+            category: reductionCategory,
+            targetName: displayTarget,
+            beforeSize: rawBytes,
+            afterSize: promptBytes,
+            bytesSaved,
+            diffChunks,
+            isScratch: true,
+            scratchFilename: fname,
+            toolName,
+            ts: (matchedCallIndex >= 0 && apiCalls[matchedCallIndex]) ? apiCalls[matchedCallIndex].ts : Date.now(),
+          });
+
           scratchEvents.push({
             filename: fname,
             toolName,
+            targetPath: displayTarget,
             rawBytes,
             promptBytes,
             bytesSaved,
@@ -762,6 +827,38 @@ module.exports = (db, config, getStore) => {
         console.error('Scratch scan error:', e);
       }
     }
+
+    // ── Call #1: System Prompt & Base Context Event ──
+    if (apiHistory && apiHistory.length > 0) {
+      const msg0Text = extractTextContent(apiHistory[0]?.content);
+      const capturedSysText = systemPromptCapture?.system_text || '';
+      const fullSystemInstructions = capturedSysText || msg0Text;
+      const displaySystemSize = Math.max(Buffer.byteLength(msg0Text, 'utf8'), Buffer.byteLength(capturedSysText, 'utf8'));
+
+      reductionEvents.push({
+        eventIndex: 0,
+        callIndex: 0,
+        prevCallIndex: 0,
+        msgIndex: 0,
+        role: 'system',
+        category: 'System Prompt & Base Context',
+        targetName: 'System Instructions (Initial Base Prompt)',
+        beforeSize: displaySystemSize,
+        afterSize: displaySystemSize,
+        bytesSaved: 0,
+        diffChunks: {
+          prefix: '',
+          removedText: '',
+          insertedText: fullSystemInstructions.substring(0, 5000) + (fullSystemInstructions.length > 5000 ? `\n\n... [${fullSystemInstructions.length - 5000} more characters in system prompt]` : ''),
+          suffix: '',
+        },
+        isSystemPrompt: true,
+        ts: apiCalls[0]?.ts || Date.now(),
+      });
+    }
+
+    reductionEvents.sort((a, b) => (a.callIndex - b.callIndex) || ((a.isSystemPrompt ? -1 : 0) - (b.isSystemPrompt ? -1 : 0)) || ((a.isScratch ? 1 : 0) - (b.isScratch ? 1 : 0)) || a.eventIndex - b.eventIndex);
+    reductionEvents.forEach((ev, idx) => { ev.eventIndex = idx; });
 
     scratchEvents.sort((a, b) => a.callIndex - b.callIndex || a.filename.localeCompare(b.filename));
 
@@ -848,6 +945,50 @@ module.exports = (db, config, getStore) => {
       cacheRead: { tokens: totalCacheReads, pricePerM: avgCacheReadRate, cost: totalCacheReadCost },
       cacheWrite: { tokens: totalCacheWrites, pricePerM: avgCacheWriteRate, cost: totalCacheWriteCost },
     };
+
+    const liveTotalCost = financialBreakdown.totalCost || calculatedTotalCost || 0;
+    const liveStartTs = apiCalls[0]?.ts || taskMeta?.start_ts || Date.now();
+    const liveEndTs = apiCalls[apiCalls.length - 1]?.ts || taskMeta?.end_ts || Date.now();
+    const liveDuration = Math.max(0, liveEndTs - liveStartTs);
+    const firstMsg = uiMessages[0]?.content ? (typeof uiMessages[0].content === 'string' ? uiMessages[0].content : JSON.stringify(uiMessages[0].content)) : `Task ${taskId}`;
+
+    const taskObj = {
+      id: taskId,
+      label: taskMeta?.label || null,
+      source: taskMeta?.source || 'disk',
+      startTs: liveStartTs,
+      endTs: liveEndTs,
+      duration: liveDuration || taskMeta?.duration || 0,
+      totalCost: liveTotalCost,
+      totalTokensIn,
+      totalTokensOut,
+      totalCacheReads,
+      totalCacheWrites,
+      apiCallCount: apiCalls.length,
+      firstMessage: taskMeta?.first_message || firstMsg.substring(0, 200),
+      status: taskMeta?.status || 'completed',
+    };
+
+    // Update SQLite tasks table so /api/tasks and all dropdowns stay synchronized with exact live financial numbers
+    try {
+      if (!taskMeta) {
+        db.prepare('INSERT OR IGNORE INTO tasks (id, source, start_ts, end_ts, duration, total_cost, api_call_count, first_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
+          taskId, 'disk', liveStartTs, liveEndTs, liveDuration, liveTotalCost, apiCalls.length, firstMsg.substring(0, 200)
+        );
+      } else {
+        db.prepare(`
+          UPDATE tasks SET 
+            total_cost = ?,
+            api_call_count = ?,
+            duration = ?,
+            total_tokens_in = ?,
+            total_tokens_out = ?,
+            total_cache_reads = ?,
+            total_cache_writes = ?
+          WHERE id = ?
+        `).run(liveTotalCost, apiCalls.length, liveDuration, totalTokensIn, totalTokensOut, totalCacheReads, totalCacheWrites, taskId);
+      }
+    } catch (e) {}
 
     res.json({
       task: taskObj,

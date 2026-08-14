@@ -62,6 +62,9 @@ let hoveredCallIndex = null;
 let chartCanvas = null;
 
 let activeCategoryFilter = 'ALL';
+let reductionSearchQuery = '';
+let reductionViewMode = 'timeline'; // 'timeline' | 'grouped'
+let reductionFeedLimit = 30;
 
 let chartSeries = {
   requestSize: true,
@@ -74,8 +77,70 @@ let chartSeries = {
 };
 
 let requestSizeMode = 'accumulated'; // 'accumulated' | 'delta'
+window.requestSizeMode = requestSizeMode;
 
 let fullscreenZoomRange = [0, 100];
+
+function renderLegendFilterMarkup(extraControlsHtml = '') {
+  const reqMode = window.requestSizeMode || requestSizeMode || 'accumulated';
+  return `
+    <div class="pa-chart-legend" style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">
+      <button class="pa-legend-chip ${chartSeries.requestSize ? 'active' : ''}" data-series="requestSize" title="Toggle Request Size Bar Chart">
+        <span class="pa-legend-color" style="background:#38bdf8"></span> Request Size (Bars)
+      </button>
+      <button class="pa-toggle-size-mode action-btn secondary" style="padding:2px 8px;font-size:10.5px;margin-right:2px;border:1px solid rgba(56,189,248,0.4);color:#38bdf8;font-weight:bold;cursor:pointer" title="Toggle between Total Accumulated Context Payload vs Per-Turn New Input Delta">
+        ${reqMode === 'accumulated' ? '📦 Accumulated Context' : '⚡ Per-Turn New Input'}
+      </button>
+      <button class="pa-legend-chip ${chartSeries.cacheReads ? 'active' : ''}" data-series="cacheReads" title="Toggle Prompt Cache Read Tokens">
+        <span class="pa-legend-color" style="background:#10b981"></span> Cache Reads
+      </button>
+      <button class="pa-legend-chip ${chartSeries.cacheWrites ? 'active' : ''}" data-series="cacheWrites" title="Toggle Prompt Cache Creation Tokens">
+        <span class="pa-legend-color" style="background:#f59e0b"></span> Cache Writes
+      </button>
+      <button class="pa-legend-chip ${chartSeries.contextWindow ? 'active' : ''}" data-series="contextWindow" title="Toggle Context Window Utilization %">
+        <span class="pa-legend-color" style="background:#a78bfa"></span> Context %
+      </button>
+      <button class="pa-legend-chip ${chartSeries.cumulativeCost ? 'active' : ''}" data-series="cumulativeCost" title="Toggle Cumulative Step Cost ($)">
+        <span class="pa-legend-color" style="background:#ec4899"></span> Cumulative Cost ($)
+      </button>
+      <button class="pa-legend-chip ${chartSeries.cacheHitPct ? 'active' : ''}" data-series="cacheHitPct" title="Toggle Prompt Cache Hit %">
+        <span class="pa-legend-color" style="background:#06b6d4"></span> Cache Hit %
+      </button>
+      <button class="pa-legend-chip ${chartSeries.stepLatency ? 'active' : ''}" data-series="stepLatency" title="Toggle Step Latency (s)">
+        <span class="pa-legend-color" style="background:#6366f1"></span> Latency (s)
+      </button>
+      ${extraControlsHtml}
+    </div>
+  `;
+}
+
+function bindGlobalLegendEvents(container = document, refreshCallback = null) {
+  container.querySelectorAll('.pa-legend-chip[data-series]').forEach(chip => {
+    chip.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const seriesKey = chip.dataset.series;
+      if (seriesKey) {
+        chartSeries[seriesKey] = !chartSeries[seriesKey];
+        document.querySelectorAll(`.pa-legend-chip[data-series="${seriesKey}"]`).forEach(c => {
+          c.classList.toggle('active', chartSeries[seriesKey]);
+        });
+        if (refreshCallback) refreshCallback();
+      }
+    });
+  });
+
+  container.querySelectorAll('.pa-toggle-size-mode').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      requestSizeMode = (requestSizeMode === 'accumulated') ? 'delta' : 'accumulated';
+      window.requestSizeMode = requestSizeMode;
+      document.querySelectorAll('.pa-toggle-size-mode').forEach(b => {
+        b.innerHTML = (requestSizeMode === 'accumulated') ? '📦 Accumulated Context' : '⚡ Per-Turn New Input';
+      });
+      if (refreshCallback) refreshCallback();
+    });
+  });
+}
 
 // ── Main Render ──
 export async function renderPromptAnalytics(container, params) {
@@ -223,6 +288,10 @@ export async function renderPromptAnalytics(container, params) {
 async function loadTaskAnalytics(taskId) {
   currentTaskId = taskId;
   hoveredCallIndex = null;
+  activeCategoryFilter = 'ALL';
+  reductionSearchQuery = '';
+  reductionViewMode = 'timeline';
+  reductionFeedLimit = 30;
 
   const contentEl = document.getElementById('pa-content');
   if (!contentEl) return;
@@ -324,17 +393,25 @@ function computeOverallCacheHitPct(calls) {
   return { pct: pctStr, reads: totalReads, prompt: totalPrompt };
 }
 
-function renderTaskMetricsBar(task, calls) {
+function renderTaskMetricsBar(task, calls, overrideCost = null) {
   const bar = document.getElementById('pa-task-metrics-bar');
   if (!bar || !task) return;
 
-  const totalCost = task.totalCost || calls.reduce((s, c) => s + c.cost, 0);
-  const durationMs = task.duration || (calls.length > 1 ? (calls[calls.length - 1].ts - calls[0].ts) : 0);
+  const totalCost = (overrideCost != null) ? overrideCost : (task.totalCost || calls.reduce((s, c) => s + (c.cost || 0), 0));
+  const durationMs = (calls.length > 1 ? (calls[calls.length - 1].ts - calls[0].ts) : (task.duration || 0));
   const label = task.label || getSavedTaskLabel(task.id, null);
   task.label = label;
   const labelText = label ? escHtml(label) : '+ Add Label';
 
-  const { pct: cacheHitOverall, reads: totalReads, prompt: totalPrompt } = computeOverallCacheHitPct(calls);
+  // Synchronize dropdown option text with accurate live calls & cost
+  const select = document.getElementById('pa-task-select');
+  if (select) {
+    const opt = select.querySelector(`option[value="${task.id}"]`);
+    if (opt) {
+      const displayName = label ? `🏷️ ${label}` : (task.firstMessage ? task.firstMessage.substring(0, 75) : 'Task ' + task.id);
+      opt.innerText = `${displayName} (${calls.length} calls, ${fmtCost(totalCost)})`;
+    }
+  }
 
   bar.innerHTML = `
     <div style="display:flex;align-items:center;gap:6px;background:rgba(56,189,248,0.12);border:1px solid rgba(56,189,248,0.3);padding:4px 10px;border-radius:14px;font-size:11px">
@@ -366,10 +443,9 @@ function renderTaskMetricsBar(task, calls) {
       const taskItem = allTasksList.find(t => t.id === task.id);
       if (taskItem) taskItem.label = cleanLabel;
 
-      renderTaskMetricsBar(task, calls);
+      renderTaskMetricsBar(task, calls, totalCost);
 
       // Update dropdown option text
-      const select = document.getElementById('pa-task-select');
       if (select) {
         const opt = select.querySelector(`option[value="${task.id}"]`);
         if (opt) {
@@ -409,7 +485,14 @@ function renderAnalytics(contentEl) {
     cacheWrite: { tokens: calls.reduce((s, c) => s + (c.cacheWrites || 0), 0), cost: 0, pricePerM: 3.75 },
   };
 
-  renderTaskMetricsBar(data.task, calls);
+  const accurateTotalCost = fb.totalCost || (data.task?.totalCost) || calls.reduce((s, c) => s + (c.cost || 0), 0);
+  if (data.task) data.task.totalCost = accurateTotalCost;
+
+  const fileCount = events.filter(e => e.category === 'File Read Truncated' || e.toolName === 'read_file' || e.toolName === 'replace_in_file' || (e.targetName && e.targetName.includes('.'))).length;
+  const cmdCount = events.filter(e => e.category === 'Terminal Output Truncated' || e.toolName === 'execute_command').length;
+  const scratchCount = events.filter(e => e.isScratch || e.scratchFilename || (e.category && e.category.includes('Scratch'))).length;
+
+  renderTaskMetricsBar(data.task, calls, accurateTotalCost);
 
   contentEl.innerHTML = `
     <!-- Financial Cost & Token Breakdown Panel -->
@@ -560,37 +643,9 @@ function renderAnalytics(contentEl) {
         <div style="display:flex;align-items:center;gap:8px">
           <span>📊 Request Size, Cumulative Cost & Cache Timeline</span>
           ${data.task?.label ? `<span style="background:rgba(56,189,248,0.15);color:#38bdf8;padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:bold">🏷️ ${escHtml(data.task.label)}</span>` : ''}
-          <span style="font-size:10.5px;color:var(--text-3);font-weight:normal">
-            (Toggle legends below to switch view modes | Click bars to inspect)
-          </span>
         </div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          <div class="pa-chart-legend" style="display:flex;gap:4px;flex-wrap:wrap">
-            <button class="pa-legend-chip ${chartSeries.requestSize ? 'active' : ''}" data-series="requestSize">
-              <span class="pa-legend-color" style="background:#38bdf8"></span> Request Size
-            </button>
-            <button id="pa-toggle-size-mode-btn" class="action-btn secondary" style="padding:2px 8px;font-size:10.5px;margin-right:4px;border:1px solid rgba(56,189,248,0.4);color:#38bdf8;font-weight:bold" title="Toggle between Total Accumulated Context Payload vs Per-Turn New Input Delta">
-              ${requestSizeMode === 'accumulated' ? '📦 Accumulated Context' : '⚡ Per-Turn New Input'}
-            </button>
-            <button class="pa-legend-chip ${chartSeries.cacheReads ? 'active' : ''}" data-series="cacheReads">
-              <span class="pa-legend-color" style="background:#10b981"></span> Cache Reads
-            </button>
-            <button class="pa-legend-chip ${chartSeries.cacheWrites ? 'active' : ''}" data-series="cacheWrites">
-              <span class="pa-legend-color" style="background:#f59e0b"></span> Cache Writes
-            </button>
-            <button class="pa-legend-chip ${chartSeries.contextWindow ? 'active' : ''}" data-series="contextWindow">
-              <span class="pa-legend-color" style="background:#a78bfa"></span> Context %
-            </button>
-            <button class="pa-legend-chip ${chartSeries.cumulativeCost ? 'active' : ''}" data-series="cumulativeCost">
-              <span class="pa-legend-color" style="background:#ec4899"></span> Cumulative Cost ($)
-            </button>
-            <button class="pa-legend-chip ${chartSeries.cacheHitPct ? 'active' : ''}" data-series="cacheHitPct">
-              <span class="pa-legend-color" style="background:#06b6d4"></span> Cache Hit %
-            </button>
-            <button class="pa-legend-chip ${chartSeries.stepLatency ? 'active' : ''}" data-series="stepLatency">
-              <span class="pa-legend-color" style="background:#6366f1"></span> Latency (s)
-            </button>
-          </div>
+          ${renderLegendFilterMarkup()}
           <button id="pa-detach-chart-btn" class="action-btn secondary" style="padding:3px 10px;font-size:11px;display:flex;align-items:center;gap:4px" title="Detach graph into interactive fullscreen mode with section zoom">
             ⛶ Fullscreen Zoom
           </button>
@@ -606,52 +661,41 @@ function renderAnalytics(contentEl) {
     </div>
 
     <!-- Chronological Reduction Sequence Feed & Comparison Section -->
-    <div id="pa-comparison-section" class="panel pa-comparison-panel-full" style="display:${chartSeries.requestSize ? 'block' : 'none'}">
+    <div id="pa-comparison-section" class="panel pa-comparison-panel-full">
       <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
-        <span>📜 Chronological Context Reduction Sequence (${events.length} total events)</span>
-        <div style="display:flex;align-items:center;gap:10px">
-          <div style="display:flex;align-items:center;gap:6px;font-size:11px">
-            <span style="color:var(--text-3)">Category Filter:</span>
-            <button class="action-btn secondary pa-cat-filter ${activeCategoryFilter === 'ALL' ? 'active' : ''}" data-cat="ALL" style="padding:2px 8px;font-size:10.5px">All (${events.length})</button>
-            <button class="action-btn secondary pa-cat-filter ${activeCategoryFilter === 'FILE' ? 'active' : ''}" data-cat="FILE" style="padding:2px 8px;font-size:10.5px">Files (${events.filter(e => e.category === 'File Read Truncated').length})</button>
-            <button class="action-btn secondary pa-cat-filter ${activeCategoryFilter === 'CMD' ? 'active' : ''}" data-cat="CMD" style="padding:2px 8px;font-size:10.5px">Commands (${events.filter(e => e.category === 'Terminal Output Truncated').length})</button>
-            <button class="action-btn secondary pa-cat-filter ${activeCategoryFilter === 'ENV' ? 'active' : ''}" data-cat="ENV" style="padding:2px 8px;font-size:10.5px">Env Snapshots (${events.filter(e => e.category === 'Stale Environment Snapshot Removed').length})</button>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span>📜 Context Reductions (<span id="pa-seq-total-count">${events.length}</span> total events)</span>
+          <div style="display:inline-flex;background:var(--bg-3);border:1px solid var(--border);border-radius:4px;padding:2px">
+            <button id="pa-btn-mode-timeline" class="pa-viewmode-btn action-btn ${reductionViewMode === 'timeline' ? 'primary' : 'secondary'}" data-mode="timeline" style="padding:2px 8px;font-size:10.5px;cursor:pointer">📜 Timeline</button>
+            <button id="pa-btn-mode-grouped" class="pa-viewmode-btn action-btn ${reductionViewMode === 'grouped' ? 'primary' : 'secondary'}" data-mode="grouped" style="padding:2px 8px;font-size:10.5px;cursor:pointer">🗂️ Group by File/Target</button>
           </div>
         </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <div style="position:relative;display:flex;align-items:center">
+            <input id="pa-seq-search-input" type="text" placeholder="🔍 Search file / tool / cmd..." value="${escHtml(reductionSearchQuery)}" style="background:var(--bg-1);border:1px solid var(--border);border-radius:4px;padding:3px 20px 3px 8px;font-size:11px;color:var(--text);width:175px">
+            ${reductionSearchQuery ? `<button id="pa-seq-search-clear" style="position:absolute;right:4px;background:none;border:none;color:var(--text-3);cursor:pointer;font-size:11px">✖</button>` : ''}
+          </div>
+          <div id="pa-cat-filters-bar" style="display:flex;align-items:center;gap:4px;font-size:11px;flex-wrap:wrap"></div>
+        </div>
       </div>
-      <div id="pa-comparison-body" class="panel-body" style="padding:16px">
-        <div class="loading-state"><div class="spinner"></div><p>Loading chronological reduction sequence...</p></div>
-      </div>
+      <div class="panel-body" id="pa-comparison-body" style="padding:0"></div>
     </div>
 
-    <!-- Dedicated Cache Observability & Savings Panel -->
-    <div id="pa-cache-section" class="panel pa-comparison-panel-full" style="display:${!chartSeries.requestSize && (chartSeries.cacheReads || chartSeries.cacheWrites) ? 'block' : 'none'}">
+    <!-- Cache Observability Breakdown Section -->
+    <div id="pa-cache-section" class="panel" style="display:none;margin-top:16px">
+      <div class="panel-title">
+        <span>⚡ Prompt Cache Hit Observability & Sub-Turn Performance</span>
+      </div>
+      <div class="panel-body" id="pa-cache-body" style="padding:0"></div>
+    </div>
+
+    <!-- Scratch Offload Inspector Panel -->
+    <div id="pa-scratch-section" class="panel" style="display:none;margin-top:16px">
       <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center">
-        <span>⚡ Prompt Cache Observability & Financial Savings</span>
-        <div id="pa-cache-model-badge"></div>
+        <span>⚡ Scratch Offload Inspector (${(data.scratchEvents || []).length} Log Files Created)</span>
+        <button id="pa-close-scratch-panel" class="action-btn secondary" style="padding:2px 8px;font-size:11px">✖ Close</button>
       </div>
-      <div id="pa-cache-body" class="panel-body" style="padding:16px">
-        <!-- Rendered dynamically -->
-      </div>
-    </div>
-
-    <!-- Dedicated Scratch Offload Inspector Panel -->
-    <div id="pa-scratch-section" class="panel pa-comparison-panel-full" style="margin-top:16px">
-      <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span>⚡ Immediate Write-Time Scratch Offload Inspector (${(data.scratchEvents || []).length} offloaded outputs)</span>
-        </div>
-        <div style="display:flex;align-items:center;gap:10px">
-          <div style="display:flex;align-items:center;gap:6px;font-size:11px">
-            <span style="color:var(--text-3)">Sort Order:</span>
-            <button id="pa-scratch-sort-chrono" class="action-btn secondary active" style="padding:2px 8px;font-size:10.5px">⏱️ Chronological (Call #)</button>
-            <button id="pa-scratch-sort-bytes" class="action-btn secondary" style="padding:2px 8px;font-size:10.5px">💾 Largest Saved</button>
-          </div>
-        </div>
-      </div>
-      <div id="pa-scratch-body" class="panel-body" style="padding:16px">
-        <!-- Rendered dynamically -->
-      </div>
+      <div class="panel-body" id="pa-scratch-body"></div>
     </div>
   `;
 
@@ -685,7 +729,7 @@ function openFullscreenChartModal(calls, task) {
 
   modal.style.display = 'flex';
   modal.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:10px">
       <div>
         <h2 style="font-size:18px;margin:0;color:var(--text);display:flex;align-items:center;gap:10px">
           <span>📊 Fullscreen Timeline Zoom & Section Analysis</span>
@@ -694,6 +738,14 @@ function openFullscreenChartModal(calls, task) {
         <p style="font-size:11px;color:var(--text-3);margin:4px 0 0">Drag the stock-chart style section sliders below to zoom into specific call ranges and inspect spikes</p>
       </div>
       <button id="pa-fullscreen-close" class="action-btn secondary" style="padding:6px 14px;font-size:13px;font-weight:bold">✖ Close Fullscreen</button>
+    </div>
+
+    <!-- Fullscreen Metric Filters Bar -->
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:10px;background:var(--bg-3);padding:8px 14px;border-radius:var(--radius-sm);border:1px solid var(--border)">
+      <div style="font-weight:bold;font-size:12px;color:var(--text)">
+        📊 Metric Filters:
+      </div>
+      ${renderLegendFilterMarkup()}
     </div>
 
     <!-- Chart Canvas Container -->
@@ -733,6 +785,14 @@ function openFullscreenChartModal(calls, task) {
   };
 
   updateFsChart();
+
+  bindGlobalLegendEvents(modal, () => {
+    updateFsChart();
+    const mainCanvas = document.getElementById('pa-timeline-chart');
+    if (mainCanvas && mainCanvas._calls) {
+      drawTimelineChart(mainCanvas._calls, mainCanvas);
+    }
+  });
 
   document.getElementById('pa-fullscreen-close')?.addEventListener('click', () => {
     modal.style.display = 'none';
@@ -914,35 +974,13 @@ function renderCompareAnalyticsView(contentEl, taskIds) {
       <div class="panel-body" style="padding:12px 14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <div style="font-weight:bold;font-size:12.5px;color:var(--text)">
-            📊 Metric Lines:
+            📊 Comparison Metric Lines:
           </div>
           <button id="pa-toggle-shared-scale-btn" class="pa-legend-chip ${useSharedCompareScale ? 'active' : ''}" style="--chip-color:#38bdf8;font-weight:bold;border:1px solid rgba(56,189,248,0.4)" title="When enabled, all side-by-side graphs share the exact same Y-axis scale so relative differences ($6.65 vs $12.56) are visually obvious">
             ⚖️ Shared Y-Axis Scale: <strong style="color:#38bdf8">${useSharedCompareScale ? 'ON (Proportional)' : 'OFF (Independent)'}</strong>
           </button>
         </div>
-        <div class="pa-chart-legend" style="display:flex;gap:4px;flex-wrap:wrap">
-          <button class="pa-compare-legend-chip pa-legend-chip ${chartSeries.requestSize ? 'active' : ''}" data-series="requestSize">
-            <span class="pa-legend-color" style="background:#38bdf8"></span> Request Size (Bars)
-          </button>
-          <button class="pa-compare-legend-chip pa-legend-chip ${chartSeries.cacheReads ? 'active' : ''}" data-series="cacheReads">
-            <span class="pa-legend-color" style="background:#10b981"></span> Cache Reads
-          </button>
-          <button class="pa-compare-legend-chip pa-legend-chip ${chartSeries.cacheWrites ? 'active' : ''}" data-series="cacheWrites">
-            <span class="pa-legend-color" style="background:#f59e0b"></span> Cache Writes
-          </button>
-          <button class="pa-compare-legend-chip pa-legend-chip ${chartSeries.contextWindow ? 'active' : ''}" data-series="contextWindow">
-            <span class="pa-legend-color" style="background:#a78bfa"></span> Context %
-          </button>
-          <button class="pa-compare-legend-chip pa-legend-chip ${chartSeries.cumulativeCost ? 'active' : ''}" data-series="cumulativeCost">
-            <span class="pa-legend-color" style="background:#ec4899"></span> Cumulative Cost ($)
-          </button>
-          <button class="pa-compare-legend-chip pa-legend-chip ${chartSeries.cacheHitPct ? 'active' : ''}" data-series="cacheHitPct">
-            <span class="pa-legend-color" style="background:#06b6d4"></span> Cache Hit %
-          </button>
-          <button class="pa-compare-legend-chip pa-legend-chip ${chartSeries.stepLatency ? 'active' : ''}" data-series="stepLatency">
-            <span class="pa-legend-color" style="background:#6366f1"></span> Latency (s)
-          </button>
-        </div>
+        ${renderLegendFilterMarkup()}
       </div>
     </div>
 
@@ -985,11 +1023,16 @@ function renderCompareAnalyticsView(contentEl, taskIds) {
 
         return `
           <div class="panel">
-            <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap">
+            <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
               <span style="font-size:13px;font-weight:bold;${label ? 'color:#38bdf8' : ''}">
                 📊 ${displayName}
               </span>
-              <span class="mono" style="font-size:11px;color:var(--green);font-weight:bold">${d.apiCalls.length} calls | ${fmtCost(t.totalCost)}</span>
+              <div style="display:flex;align-items:center;gap:8px">
+                <span class="mono" style="font-size:11px;color:var(--green);font-weight:bold">${d.apiCalls.length} calls | ${fmtCost(t.totalCost)}</span>
+                <button class="action-btn secondary pa-compare-fullscreen-btn" data-task-id="${id}" style="padding:2px 8px;font-size:10.5px;display:flex;align-items:center;gap:4px" title="Open fullscreen zoom for this task">
+                  ⛶ Fullscreen Zoom
+                </button>
+              </div>
             </div>
             <div class="panel-body">
               <div style="position:relative">
@@ -1008,13 +1051,17 @@ function renderCompareAnalyticsView(contentEl, taskIds) {
     let maxSize = 1;
     let maxCache = 1;
     let maxLatency = 1;
+    const reqMode = window.requestSizeMode || requestSizeMode || 'accumulated';
 
     taskIds.forEach(id => {
       const calls = compareDataMap[id]?.apiCalls || [];
       calls.forEach(c => {
         const costVal = c.cumulativeCost || c.cost || 0;
         if (costVal > maxCost) maxCost = costVal;
-        if ((c.requestSize || 0) > maxSize) maxSize = c.requestSize;
+        const targetSize = reqMode === 'accumulated'
+          ? (c.requestSize || 1)
+          : (c.turnDeltaSize || (c.sizeDelta ? Math.abs(c.sizeDelta) : (c.tokensIn ? c.tokensIn * 4 : 100)));
+        if (targetSize > maxSize) maxSize = targetSize;
         if ((c.cacheReads || 0) > maxCache) maxCache = c.cacheReads;
         if ((c.cacheWrites || 0) > maxCache) maxCache = c.cacheWrites;
         if (((c.latencyMs || 0) / 1000) > maxLatency) maxLatency = (c.latencyMs || 0) / 1000;
@@ -1070,16 +1117,15 @@ function renderCompareAnalyticsView(contentEl, taskIds) {
     updateAllCompareCharts(compareStepIndex);
   });
 
-  // Bind compare legend chips
-  document.querySelectorAll('.pa-compare-legend-chip').forEach(chip => {
-    chip.addEventListener('click', () => {
-      const seriesKey = chip.dataset.series;
-      if (seriesKey) {
-        chartSeries[seriesKey] = !chartSeries[seriesKey];
-        document.querySelectorAll(`.pa-legend-chip[data-series="${seriesKey}"]`).forEach(c => {
-          c.classList.toggle('active', chartSeries[seriesKey]);
-        });
-        updateAllCompareCharts(compareStepIndex);
+  bindGlobalLegendEvents(document.getElementById('pa-content'), () => {
+    updateAllCompareCharts(compareStepIndex);
+  });
+
+  document.querySelectorAll('.pa-compare-fullscreen-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tid = btn.dataset.taskId;
+      if (tid && compareDataMap[tid]) {
+        openFullscreenChartModal(compareDataMap[tid].apiCalls, compareDataMap[tid].task);
       }
     });
   });
@@ -1789,60 +1835,300 @@ function renderUnifiedDiffRow(row) {
   `;
 }
 
+function filterReductionEvents(events, category, searchQuery = '') {
+  if (!events || !Array.isArray(events)) return [];
+  let res = events;
+
+  if (category === 'SYSTEM') {
+    res = res.filter(e => e.isSystemPrompt || e.category.includes('System'));
+  } else if (category === 'FILE_READ') {
+    res = res.filter(e => e.toolName === 'read_file' || (e.category === 'File Read Truncated' && !e.isScratch));
+  } else if (category === 'FILE_EDIT') {
+    res = res.filter(e => e.toolName === 'replace_in_file' || e.category === 'File Edit Output Truncated');
+  } else if (category === 'FILE_ALL') {
+    res = res.filter(e => e.toolName === 'read_file' || e.toolName === 'replace_in_file' || e.category.includes('File') || (e.targetName && e.targetName.includes('.')));
+  } else if (category === 'BROWSER') {
+    res = res.filter(e => e.toolName === 'postqode_browser_agent' || e.category.includes('Browser'));
+  } else if (category === 'COMMAND' || category === 'CMD') {
+    res = res.filter(e => e.toolName === 'execute_command' || e.category.includes('Terminal'));
+  } else if (category === 'SKILL') {
+    res = res.filter(e => e.toolName === 'use_skill' || e.category.includes('Skill'));
+  } else if (category === 'ENV') {
+    res = res.filter(e => e.category === 'Stale Environment Snapshot Removed');
+  } else if (category === 'SCRATCH') {
+    res = res.filter(e => e.isScratch || e.scratchFilename || (e.category && e.category.includes('Scratch')));
+  }
+
+  if (searchQuery && searchQuery.trim()) {
+    const q = searchQuery.trim().toLowerCase();
+    res = res.filter(e => {
+      return (e.targetName && e.targetName.toLowerCase().includes(q)) ||
+             (e.scratchFilename && e.scratchFilename.toLowerCase().includes(q)) ||
+             (e.toolName && e.toolName.toLowerCase().includes(q)) ||
+             (e.category && e.category.toLowerCase().includes(q));
+    });
+  }
+
+  return res;
+}
+
 function renderReductionSequenceFeed(body, events) {
   if (!body) return;
+  const allEvents = events || [];
 
-  let filteredEvents = events;
-  if (activeCategoryFilter === 'FILE') {
-    filteredEvents = events.filter(e => e.category === 'File Read Truncated');
-  } else if (activeCategoryFilter === 'CMD') {
-    filteredEvents = events.filter(e => e.category === 'Terminal Output Truncated');
-  } else if (activeCategoryFilter === 'ENV') {
-    filteredEvents = events.filter(e => e.category === 'Stale Environment Snapshot Removed');
+  const queryFiltered = reductionSearchQuery ? allEvents.filter(e => {
+    const q = reductionSearchQuery.trim().toLowerCase();
+    return (e.targetName && e.targetName.toLowerCase().includes(q)) ||
+           (e.scratchFilename && e.scratchFilename.toLowerCase().includes(q)) ||
+           (e.toolName && e.toolName.toLowerCase().includes(q)) ||
+           (e.category && e.category.toLowerCase().includes(q));
+  }) : allEvents;
+
+  let filteredEvents = filterReductionEvents(queryFiltered, activeCategoryFilter);
+
+  // If active filter yields 0 events but queryFiltered has items, fallback to ALL
+  if (filteredEvents.length === 0 && queryFiltered.length > 0 && activeCategoryFilter !== 'ALL') {
+    activeCategoryFilter = 'ALL';
+    filteredEvents = queryFiltered;
   }
+
+  // Render Granular Category Filter Pills
+  const countAll = queryFiltered.length;
+  const countSys = filterReductionEvents(queryFiltered, 'SYSTEM').length;
+  const countReads = filterReductionEvents(queryFiltered, 'FILE_READ').length;
+  const countEdits = filterReductionEvents(queryFiltered, 'FILE_EDIT').length;
+  const countBrowser = filterReductionEvents(queryFiltered, 'BROWSER').length;
+  const countCmds = filterReductionEvents(queryFiltered, 'COMMAND').length;
+  const countSkills = filterReductionEvents(queryFiltered, 'SKILL').length;
+  const countEnv = filterReductionEvents(queryFiltered, 'ENV').length;
+  const countScratch = filterReductionEvents(queryFiltered, 'SCRATCH').length;
+
+  const filterBar = document.getElementById('pa-cat-filters-bar');
+  if (filterBar) {
+    const pills = [
+      { cat: 'ALL', label: `All (${countAll})` },
+      countSys > 0 ? { cat: 'SYSTEM', label: `🛡️ System (${countSys})` } : null,
+      countReads > 0 ? { cat: 'FILE_READ', label: `📁 Reads (${countReads})` } : null,
+      countEdits > 0 ? { cat: 'FILE_EDIT', label: `📝 Edits (${countEdits})` } : null,
+      countBrowser > 0 ? { cat: 'BROWSER', label: `🌐 Browser (${countBrowser})` } : null,
+      countCmds > 0 ? { cat: 'COMMAND', label: `💻 Cmds (${countCmds})` } : null,
+      countSkills > 0 ? { cat: 'SKILL', label: `⚡ Skills (${countSkills})` } : null,
+      countEnv > 0 ? { cat: 'ENV', label: `🌲 Env (${countEnv})` } : null,
+      countScratch > 0 ? { cat: 'SCRATCH', label: `⚡ Scratch (${countScratch})` } : null,
+    ].filter(Boolean);
+
+    filterBar.innerHTML = pills.map(p => {
+      const isActive = activeCategoryFilter === p.cat;
+      const activeStyle = isActive
+        ? 'background:#0284c7 !important;color:#ffffff !important;border:1px solid #38bdf8 !important;font-weight:bold !important;box-shadow:0 0 10px rgba(56,189,248,0.5) !important;'
+        : 'background:var(--bg-2);color:var(--text-2);border:1px solid var(--border);';
+      return `
+        <button class="action-btn secondary pa-cat-filter ${isActive ? 'active' : ''}" data-cat="${p.cat}" style="padding:3px 9px;font-size:10.5px;cursor:pointer;border-radius:12px;transition:all 0.15s;${activeStyle}">
+          ${p.label}
+        </button>
+      `;
+    }).join('');
+
+    filterBar.querySelectorAll('.pa-cat-filter').forEach(btn => {
+      btn.onclick = () => {
+        activeCategoryFilter = btn.dataset.cat;
+        reductionFeedLimit = 30;
+        renderReductionSequenceFeed(body, allEvents);
+      };
+    });
+  }
+
+  // Update Total counter
+  const totalCntEl = document.getElementById('pa-seq-total-count');
+  if (totalCntEl) totalCntEl.innerText = allEvents.length;
+
+  // Render Search input and mode button handlers
+  const searchInput = document.getElementById('pa-seq-search-input');
+  if (searchInput && !searchInput._hasBound) {
+    searchInput._hasBound = true;
+    searchInput.addEventListener('input', (e) => {
+      reductionSearchQuery = e.target.value;
+      reductionFeedLimit = 30;
+      renderReductionSequenceFeed(body, allEvents);
+    });
+  }
+  const clearBtn = document.getElementById('pa-seq-search-clear');
+  if (clearBtn) {
+    clearBtn.onclick = () => {
+      reductionSearchQuery = '';
+      if (searchInput) searchInput.value = '';
+      renderReductionSequenceFeed(body, allEvents);
+    };
+  }
+
+  document.querySelectorAll('.pa-viewmode-btn').forEach(btn => {
+    btn.onclick = () => {
+      reductionViewMode = btn.dataset.mode;
+      document.querySelectorAll('.pa-viewmode-btn').forEach(b => b.classList.toggle('primary', b === btn));
+      document.querySelectorAll('.pa-viewmode-btn').forEach(b => b.classList.toggle('secondary', b !== btn));
+      renderReductionSequenceFeed(body, allEvents);
+    };
+  });
 
   if (filteredEvents.length === 0) {
     body.innerHTML = `
-      <div class="empty-state">
-        <p style="color:var(--text-3)">No reduction events match the selected category filter.</p>
+      <div class="empty-state" style="padding:24px;text-align:center">
+        <p style="color:var(--text-3);font-size:12px">No reduction events match the current filter / search query.</p>
       </div>
     `;
     return;
   }
 
-  body.innerHTML = `
-    <div style="font-size:11px;color:var(--text-3);margin-bottom:12px">
-      Showing <strong>${filteredEvents.length}</strong> context reduction events in chronological order:
-    </div>
-
-    <div style="display:flex;flex-direction:column;gap:12px">
-      ${filteredEvents.map(ev => renderReductionEventCard(ev)).join('')}
-    </div>
-  `;
-
-  bindSynchronizedScroll(body);
-
-  document.querySelectorAll('.pa-cat-filter').forEach(btn => {
-    btn.addEventListener('click', () => {
-      activeCategoryFilter = btn.dataset.cat;
-      document.querySelectorAll('.pa-cat-filter').forEach(b => b.classList.toggle('active', b === btn));
-      renderReductionSequenceFeed(body, events);
+  if (reductionViewMode === 'grouped') {
+    // ── GROUPED BY FILE / TARGET VIEW ──
+    const groups = {};
+    filteredEvents.forEach(e => {
+      const key = e.targetName || e.toolName || 'Unknown';
+      if (!groups[key]) {
+        groups[key] = {
+          target: key,
+          events: [],
+          totalSaved: 0,
+          toolName: e.toolName,
+          category: e.category,
+          isScratch: e.isScratch,
+        };
+      }
+      groups[key].events.push(e);
+      groups[key].totalSaved += (e.bytesSaved || 0);
     });
-  });
+
+    const sortedGroups = Object.values(groups).sort((a, b) => b.totalSaved - a.totalSaved || b.events.length - a.events.length);
+
+    body.innerHTML = `
+      <div style="font-size:11px;color:var(--text-3);margin-bottom:12px;padding:0 4px;display:flex;justify-content:space-between;align-items:center">
+        <span>Grouped into <strong>${sortedGroups.length}</strong> unique targets (${filteredEvents.length} total events):</span>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:12px">
+        ${sortedGroups.map((g, gIdx) => {
+          let gIcon = '📁';
+          if (g.toolName === 'execute_command' || g.category.includes('Terminal')) gIcon = '💻';
+          else if (g.toolName === 'postqode_browser_agent' || g.category.includes('Browser')) gIcon = '🌐';
+          else if (g.toolName === 'use_skill' || g.category.includes('Skill')) gIcon = '⚡';
+          else if (g.toolName === 'replace_in_file') gIcon = '📝';
+          else if (g.category === 'Stale Environment Snapshot Removed') gIcon = '🌲';
+
+          return `
+            <div class="panel pa-grouped-target-card" style="background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden">
+              <div class="pa-grouped-header" data-gidx="${gIdx}" style="background:var(--bg-3);padding:10px 14px;display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none">
+                <div style="display:flex;align-items:center;gap:8px;overflow:hidden">
+                  <span style="font-size:14px">${gIcon}</span>
+                  <strong class="mono" style="color:var(--text);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:550px" title="${escHtml(g.target)}">${escHtml(g.target)}</strong>
+                  <span style="background:rgba(56,189,248,0.15);color:#38bdf8;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:bold;white-space:nowrap">${g.events.length} event${g.events.length > 1 ? 's' : ''}</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:12px">
+                  <span class="mono" style="color:var(--green);font-weight:bold;font-size:11.5px">-${fmtBytes(g.totalSaved)} saved</span>
+                  <button class="action-btn secondary pa-toggle-group-btn" data-gidx="${gIdx}" style="padding:2px 8px;font-size:10.5px">▼ Toggle Diffs (${g.events.length})</button>
+                </div>
+              </div>
+              <div class="pa-grouped-body" id="pa-grouped-body-${gIdx}" style="padding:10px;display:flex;flex-direction:column;gap:10px;border-top:1px solid var(--border)">
+                ${g.events.map(ev => renderReductionEventCard(ev)).join('')}
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+
+    bindSynchronizedScroll(body);
+
+    body.querySelectorAll('.pa-grouped-header, .pa-toggle-group-btn').forEach(el => {
+      el.onclick = (e) => {
+        e.stopPropagation();
+        const gidx = el.dataset.gidx;
+        const gBody = document.getElementById(`pa-grouped-body-${gidx}`);
+        if (gBody) {
+          const isHidden = gBody.style.display === 'none';
+          gBody.style.display = isHidden ? 'flex' : 'none';
+        }
+      };
+    });
+
+  } else {
+    // ── TIMELINE VIEW ──
+    const visibleSlice = filteredEvents.slice(0, reductionFeedLimit);
+    const hasMore = filteredEvents.length > visibleSlice.length;
+
+    body.innerHTML = `
+      <div style="font-size:11px;color:var(--text-3);margin-bottom:12px;padding:0 4px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <span>Showing <strong>${visibleSlice.length}</strong> of <strong>${filteredEvents.length}</strong> context reduction events:</span>
+        <div style="display:flex;align-items:center;gap:6px">
+          <button id="pa-expand-all-diffs-btn" class="action-btn secondary" style="padding:2px 8px;font-size:10px;cursor:pointer">📂 Expand All</button>
+          <button id="pa-collapse-all-diffs-btn" class="action-btn secondary" style="padding:2px 8px;font-size:10px;cursor:pointer">📁 Collapse All</button>
+          ${hasMore ? `<button id="pa-load-all-events-btn" class="action-btn secondary" style="padding:2px 8px;font-size:10.5px;color:#38bdf8;cursor:pointer">⚡ Load All (${filteredEvents.length})</button>` : ''}
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:12px">
+        ${visibleSlice.map((ev, idx) => renderReductionEventCard(ev, idx < 3)).join('')}
+      </div>
+
+      ${hasMore ? `
+        <div style="text-align:center;margin-top:16px;padding:12px">
+          <button id="pa-load-more-events-btn" class="action-btn secondary" style="padding:6px 18px;font-size:12px;font-weight:bold;color:#38bdf8;cursor:pointer">
+            ⬇ Show More Events (${filteredEvents.length - visibleSlice.length} remaining)
+          </button>
+        </div>
+      ` : ''}
+    `;
+
+    bindSynchronizedScroll(body);
+
+    document.getElementById('pa-expand-all-diffs-btn')?.addEventListener('click', () => {
+      body.querySelectorAll('.pa-sbs-body').forEach(b => b.style.display = 'block');
+      body.querySelectorAll('.pa-card-toggle-btn').forEach(btn => btn.innerText = '▲ Hide Diff');
+    });
+
+    document.getElementById('pa-collapse-all-diffs-btn')?.addEventListener('click', () => {
+      body.querySelectorAll('.pa-sbs-body').forEach(b => b.style.display = 'none');
+      body.querySelectorAll('.pa-card-toggle-btn').forEach(btn => btn.innerText = '▼ View Diff');
+    });
+
+    document.getElementById('pa-load-all-events-btn')?.addEventListener('click', () => {
+      reductionFeedLimit = filteredEvents.length;
+      renderReductionSequenceFeed(body, allEvents);
+    });
+
+    document.getElementById('pa-load-more-events-btn')?.addEventListener('click', () => {
+      reductionFeedLimit += 50;
+      renderReductionSequenceFeed(body, allEvents);
+    });
+  }
 }
 
-function renderReductionEventCard(ev) {
+function renderReductionEventCard(ev, defaultExpanded = false) {
   let icon = '✂️';
   let catColor = 'var(--green)';
-  if (ev.category === 'File Read Truncated') {
+  if (ev.isSystemPrompt || ev.category.includes('System')) {
+    icon = '🛡️';
+    catColor = '#38bdf8';
+  } else if (ev.category === 'File Read Truncated' || ev.toolName === 'read_file') {
     icon = '📁';
     catColor = 'var(--green)';
-  } else if (ev.category === 'Terminal Output Truncated') {
+  } else if (ev.category === 'Terminal Output Truncated' || ev.toolName === 'execute_command') {
     icon = '💻';
     catColor = '#38bdf8';
   } else if (ev.category === 'Stale Environment Snapshot Removed') {
     icon = '🌲';
     catColor = '#f59e0b';
+  } else if (ev.toolName === 'postqode_browser_agent' || ev.category.includes('Browser')) {
+    icon = '🌐';
+    catColor = '#06b6d4';
+  } else if (ev.toolName === 'use_skill' || ev.category.includes('Skill')) {
+    icon = '⚡';
+    catColor = '#e879f9';
+  } else if (ev.toolName === 'replace_in_file' || ev.category.includes('Edit')) {
+    icon = '📝';
+    catColor = '#a78bfa';
+  } else if (ev.isScratch) {
+    icon = '⚡';
+    catColor = '#e879f9';
   }
 
   const item = {
@@ -1852,12 +2138,16 @@ function renderReductionEventCard(ev) {
     after: { size: ev.afterSize },
     diffChunks: ev.diffChunks,
     bytesSaved: ev.bytesSaved,
+    isScratch: ev.isScratch,
+    isSystemPrompt: ev.isSystemPrompt,
+    scratchFilename: ev.scratchFilename,
+    toolName: ev.toolName,
   };
 
-  return renderDiffBoxMarkup(item, ev.prevCallIndex, ev.callIndex, ev.category, ev.targetName, icon, catColor);
+  return renderDiffBoxMarkup(item, ev.prevCallIndex, ev.callIndex, ev.category, ev.targetName, icon, catColor, defaultExpanded);
 }
 
-function renderDiffBoxMarkup(item, prevCallIdx, callIdx, category, targetName, icon, catColor) {
+function renderDiffBoxMarkup(item, prevCallIdx, callIdx, category, targetName, icon, catColor, defaultExpanded = false) {
   const diff = item.diffChunks || {};
   const prefix = diff.prefix || '';
   const suffix = diff.suffix || '';
@@ -1871,13 +2161,23 @@ function renderDiffBoxMarkup(item, prevCallIdx, callIdx, category, targetName, i
   const metricColor = isExpanded ? '#f59e0b' : (isReduced ? 'var(--green)' : '#38bdf8');
   const metricLabel = isExpanded
     ? `Expanded ${fmtBytes(bytesDelta)}`
-    : (isReduced ? `Saved ${fmtBytes(Math.abs(bytesDelta))}` : 'Modified');
-  const bannerTitle = isExpanded
-    ? `🟢 EXACT CONTENT ADDED IN CALL #${callIdx + 1}:`
-    : (isReduced ? `✂️ EXACT CONTENT REMOVED FROM CALL #${prevCallIdx + 1}:` : '🔁 EXACT CONTENT CHANGED:');
+    : (isReduced ? `Saved ${fmtBytes(Math.abs(bytesDelta))}` : 'Base Context');
+  const isScratch = !!item.isScratch;
+  const isSys = !!item.isSystemPrompt;
+
+  const bannerTitle = isSys
+    ? `🛡️ SYSTEM INSTRUCTIONS & BASE CONTEXT SENT IN PROMPT:`
+    : (isScratch
+      ? `✂️ EXACT BULK OUTPUT OFFLOADED TO DISK (scratch/${escHtml(item.scratchFilename || '')}):`
+      : (isExpanded
+        ? `🟢 EXACT CONTENT ADDED IN CALL #${callIdx + 1}:`
+        : (isReduced ? `✂️ EXACT CONTENT REMOVED FROM CALL #${prevCallIdx + 1}:` : '🔁 EXACT CONTENT CHANGED:')));
   const bannerText = isExpanded ? insertedText : (removedText || insertedText || '(Content changed)');
-  const bannerColor = isExpanded ? 'var(--green)' : (isReduced ? 'var(--red)' : '#38bdf8');
-  const bannerBg = isExpanded ? 'rgba(34,197,94,0.08)' : (isReduced ? 'rgba(239,68,68,0.08)' : 'rgba(56,189,248,0.08)');
+  const bannerColor = isSys ? '#38bdf8' : (isExpanded ? 'var(--green)' : (isReduced ? 'var(--red)' : '#38bdf8'));
+  const bannerBg = isSys ? 'rgba(56,189,248,0.08)' : (isExpanded ? 'rgba(34,197,94,0.08)' : (isReduced ? 'rgba(239,68,68,0.08)' : 'rgba(56,189,248,0.08)'));
+  const callSubtext = isSys ? `Call #1 (Base System Context)` : (isScratch ? `Call #${callIdx + 1} (Write-Time Scratch Offload)` : `Call #${prevCallIdx + 1} → Call #${callIdx + 1}`);
+  const beforeHeader = isScratch ? `🔴 RAW UNTRUNCATED OUTPUT (scratch/${escHtml(item.scratchFilename || '')})` : `🔴 BEFORE in Call #${prevCallIdx + 1}`;
+  const afterHeader = isScratch ? `🟢 RETAINED PROMPT (Sent to LLM in Call #${callIdx + 1})` : `🟢 AFTER in Call #${callIdx + 1}`;
 
   const headerLabel = category ? `
     <span style="background:rgba(255,255,255,0.06);padding:2px 8px;border-radius:12px;font-size:10.5px;font-weight:bold;color:${catColor || 'var(--green)'}">
@@ -1885,53 +2185,72 @@ function renderDiffBoxMarkup(item, prevCallIdx, callIdx, category, targetName, i
     </span>
   ` : '';
 
+  const isInitiallyExpanded = defaultExpanded || isSys;
+
   return `
-    <div class="pa-sbs-card panel" data-call="${callIdx}" data-target="${escHtml(targetName || '')}" style="border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-2)">
-      <div style="background:var(--bg-3);padding:10px 14px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)">
-        <div style="display:flex;align-items:center;gap:10px">
+    <div class="pa-sbs-card panel" data-call="${callIdx}" data-target="${escHtml(targetName || '')}" style="border:1px solid ${isSys ? 'rgba(56,189,248,0.35)' : 'var(--border)'};border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-2)">
+      <div class="pa-card-header" onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'none' ? 'block' : 'none'; const btn = this.querySelector('.pa-card-toggle-btn'); if (btn) btn.innerText = this.nextElementSibling.style.display === 'none' ? '▼ View Diff' : '▲ Hide Diff';" style="background:var(--bg-3);padding:10px 14px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);cursor:pointer;user-select:none">
+        <div style="display:flex;align-items:center;gap:10px;overflow:hidden">
           <strong style="color:var(--text);font-size:12px">msg[${item.index}]</strong>
           <span style="text-transform:uppercase;font-weight:700;color:var(--accent-2);font-size:10.5px">(${item.role})</span>
-          <span style="color:var(--text-3);font-size:11px">Call #${prevCallIdx + 1} → Call #${callIdx + 1}</span>
+          <span style="color:var(--text-3);font-size:11px;white-space:nowrap">${callSubtext}</span>
           ${headerLabel}
         </div>
-        <div>
-          <span class="mono" style="color:${metricColor};font-weight:bold;font-size:12px;background:rgba(255,255,255,0.06);padding:3px 10px;border-radius:var(--radius-sm);border:1px solid rgba(255,255,255,0.12)">
-            ${metricLabel} (${fmtBytes(beforeSize)} → ${fmtBytes(afterSize)})
+        <div style="display:flex;align-items:center;gap:10px;white-space:nowrap">
+          <span class="mono" style="color:${metricColor};font-weight:bold;font-size:11.5px;background:rgba(255,255,255,0.06);padding:3px 8px;border-radius:var(--radius-sm);border:1px solid rgba(255,255,255,0.12)">
+            ${isSys ? `🛡️ ${fmtBytes(beforeSize)} Base` : `${metricLabel} (${fmtBytes(beforeSize)} → ${fmtBytes(afterSize)})`}
           </span>
+          <button class="action-btn secondary pa-card-toggle-btn" style="padding:2px 8px;font-size:10px">
+            ${isInitiallyExpanded ? '▲ Hide Diff' : '▼ View Diff'}
+          </button>
         </div>
       </div>
 
-      <div style="background:${bannerBg};border-bottom:1px solid rgba(255,255,255,0.12);padding:8px 14px;font-size:11px">
-        <span style="color:${bannerColor};font-weight:bold">${bannerTitle}</span>
-        <div class="mono" style="margin-top:4px;background:rgba(255,255,255,0.06);color:${bannerColor};padding:6px 10px;border-radius:var(--radius-sm);border-left:3px solid ${bannerColor};max-height:90px;overflow-y:auto;white-space:pre-wrap;word-break:break-all">
-          ${escHtml(bannerText)}
-        </div>
-      </div>
-
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border)">
-        <div style="background:var(--bg-2);padding:10px 12px">
-          <div style="font-weight:bold;font-size:10.5px;color:var(--red);margin-bottom:6px;display:flex;justify-content:space-between">
-            <span>🔴 BEFORE in Call #${prevCallIdx + 1}</span>
-            <span class="mono">${fmtBytes(beforeSize)}</span>
-          </div>
-          <div class="mono pa-sbs-left" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border);max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all">
-            ${escHtml(prefix)}
-            ${removedText ? `<span style="background:rgba(239,68,68,0.25);color:var(--red);font-weight:bold;padding:2px 4px;border-radius:2px">${escHtml(removedText)}</span>` : ''}
-            ${escHtml(suffix)}
+      <div class="pa-sbs-body" style="display:${isInitiallyExpanded ? 'block' : 'none'}">
+        <div style="background:${bannerBg};border-bottom:1px solid rgba(255,255,255,0.12);padding:8px 14px;font-size:11px">
+          <span style="color:${bannerColor};font-weight:bold">${bannerTitle}</span>
+          <div class="mono" style="margin-top:4px;background:rgba(255,255,255,0.06);color:${bannerColor};padding:6px 10px;border-radius:var(--radius-sm);border-left:3px solid ${bannerColor};max-height:90px;overflow-y:auto;white-space:pre-wrap;word-break:break-all">
+            ${escHtml(bannerText)}
           </div>
         </div>
 
-        <div style="background:var(--bg-2);padding:10px 12px">
-          <div style="font-weight:bold;font-size:10.5px;color:var(--green);margin-bottom:6px;display:flex;justify-content:space-between">
-            <span>🟢 AFTER in Call #${callIdx + 1}</span>
-            <span class="mono">${fmtBytes(afterSize)}</span>
+        ${isSys ? `
+          <div style="padding:10px 14px;background:var(--bg-2)">
+            <div style="font-weight:bold;font-size:10.5px;color:#38bdf8;margin-bottom:6px;display:flex;justify-content:space-between">
+              <span>🛡️ INITIAL SYSTEM PROMPT INSTRUCTIONS (Static Base Context)</span>
+              <span class="mono">${fmtBytes(beforeSize)}</span>
+            </div>
+            <div class="mono" style="font-size:10.5px;line-height:1.45;color:var(--text);background:var(--bg-1);padding:10px;border-radius:var(--radius-sm);border:1px solid var(--border);max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-all">
+              ${escHtml(item.diffChunks?.insertedText || '')}
+            </div>
           </div>
-          <div class="mono pa-sbs-right" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border);max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all">
-            ${escHtml(prefix)}
-            ${insertedText ? `<span style="background:rgba(34,197,94,0.25);color:var(--green);font-weight:bold;padding:2px 4px;border-radius:2px">${escHtml(insertedText)}</span>` : ''}
-            ${escHtml(suffix)}
+        ` : `
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border)">
+            <div style="background:var(--bg-2);padding:10px 12px">
+              <div style="font-weight:bold;font-size:10.5px;color:var(--red);margin-bottom:6px;display:flex;justify-content:space-between">
+                <span>${beforeHeader}</span>
+                <span class="mono">${fmtBytes(beforeSize)}</span>
+              </div>
+              <div class="mono pa-sbs-left" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border);max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all">
+                ${escHtml(prefix)}
+                ${removedText ? `<span style="background:rgba(239,68,68,0.25);color:var(--red);font-weight:bold;padding:2px 4px;border-radius:2px">${escHtml(removedText)}</span>` : ''}
+                ${escHtml(suffix)}
+              </div>
+            </div>
+
+            <div style="background:var(--bg-2);padding:10px 12px">
+              <div style="font-weight:bold;font-size:10.5px;color:var(--green);margin-bottom:6px;display:flex;justify-content:space-between">
+                <span>${afterHeader}</span>
+                <span class="mono">${fmtBytes(afterSize)}</span>
+              </div>
+              <div class="mono pa-sbs-right" style="font-size:10.5px;line-height:1.45;color:var(--text-2);background:var(--bg-1);padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border);max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all">
+                ${escHtml(prefix)}
+                ${insertedText ? `<span style="background:rgba(34,197,94,0.25);color:var(--green);font-weight:bold;padding:2px 4px;border-radius:2px">${escHtml(insertedText)}</span>` : ''}
+                ${escHtml(suffix)}
+              </div>
+            </div>
           </div>
-        </div>
+        `}
       </div>
     </div>
   `;
@@ -2061,8 +2380,15 @@ function drawTimelineChart(calls, targetCanvas = null, zoomRange = null, crossha
 
   if (visibleCalls.length === 0) return;
 
-  const requestSizeMode = window.requestSizeMode || 'accumulated';
-  const sizes = visibleCalls.map(c => requestSizeMode === 'accumulated' ? c.requestSize : (c.turnDeltaSize || Math.max(1, c.sizeDelta)));
+  const reqMode = window.requestSizeMode || requestSizeMode || 'accumulated';
+  const getTargetSize = (c) => {
+    if (reqMode === 'accumulated') return c.requestSize || 1;
+    if (c.turnDeltaSize != null && c.turnDeltaSize > 0) return c.turnDeltaSize;
+    if (c.sizeDelta != null && c.sizeDelta !== 0) return Math.abs(c.sizeDelta);
+    return Math.max(1, (c.tokensIn || 0) * 4);
+  };
+
+  const sizes = visibleCalls.map(c => getTargetSize(c));
   const cacheReads = visibleCalls.map(c => c.cacheReads);
   const cacheWrites = visibleCalls.map(c => c.cacheWrites);
   const costs = visibleCalls.map(c => c.cumulativeCost || c.cost || 0);
@@ -2125,8 +2451,8 @@ function drawTimelineChart(calls, targetCanvas = null, zoomRange = null, crossha
     const origIndex = startIndex + i;
     const x = pad.left + i * colWidth + colWidth / 2;
 
-    const targetSize = requestSizeMode === 'accumulated' ? c.requestSize : (c.turnDeltaSize || Math.max(1, c.sizeDelta));
-    const barH = Math.max(2, (targetSize / maxSize) * chartH);
+    const targetSize = getTargetSize(c);
+    const barH = Math.max(3, (targetSize / maxSize) * chartH);
     const barY = pad.top + chartH - barH;
 
     const readY = pad.top + chartH - (c.cacheReads / maxCache) * chartH;
@@ -2337,57 +2663,44 @@ function drawTimelineChart(calls, targetCanvas = null, zoomRange = null, crossha
 }
 
 function bindAnalyticsEvents(calls) {
-  const modeBtn = document.getElementById('pa-toggle-size-mode-btn');
-  if (modeBtn && !modeBtn._hasBound) {
-    modeBtn._hasBound = true;
-    modeBtn.addEventListener('click', () => {
-      requestSizeMode = requestSizeMode === 'accumulated' ? 'delta' : 'accumulated';
-      window.requestSizeMode = requestSizeMode;
-      modeBtn.innerHTML = requestSizeMode === 'accumulated' ? '📦 Accumulated Context' : '⚡ Per-Turn New Input';
-      drawTimelineChart(calls);
-    });
-  }
-
-  document.querySelectorAll('.pa-legend-chip').forEach(chip => {
-    chip.addEventListener('click', () => {
-      const seriesKey = chip.dataset.series;
-      if (seriesKey) {
-        chartSeries[seriesKey] = !chartSeries[seriesKey];
-        chip.classList.toggle('active', chartSeries[seriesKey]);
-        drawTimelineChart(calls);
-
-        const compSec = document.getElementById('pa-comparison-section');
-        const cacheSec = document.getElementById('pa-cache-section');
-        if (!chartSeries.requestSize && (chartSeries.cacheReads || chartSeries.cacheWrites)) {
-          if (compSec) compSec.style.display = 'none';
-          if (cacheSec) cacheSec.style.display = 'block';
-        } else {
-          if (compSec) compSec.style.display = 'block';
-          if (cacheSec) cacheSec.style.display = 'none';
-        }
-      }
-    });
+  bindGlobalLegendEvents(document.getElementById('pa-content'), () => {
+    drawTimelineChart(calls);
+    const compSec = document.getElementById('pa-comparison-section');
+    const cacheSec = document.getElementById('pa-cache-section');
+    if (!chartSeries.requestSize && (chartSeries.cacheReads || chartSeries.cacheWrites)) {
+      if (compSec) compSec.style.display = 'none';
+      if (cacheSec) cacheSec.style.display = 'block';
+    } else {
+      if (compSec) compSec.style.display = 'block';
+      if (cacheSec) cacheSec.style.display = 'none';
+    }
   });
 
   document.querySelectorAll('.pa-summary-row').forEach(row => {
-    row.addEventListener('click', () => {
+    row.onclick = () => {
       const target = row.dataset.target;
       if (!target) return;
 
-      const cards = document.querySelectorAll('.pa-sbs-card');
-      for (const card of cards) {
-        if (card.dataset.target === target || card.innerText.includes(target) || card.innerHTML.includes(target)) {
-          card.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          card.style.outline = '2px solid var(--green)';
-          card.style.boxShadow = '0 0 16px rgba(16, 185, 129, 0.4)';
-          setTimeout(() => {
-            card.style.outline = 'none';
-            card.style.boxShadow = 'none';
-          }, 3000);
-          break;
-        }
-      }
-    });
+      reductionSearchQuery = target;
+      activeCategoryFilter = 'ALL';
+      reductionViewMode = 'grouped';
+      const searchInput = document.getElementById('pa-seq-search-input');
+      if (searchInput) searchInput.value = target;
+
+      renderReductionSequenceFeed(document.getElementById('pa-comparison-body'), analyticsData?.reductionEvents || []);
+
+      const compSec = document.getElementById('pa-comparison-section');
+      if (compSec) compSec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+  });
+
+  document.querySelectorAll('.pa-cat-filter').forEach(btn => {
+    btn.onclick = () => {
+      activeCategoryFilter = btn.dataset.cat;
+      reductionFeedLimit = 30;
+      document.querySelectorAll('.pa-cat-filter').forEach(b => b.classList.toggle('active', b === btn));
+      renderReductionSequenceFeed(document.getElementById('pa-comparison-body'), analyticsData?.reductionEvents || []);
+    };
   });
 
   const chartEl = document.getElementById('pa-timeline-chart');
@@ -2423,6 +2736,7 @@ function redrawTargetCanvas(canvas, calls = null) {
   } else if (canvas.id && canvas.id.startsWith('pa-compare-canvas-')) {
     const stepIdx = (compareStepIndex != null) ? compareStepIndex : 0;
     const validIds = Object.keys(compareDataMap);
+    const reqMode = window.requestSizeMode || requestSizeMode || 'accumulated';
     const getGlobalCompareMaxes = () => {
       if (!useSharedCompareScale) return null;
       let maxCost = 0.01;
@@ -2435,7 +2749,10 @@ function redrawTargetCanvas(canvas, calls = null) {
         cList.forEach(c => {
           const costVal = c.cumulativeCost || c.cost || 0;
           if (costVal > maxCost) maxCost = costVal;
-          if ((c.requestSize || 0) > maxSize) maxSize = c.requestSize;
+          const targetSize = reqMode === 'accumulated'
+            ? (c.requestSize || 1)
+            : (c.turnDeltaSize || (c.sizeDelta ? Math.abs(c.sizeDelta) : (c.tokensIn ? c.tokensIn * 4 : 100)));
+          if (targetSize > maxSize) maxSize = targetSize;
           if ((c.cacheReads || 0) > maxCache) maxCache = c.cacheReads;
           if ((c.cacheWrites || 0) > maxCache) maxCache = c.cacheWrites;
           if (((c.latencyMs || 0) / 1000) > maxLatency) maxLatency = (c.latencyMs || 0) / 1000;
@@ -2536,6 +2853,40 @@ function handleChartHover(e, calls, targetCanvas = null, tooltipId = 'pa-chart-t
   `;
 }
 
+function showChartToast(msg) {
+  let toast = document.getElementById('pa-chart-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'pa-chart-toast';
+    toast.style.cssText = `
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      background: rgba(15, 23, 42, 0.92);
+      border: 1px solid #38bdf8;
+      color: #38bdf8;
+      padding: 6px 12px;
+      border-radius: var(--radius-sm);
+      font-size: 11px;
+      font-weight: bold;
+      pointer-events: none;
+      z-index: 50;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      transition: opacity 0.25s ease;
+    `;
+    const chartContainer = document.querySelector('.pa-chart-container');
+    if (chartContainer) chartContainer.appendChild(toast);
+  }
+  toast.innerText = msg;
+  toast.style.opacity = '1';
+  toast.style.display = 'block';
+  clearTimeout(toast._timer);
+  toast._timer = setTimeout(() => {
+    toast.style.opacity = '0';
+    setTimeout(() => { toast.style.display = 'none'; }, 300);
+  }, 2500);
+}
+
 function handleChartClick(e, calls) {
   const canvas = chartCanvas;
   if (!canvas || !canvas._chartMeta) return;
@@ -2556,14 +2907,40 @@ function handleChartClick(e, calls) {
       tableRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
       tableRow.click();
     }
-  } else {
+    return;
+  }
+
+  // 1. Reset timeline mode & search query so the card is visible
+  reductionViewMode = 'timeline';
+  reductionSearchQuery = '';
+  activeCategoryFilter = 'ALL';
+  reductionFeedLimit = Math.max(reductionFeedLimit, (analyticsData?.reductionEvents || []).length);
+
+  const searchInput = document.getElementById('pa-seq-search-input');
+  if (searchInput) searchInput.value = '';
+
+  renderReductionSequenceFeed(document.getElementById('pa-comparison-body'), analyticsData?.reductionEvents || []);
+
+  // 2. Locate matching card in DOM
+  setTimeout(() => {
     const targetCard = document.querySelector(`.pa-sbs-card[data-call="${colIdx}"]`);
     if (targetCard) {
+      const bodyEl = targetCard.querySelector('.pa-sbs-body');
+      if (bodyEl) bodyEl.style.display = 'block';
+      const btn = targetCard.querySelector('.pa-card-toggle-btn');
+      if (btn) btn.innerText = '▲ Hide Diff';
+
       targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      targetCard.style.outline = '2px solid var(--green)';
-      setTimeout(() => { targetCard.style.outline = 'none'; }, 2500);
+      targetCard.style.outline = '3px solid #10b981';
+      targetCard.style.boxShadow = '0 0 24px rgba(16, 185, 129, 0.7)';
+      setTimeout(() => {
+        targetCard.style.outline = 'none';
+        targetCard.style.boxShadow = 'none';
+      }, 3500);
+    } else {
+      showChartToast(`Call #${colIdx + 1}: ${fmtBytes(calls[colIdx]?.requestSize || 0)} (No context reductions on this turn)`);
     }
-  }
+  }, 50);
 }
 
 export async function silentRefreshPromptAnalytics() {
@@ -2602,7 +2979,7 @@ export async function silentRefreshPromptAnalytics() {
         drawTimelineChart(analyticsData.apiCalls);
         renderModelSwimlane(analyticsData.apiCalls, document.getElementById('pa-chart-swimlane'));
 
-        const events = extractContextEvents(analyticsData.apiCalls);
+        const events = analyticsData.reductionEvents || [];
         renderReductionSequenceFeed(document.getElementById('pa-comparison-body'), events);
         renderCacheObservabilityPanel(document.getElementById('pa-cache-body'), analyticsData.apiCalls);
 
@@ -2739,7 +3116,8 @@ function renderScratchInspector(container, scratchEvents) {
                 <span style="background:rgba(232,121,249,0.15);color:#e879f9;padding:2px 8px;border-radius:12px;font-size:10.5px;font-weight:bold;border:1px solid rgba(232,121,249,0.3)">
                   ⚡ ${escHtml(evt.toolName)}
                 </span>
-                <strong style="color:var(--text);font-size:11.5px" class="mono">${escHtml(evt.filename)}</strong>
+                <strong style="color:var(--text);font-size:11.5px" class="mono">${escHtml(evt.targetPath || evt.filename)}</strong>
+                ${evt.targetPath && evt.targetPath !== evt.filename ? `<span style="color:var(--text-3);font-size:10px" class="mono">(${escHtml(evt.filename)})</span>` : ''}
                 <span style="color:var(--text-3);font-size:11px">Call #${evt.callIndex + 1}</span>
               </div>
               <div>
