@@ -6,14 +6,21 @@ const os = require('os');
 const CONFIG_PATH = path.join(__dirname, '../pq-config.yaml');
 
 function resolvePath(p) {
-  return p.replace(/^~/, os.homedir());
+  if (!p) return '';
+  let resolved = p.replace(/^~/, os.homedir());
+  if (process.platform === 'win32') {
+    resolved = resolved.replace(/%APPDATA%/gi, process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'));
+    resolved = resolved.replace(/%USERPROFILE%/gi, process.env.USERPROFILE || os.homedir());
+    resolved = resolved.replace(/%LOCALAPPDATA%/gi, process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'));
+  }
+  return path.normalize(resolved);
 }
 
 function loadConfig() {
   const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
   const config = yaml.load(raw);
 
-  // Resolve ~ in source paths
+  // Resolve ~ and environment variables in source paths
   config.sources = (config.sources || []).map(s => ({
     ...s,
     resolvedPath: resolvePath(s.path)
