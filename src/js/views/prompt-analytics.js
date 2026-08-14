@@ -3385,24 +3385,22 @@ export async function silentRefreshPromptAnalytics() {
       const res = await api.promptAnalytics(currentTaskId);
       if (res && res.apiCalls) {
         analyticsData = res;
-        renderTaskMetricsBar(analyticsData.task, analyticsData.apiCalls);
+        if (!analyticsData.task) analyticsData.task = { id: currentTaskId };
+        analyticsData.task.label = getSavedTaskLabel(currentTaskId, analyticsData.task.label);
 
-        const chartEl = document.getElementById('pa-timeline-chart');
-        if (chartEl) chartEl._calls = analyticsData.apiCalls;
+        const contentEl = document.getElementById('pa-content');
+        if (contentEl) {
+          const modal = document.getElementById('pa-fullscreen-modal');
+          const isModalOpen = modal && modal.style.display === 'flex';
 
-        drawTimelineChart(analyticsData.apiCalls);
-        renderModelSwimlane(analyticsData.apiCalls, document.getElementById('pa-chart-swimlane'));
+          renderAnalytics(contentEl);
 
-        const events = analyticsData.reductionEvents || [];
-        renderReductionSequenceFeed(document.getElementById('pa-comparison-body'), events);
-        renderCacheObservabilityPanel(document.getElementById('pa-cache-body'), analyticsData.apiCalls);
-
-        const modal = document.getElementById('pa-fullscreen-modal');
-        if (modal && modal.style.display === 'flex') {
-          const fsCanvas = document.getElementById('pa-fullscreen-canvas');
-          if (fsCanvas) {
-            fsCanvas._calls = analyticsData.apiCalls;
-            drawTimelineChart(analyticsData.apiCalls, fsCanvas, fullscreenZoomRange);
+          if (isModalOpen) {
+            const fsCanvas = document.getElementById('pa-fullscreen-canvas');
+            if (fsCanvas) {
+              fsCanvas._calls = analyticsData.apiCalls;
+              drawTimelineChart(analyticsData.apiCalls, fsCanvas, fullscreenZoomRange);
+            }
           }
         }
       }
