@@ -641,9 +641,13 @@ function renderAnalytics(contentEl) {
     <!-- Timeline Chart Panel -->
     <div class="panel pa-chart-panel">
       <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
-        <div style="display:flex;align-items:center;gap:8px">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <span>📊 Request Size, Cumulative Cost & Cache Timeline</span>
           ${data.task?.label ? `<span style="background:rgba(56,189,248,0.15);color:#38bdf8;padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:bold">🏷️ ${escHtml(data.task.label)}</span>` : ''}
+          <span style="background:rgba(236,72,153,0.15);border:1px solid rgba(236,72,153,0.5);color:#f472b6;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:bold;display:inline-flex;align-items:center;gap:6px">
+            💰 Total Task Cost: <span class="mono" style="color:#ffffff">${fmtCost(data.task?.totalCost || (calls.length > 0 ? (calls[calls.length - 1]?.cumulativeCost || calls[calls.length - 1]?.cost || 0) : 0))}</span>
+            <span style="font-weight:normal;color:var(--text-3);font-size:10px">(${fmtCost(calls.length > 0 ? ((data.task?.totalCost || (calls[calls.length - 1]?.cumulativeCost || 0)) / calls.length) : 0)}/call)</span>
+          </span>
         </div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           ${renderLegendFilterMarkup()}
@@ -670,6 +674,7 @@ function renderAnalytics(contentEl) {
           <canvas id="pa-timeline-chart"></canvas>
           <div id="pa-chart-tooltip" class="pa-chart-tooltip" style="display:none;pointer-events:none;z-index:100;position:absolute"></div>
         </div>
+        <div id="pa-step-jump-strip"></div>
         <div id="pa-chart-swimlane"></div>
       </div>
     </div>
@@ -680,8 +685,9 @@ function renderAnalytics(contentEl) {
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <span>📜 Context Reductions (<span id="pa-seq-total-count">${events.length}</span> total events)</span>
           <div style="display:inline-flex;background:var(--bg-3);border:1px solid var(--border);border-radius:4px;padding:2px">
-            <button id="pa-btn-mode-timeline" class="pa-viewmode-btn action-btn ${reductionViewMode === 'timeline' ? 'primary' : 'secondary'}" data-mode="timeline" style="padding:2px 8px;font-size:10.5px;cursor:pointer">📜 Timeline</button>
-            <button id="pa-btn-mode-grouped" class="pa-viewmode-btn action-btn ${reductionViewMode === 'grouped' ? 'primary' : 'secondary'}" data-mode="grouped" style="padding:2px 8px;font-size:10.5px;cursor:pointer">🗂️ Group by File/Target</button>
+            <button id="pa-btn-mode-timeline" class="pa-viewmode-btn action-btn ${reductionViewMode === 'timeline' ? 'primary' : 'secondary'}" data-mode="timeline" style="padding:2px 8px;font-size:10.5px;cursor:pointer">📜 Feed</button>
+            <button id="pa-btn-mode-matrix" class="pa-viewmode-btn action-btn ${reductionViewMode === 'matrix' ? 'primary' : 'secondary'}" data-mode="matrix" style="padding:2px 8px;font-size:10.5px;cursor:pointer">📁 File Matrix</button>
+            <button id="pa-btn-mode-grouped" class="pa-viewmode-btn action-btn ${reductionViewMode === 'grouped' ? 'primary' : 'secondary'}" data-mode="grouped" style="padding:2px 8px;font-size:10.5px;cursor:pointer">🗂️ Grouped</button>
           </div>
         </div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
@@ -715,6 +721,7 @@ function renderAnalytics(contentEl) {
 
   bindAnalyticsEvents(calls);
   drawTimelineChart(calls);
+  renderCallPillsStrip(calls, document.getElementById('pa-step-jump-strip'));
   renderModelSwimlane(calls, document.getElementById('pa-chart-swimlane'));
 
   renderReductionSequenceFeed(document.getElementById('pa-comparison-body'), events);
@@ -2028,7 +2035,11 @@ function renderReductionSequenceFeed(body, events) {
     return;
   }
 
-  if (reductionViewMode === 'grouped') {
+  if (reductionViewMode === 'matrix') {
+    // ── FILE IMPACT MATRIX VIEW ──
+    body.innerHTML = callFocusBanner + renderFileImpactMatrixView(filteredEvents);
+    bindMatrixViewEvents(body);
+  } else if (reductionViewMode === 'grouped') {
     // ── GROUPED BY FILE / TARGET VIEW ──
     const groups = {};
     filteredEvents.forEach(e => {
@@ -2092,11 +2103,13 @@ function renderReductionSequenceFeed(body, events) {
     body.querySelectorAll('.pa-grouped-header, .pa-toggle-group-btn').forEach(el => {
       el.onclick = (e) => {
         e.stopPropagation();
-        const gidx = el.closest('.pa-grouped-target-card').querySelector('.pa-grouped-header').dataset.gidx;
+        const gidx = el.dataset.gidx || el.closest('.pa-grouped-target-card')?.querySelector('.pa-grouped-header')?.dataset.gidx;
         const gBody = document.getElementById(`pa-grouped-body-${gidx}`);
         if (gBody) {
           const isHidden = gBody.style.display === 'none';
           gBody.style.display = isHidden ? 'flex' : 'none';
+          const btn = el.closest('.pa-grouped-target-card')?.querySelector('.pa-toggle-group-btn');
+          if (btn) btn.innerText = isHidden ? '▲ Hide Diffs' : `▼ Toggle Diffs`;
         }
       };
     });
@@ -2162,6 +2175,148 @@ function renderReductionSequenceFeed(body, events) {
       if (typeof redrawTargetCanvas === 'function' && typeof analyticsData !== 'undefined') redrawTargetCanvas(document.getElementById('pa-target-chart'), analyticsData.apiCalls);
     };
   }
+}
+
+function renderFileImpactMatrixView(filteredEvents) {
+  const fileMap = {};
+  filteredEvents.forEach(e => {
+    const key = e.targetName || e.toolName || 'Unknown';
+    if (!fileMap[key]) {
+      fileMap[key] = {
+        target: key,
+        toolName: e.toolName,
+        category: e.category,
+        isScratch: e.isScratch,
+        calls: new Set(),
+        rawBytes: 0,
+        promptBytes: 0,
+        bytesSaved: 0,
+        events: [],
+      };
+    }
+    fileMap[key].calls.add(e.callIndex);
+    fileMap[key].rawBytes += (e.beforeSize || 0);
+    fileMap[key].promptBytes += (e.afterSize || 0);
+    fileMap[key].bytesSaved += (e.bytesSaved || 0);
+    fileMap[key].events.push(e);
+  });
+
+  const sortedFiles = Object.values(fileMap).sort((a, b) => b.bytesSaved - a.bytesSaved || b.events.length - a.events.length);
+  const totalSaved = sortedFiles.reduce((acc, f) => acc + f.bytesSaved, 0);
+
+  return `
+    <div style="margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;padding:0 4px;font-size:11.5px;color:var(--text-3);flex-wrap:wrap;gap:8px">
+      <span>📁 File & Target Impact Matrix: <strong>${sortedFiles.length}</strong> unique files/targets across <strong>${filteredEvents.length}</strong> context events</span>
+      <span class="mono" style="color:var(--green);font-weight:bold;background:rgba(16,185,129,0.1);padding:3px 10px;border-radius:12px;border:1px solid rgba(16,185,129,0.3)">
+        Total Context Space Saved: -${fmtBytes(totalSaved)}
+      </span>
+    </div>
+
+    <div class="panel" style="background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;padding:0">
+      <div style="overflow-x:auto">
+        <table class="data-table" style="width:100%;border-collapse:collapse;font-size:11.5px">
+          <thead>
+            <tr style="background:var(--bg-3);border-bottom:1px solid var(--border);text-align:left;color:var(--text-3);font-size:10.5px">
+              <th style="padding:10px 14px">File / Target</th>
+              <th style="padding:10px 12px">Category</th>
+              <th style="padding:10px 12px">Turns Affected</th>
+              <th style="padding:10px 12px;text-align:right">Raw Output</th>
+              <th style="padding:10px 12px;text-align:right">Sent to LLM</th>
+              <th style="padding:10px 14px;text-align:right">Context Saved</th>
+              <th style="padding:10px 14px;text-align:center">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${sortedFiles.map((f, fIdx) => {
+              let fIcon = '📁';
+              let catColor = 'var(--green)';
+              if (f.toolName === 'execute_command' || f.category.includes('Terminal')) { fIcon = '💻'; catColor = '#38bdf8'; }
+              else if (f.toolName === 'postqode_browser_agent' || f.category.includes('Browser')) { fIcon = '🌐'; catColor = '#06b6d4'; }
+              else if (f.toolName === 'use_skill' || f.category.includes('Skill')) { fIcon = '⚡'; catColor = '#e879f9'; }
+              else if (f.toolName === 'replace_in_file') { fIcon = '📝'; catColor = '#a78bfa'; }
+              else if (f.category.includes('System')) { fIcon = '🛡️'; catColor = '#38bdf8'; }
+
+              const callPills = Array.from(f.calls).sort((a,b)=>a-b).map(cIdx => `
+                <span class="pa-matrix-call-pill" data-call="${cIdx}" style="background:rgba(56,189,248,0.12);border:1px solid rgba(56,189,248,0.4);color:#38bdf8;padding:1px 6px;border-radius:10px;font-size:9.5px;font-weight:bold;cursor:pointer" title="Click to view Call #${cIdx + 1}">
+                  #${cIdx + 1}
+                </span>
+              `).join(' ');
+
+              return `
+                <tr class="pa-matrix-row" data-fidx="${fIdx}" style="border-bottom:1px solid var(--border);cursor:pointer;transition:background 0.15s">
+                  <td style="padding:10px 14px;font-family:monospace;font-size:11.5px;color:var(--text);font-weight:600;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(f.target)}">
+                    <span style="font-size:13px;margin-right:6px">${fIcon}</span>${escHtml(f.target)}
+                  </td>
+                  <td style="padding:10px 12px">
+                    <span style="background:rgba(255,255,255,0.06);padding:2px 8px;border-radius:10px;font-size:10px;font-weight:bold;color:${catColor}">
+                      ${escHtml(f.category)}
+                    </span>
+                  </td>
+                  <td style="padding:10px 12px">
+                    <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">
+                      ${callPills}
+                    </div>
+                  </td>
+                  <td class="mono" style="padding:10px 12px;text-align:right;color:var(--text-3);font-size:11px">
+                    ${fmtBytes(f.rawBytes)}
+                  </td>
+                  <td class="mono" style="padding:10px 12px;text-align:right;color:var(--text-2);font-size:11px">
+                    ${fmtBytes(f.promptBytes)}
+                  </td>
+                  <td class="mono" style="padding:10px 14px;text-align:right;color:var(--green);font-weight:bold;font-size:11.5px">
+                    -${fmtBytes(f.bytesSaved)}
+                  </td>
+                  <td style="padding:10px 14px;text-align:center">
+                    <button class="action-btn secondary pa-matrix-toggle-btn" data-fidx="${fIdx}" style="padding:2px 8px;font-size:10px;cursor:pointer">
+                      ▼ View Diff
+                    </button>
+                  </td>
+                </tr>
+                <tr id="pa-matrix-diff-row-${fIdx}" style="display:none;background:var(--bg-1);border-bottom:1px solid var(--border)">
+                  <td colspan="7" style="padding:12px">
+                    <div style="display:flex;flex-direction:column;gap:10px">
+                      ${f.events.map(ev => renderReductionEventCard(ev, true)).join('')}
+                    </div>
+                  </td>
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function bindMatrixViewEvents(body) {
+  if (!body) return;
+
+  body.querySelectorAll('.pa-matrix-row, .pa-matrix-toggle-btn').forEach(el => {
+    el.onclick = (e) => {
+      if (e.target.classList.contains('pa-matrix-call-pill')) return;
+      const fIdx = el.dataset.fidx || el.closest('.pa-matrix-row')?.dataset.fidx;
+      const diffRow = document.getElementById(`pa-matrix-diff-row-${fIdx}`);
+      const btn = body.querySelector(`.pa-matrix-toggle-btn[data-fidx="${fIdx}"]`);
+      if (diffRow) {
+        const isHidden = diffRow.style.display === 'none';
+        diffRow.style.display = isHidden ? 'table-row' : 'none';
+        if (btn) btn.innerText = isHidden ? '▲ Hide Diff' : '▼ View Diff';
+      }
+    };
+  });
+
+  body.querySelectorAll('.pa-matrix-call-pill').forEach(pill => {
+    pill.onclick = (e) => {
+      e.stopPropagation();
+      const callIdx = parseInt(pill.dataset.call, 10);
+      activeCallFocusIndex = callIdx;
+      reductionViewMode = 'timeline';
+      renderReductionSequenceFeed(body, analyticsData?.reductionEvents || []);
+      if (chartCanvas && analyticsData?.apiCalls) redrawTargetCanvas(chartCanvas, analyticsData.apiCalls);
+      const compSec = document.getElementById('pa-comparison-section');
+      if (compSec) compSec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+  });
 }
 
 function renderReductionEventCard(ev, defaultExpanded = false) {
@@ -2348,6 +2503,51 @@ function bindSynchronizedScroll(container) {
       }
       isSyncingRight = false;
     });
+  });
+}
+
+function renderCallPillsStrip(calls, container) {
+  if (!container || !calls || calls.length === 0) return;
+
+  container.innerHTML = `
+    <div style="display:flex;align-items:center;gap:4px;overflow-x:auto;padding:6px 2px;margin-top:6px;border-top:1px dashed var(--border);user-select:none">
+      <span style="font-size:10.5px;color:var(--text-3);font-weight:600;white-space:nowrap;margin-right:4px">Step Jump:</span>
+      ${calls.map((c, idx) => {
+        const isFocused = activeCallFocusIndex === idx;
+        const hasFile = (c.fileTruncationBytes || 0) > 50 || c.hasFilePruning;
+        const hasCmd = (c.commandTruncationBytes || 0) > 50 || c.hasCommandPruning;
+        const hasScratch = (c.scratchOffloadedBytes || 0) > 50;
+        const badge = hasFile ? (hasScratch ? '📁⚡' : '📁') : (hasCmd ? '💻' : (hasScratch ? '⚡' : ''));
+        const bg = isFocused ? '#0284c7' : (hasFile ? 'rgba(16,185,129,0.15)' : (hasCmd ? 'rgba(6,182,212,0.15)' : (hasScratch ? 'rgba(232,121,249,0.15)' : 'var(--bg-3)')));
+        const border = isFocused ? '#38bdf8' : (hasFile ? '#10b981' : (hasCmd ? '#06b6d4' : (hasScratch ? '#e879f9' : 'var(--border)')));
+        const color = isFocused ? '#ffffff' : (hasFile ? '#10b981' : (hasCmd ? '#06b6d4' : (hasScratch ? '#e879f9' : 'var(--text-2)')));
+
+        return `
+          <button class="pa-call-pill-btn" data-call="${idx}" style="background:${bg};border:1px solid ${border};color:${color};padding:2px 7px;border-radius:4px;font-size:10.5px;font-weight:bold;cursor:pointer;white-space:nowrap;transition:all 0.15s;display:flex;align-items:center;gap:3px" title="Call #${idx + 1} (${fmtBytes(c.requestSize)}) - Click to isolate & view diff">
+            #${idx + 1}${badge ? `<span style="font-size:9px">${badge}</span>` : ''}
+          </button>
+        `;
+      }).join('')}
+    </div>
+  `;
+
+  container.querySelectorAll('.pa-call-pill-btn').forEach(btn => {
+    btn.onclick = () => {
+      const callIdx = parseInt(btn.dataset.call, 10);
+      if (activeCallFocusIndex === callIdx) {
+        activeCallFocusIndex = null;
+      } else {
+        activeCallFocusIndex = callIdx;
+        reductionViewMode = 'timeline';
+        activeCategoryFilter = 'ALL';
+      }
+      renderReductionSequenceFeed(document.getElementById('pa-comparison-body'), analyticsData?.reductionEvents || []);
+      if (chartCanvas && analyticsData?.apiCalls) redrawTargetCanvas(chartCanvas, analyticsData.apiCalls);
+      renderCallPillsStrip(calls, container);
+
+      const compSec = document.getElementById('pa-comparison-section');
+      if (compSec) compSec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
   });
 }
 
