@@ -706,7 +706,7 @@ module.exports = (db, config, getStore) => {
           let matchedMsgIndex = -1;
           let targetPath = null;
 
-          // 1. Fast match in indexedHistory
+          // 1. Fast match in indexedHistory by full filename
           for (const item of indexedHistory) {
             if (item.text.includes(fname)) {
               matchedMsgIndex = item.msgIndex;
@@ -749,7 +749,31 @@ module.exports = (db, config, getStore) => {
             }
           }
 
-          // 3. Find matched callIndex by historyIndex
+          // 3. Match by _msg<digits>_ in filename (e.g. tool_list_files_msg36_2182b38b.log)
+          if (matchedMsgIndex < 0) {
+            const msgMatch = fname.match(/_msg(\d+)_/i);
+            if (msgMatch) {
+              const parsedIdx = parseInt(msgMatch[1], 10);
+              if (parsedIdx >= 0 && parsedIdx < indexedHistory.length) {
+                matchedMsgIndex = parsedIdx;
+                if (!promptSnippetText) {
+                  promptSnippetText = indexedHistory[parsedIdx].text;
+                }
+                if (!targetPath && promptSnippetText) {
+                  const lines = promptSnippetText.split('\n');
+                  for (let l = 0; l < Math.min(lines.length, 5); l++) {
+                    const m = lines[l].match(/\[([a-z_]+)\s+for\s+['\"]([^'\"]+)['\"]\]/i);
+                    if (m) {
+                      targetPath = m[2];
+                      break;
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          // 4. Find matched callIndex by historyIndex
           if (matchedMsgIndex >= 0) {
             for (let cIdx = 0; cIdx < apiCalls.length; cIdx++) {
               if (apiCalls[cIdx].historyIndex >= matchedMsgIndex) {
@@ -757,8 +781,33 @@ module.exports = (db, config, getStore) => {
                 break;
               }
             }
+            if (matchedCallIndex < 0 && apiCalls.length > 0) {
+              matchedCallIndex = apiCalls.length - 1;
+            }
           }
-          if (matchedCallIndex < 0) matchedCallIndex = 0;
+
+          // 5. If still not matched, find closest call by creation timestamp
+          if (matchedCallIndex < 0 && apiCalls.length > 0) {
+            const fileTs = stat.mtimeMs || stat.birthtimeMs || 0;
+            if (fileTs > 0) {
+              let closestDiff = Infinity;
+              let closestCall = -1;
+              for (let cIdx = 0; cIdx < apiCalls.length; cIdx++) {
+                const diff = Math.abs((apiCalls[cIdx].ts || 0) - fileTs);
+                if (diff < closestDiff) {
+                  closestDiff = diff;
+                  closestCall = cIdx;
+                }
+              }
+              if (closestCall >= 0 && closestDiff < 600000) {
+                matchedCallIndex = closestCall;
+              }
+            }
+          }
+
+          if (matchedCallIndex < 0) {
+            matchedCallIndex = apiCalls.length > 0 ? (apiCalls.length - 1) : 0;
+          }
 
           if (promptSnippetText) {
             const fnameIdx = promptSnippetText.indexOf(fname);
