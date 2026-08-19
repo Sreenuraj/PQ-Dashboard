@@ -524,19 +524,82 @@ module.exports = (db, config, getStore) => {
         if (match) mId = match.model_id;
       }
 
-      // ── Per-call context window utilization ──
+      // ── Detect errors / failed tool executions for this turn ──
+      let hasError = false;
+      let errorDetails = null;
+
+      // 1. Check UI messages until the next api_req_started
+      for (let j = i + 1; j < uiMessages.length; j++) {
+        const nextM = uiMessages[j];
+        if (nextM.say === 'api_req_started') break;
+        if (nextM.say === 'error' || nextM.say === 'diff_error') {
+          hasError = true;
+          errorDetails = {
+            type: nextM.say,
+            tool: (nextM.say === 'diff_error' ? 'replace_in_file' : 'tool_execution'),
+            target: (nextM.say === 'diff_error' ? (nextM.text || '') : ''),
+            message: nextM.text || 'Tool execution error',
+          };
+          break;
+        }
+        if (nextM.say === 'tool' && nextM.text && (nextM.text.includes('The tool execution failed') || nextM.text.includes('Error executing'))) {
+          hasError = true;
+          errorDetails = {
+            type: 'tool_error',
+            tool: 'tool_execution',
+            target: '',
+            message: nextM.text.substring(0, 200),
+          };
+          break;
+        }
+        if (nextM.text && typeof nextM.text === 'string' && (nextM.text.includes('Error executing') || nextM.text.includes('User closed text editor'))) {
+          hasError = true;
+          errorDetails = {
+            type: 'editor_error',
+            tool: 'file_edit',
+            target: '',
+            message: nextM.text.substring(0, 200),
+          };
+          break;
+        }
+      }
+
+      // 2. Check if request payload in api_req_started reports a failed tool result
+      if (!hasError && data.request && (data.request.includes('The tool execution failed with the following error') || data.request.includes('Error executing'))) {
+        hasError = true;
+        const match = data.request.match(/\[([a-z_]+)\s+for\s+['\"]([^'\"]+)['\"]\]\s+Result:\s+The tool execution failed[^\n]*\n<error>([\s\S]*?)<\/error>/i);
+        errorDetails = {
+          type: 'tool_error',
+          tool: match ? match[1] : 'tool_execution',
+          target: match ? match[2] : '',
+          message: match ? match[3].trim().substring(0, 200) : 'Tool execution failed',
+        };
+      }
+
+      // ── Per-call context window utilization (with error smoothing) ──
       // Looks up the model's context window from the registry and computes how
       // much of it was used: (uncached input + cache reads + system prompt tokens) / context window
-      // Falls back gracefully when model or context window info is unavailable.
+      // When an API call is an error/failed retry that returned 0 tokens, smooth using requestSize.
       const modelInfo = getModelInfo(mId);
       const contextWindowSize = modelInfo?.contextWindow || null;
-      const totalTokensInContext = (data.tokensIn || 0) + (data.cacheReads || 0) + systemPromptTokens;
+      
+      const isFailedOrZeroReturn = (data.tokensIn === 0 && data.cacheReads === 0);
+      let totalTokensInContext;
+      if (isFailedOrZeroReturn && requestSize > 0) {
+        const estimatedTokens = Math.round(requestSize / 3.2);
+        totalTokensInContext = estimatedTokens || (prevTotalTokensInContext + Math.round(turnDeltaSize / 3.2));
+      } else {
+        totalTokensInContext = (data.tokensIn || 0) + (data.cacheReads || 0) + systemPromptTokens;
+      }
+      prevTotalTokensInContext = totalTokensInContext;
+
       const contextUtilizationPct = contextWindowSize
         ? Math.min(100, (totalTokensInContext / contextWindowSize) * 100)
         : null;
 
       apiCalls.push({
         index: apiCalls.length,
+        turn: apiCalls.length + 1,
         uiMsgIndex: i,
         ts: msg.ts,
         tokensIn: data.tokensIn || 0,
@@ -555,6 +618,8 @@ module.exports = (db, config, getStore) => {
         commandTruncationBytes: 0,
         hasFilePruning: false,
         hasCommandPruning: false,
+        hasError,
+        errorDetails,
         requestText: data.request || null,
         modelId: mId,
         providerId: msg.modelInfo?.providerId || null,
@@ -564,7 +629,6 @@ module.exports = (db, config, getStore) => {
         totalTokensInContext,
         contextUtilizationPct,
       });
-
 
       if (requestSize > 0) prevRequestSize = requestSize;
     }
@@ -925,6 +989,33 @@ module.exports = (db, config, getStore) => {
       ts: apiCalls[0]?.ts || Date.now(),
     });
 
+    // ── Register Tool Error Events in Chronological Reduction Timeline ──
+    for (const c of apiCalls) {
+      if (c.hasError && c.errorDetails) {
+        reductionEvents.push({
+          eventIndex: reductionEvents.length,
+          callIndex: c.index,
+          prevCallIndex: c.index > 0 ? c.index - 1 : 0,
+          msgIndex: c.historyIndex >= 0 ? c.historyIndex : 0,
+          role: 'error',
+          category: 'Tool Error',
+          targetName: c.errorDetails.target ? `⚠️ ${c.errorDetails.tool}: ${c.errorDetails.target}` : `⚠️ ${c.errorDetails.tool || 'Tool Error'}`,
+          beforeSize: c.requestSize || 0,
+          afterSize: c.requestSize || 0,
+          bytesSaved: 0,
+          diffChunks: {
+            prefix: `[Tool Error on Call #${c.turn}]\nTool: ${c.errorDetails.tool || 'unknown'}\n${c.errorDetails.target ? `Target: ${c.errorDetails.target}\n` : ''}`,
+            removedText: '',
+            insertedText: `Error Message:\n${c.errorDetails.message || 'Tool execution failed'}\n\n${c.requestText ? `Request Snippet:\n${c.requestText.substring(0, 500)}` : ''}`,
+            suffix: '',
+          },
+          isError: true,
+          errorDetails: c.errorDetails,
+          ts: c.ts,
+        });
+      }
+    }
+
     reductionEvents.sort((a, b) => (a.callIndex - b.callIndex) || ((a.isSystemPrompt ? -1 : 0) - (b.isSystemPrompt ? -1 : 0)) || ((a.isScratch ? 1 : 0) - (b.isScratch ? 1 : 0)) || a.eventIndex - b.eventIndex);
     reductionEvents.forEach((ev, idx) => { ev.eventIndex = idx; });
 
@@ -948,6 +1039,16 @@ module.exports = (db, config, getStore) => {
       totalRawBytes: totalScratchRawBytes,
       totalPromptBytes: totalScratchPromptBytes,
       totalSavedBytes: totalScratchSavedBytes,
+    };
+
+    const errorSummary = {
+      count: apiCalls.filter(c => c.hasError).length,
+      calls: apiCalls.filter(c => c.hasError).map(c => ({
+        callIndex: c.index,
+        turn: c.turn,
+        ts: c.ts,
+        error: c.errorDetails,
+      })),
     };
 
     // Calculate Financial Cost Breakdown per API Call (Supports mid-task model switches!)
@@ -1077,6 +1178,7 @@ module.exports = (db, config, getStore) => {
       reductionEvents,
       scratchSummary,
       scratchEvents,
+      errorSummary,
       totalMessages: apiHistory.length,
       systemPromptCapture, // null if proxy never captured it for this task
       systemPromptNote: systemPromptAvailable

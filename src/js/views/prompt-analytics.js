@@ -76,6 +76,7 @@ let chartSeries = {
   cumulativeCost: true,
   cacheHitPct: true,
   stepLatency: false,
+  errors: true,
 };
 
 let requestSizeMode = 'accumulated'; // 'accumulated' | 'delta'
@@ -107,6 +108,9 @@ function renderLegendFilterMarkup(extraControlsHtml = '') {
       </button>
       <button class="pa-legend-chip ${chartSeries.cacheHitPct ? 'active' : ''}" data-series="cacheHitPct" title="Toggle Prompt Cache Hit %">
         <span class="pa-legend-color" style="background:#06b6d4"></span> Cache Hit %
+      </button>
+      <button class="pa-legend-chip ${chartSeries.errors ? 'active' : ''}" data-series="errors" title="Toggle ⚠️ Error / Retry Indicators on Turns">
+        <span class="pa-legend-color" style="background:#ef4444"></span> ⚠️ Errors
       </button>
       <button class="pa-legend-chip ${chartSeries.stepLatency ? 'active' : ''}" data-series="stepLatency" title="Toggle Step Latency (s)">
         <span class="pa-legend-color" style="background:#6366f1"></span> Latency (s)
@@ -637,6 +641,32 @@ function renderAnalytics(contentEl) {
             ✓ Offloads raw bulk logs to disk at write-time, keeping only compact Head+Tail snippets in prompt.
           </div>
         </div>
+
+        <!-- Tool Errors & Retries Card -->
+        <div class="panel" style="background:var(--bg-2);border:1px solid var(--border);border-left:4px solid ${calls.filter(c => c.hasError).length > 0 ? '#ef4444' : '#6b7280'};padding:12px;border-radius:var(--radius-sm)">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <span style="font-weight:bold;font-size:11.5px;color:${calls.filter(c => c.hasError).length > 0 ? '#ef4444' : 'var(--text-3)'}">⚠️ Tool Errors & Retries</span>
+            <span class="mono" style="font-size:11px;font-weight:bold;color:${calls.filter(c => c.hasError).length > 0 ? '#ef4444' : 'var(--text-3)'}">${calls.filter(c => c.hasError).length} calls</span>
+          </div>
+          <div style="font-size:10.5px;color:var(--text-3);margin-bottom:8px">
+            ${calls.filter(c => c.hasError).length > 0 ? `${calls.filter(c => c.hasError).length} tool operations failed or triggered retries:` : 'Clean execution — 0 tool errors encountered.'}
+          </div>
+          ${calls.filter(c => c.hasError).length > 0 ? `
+            <div style="display:flex;flex-direction:column;gap:4px;max-height:120px;overflow-y:auto">
+              ${calls.filter(c => c.hasError).slice(0, 10).map(c => `
+                <div class="pa-summary-row" title="Call #${c.index + 1}: ${escHtml(c.errorDetails?.message || 'Error')}" data-call-index="${c.index}" style="display:flex;justify-content:space-between;font-size:10px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.25);padding:4px 8px;border-radius:3px;cursor:pointer;transition:background 0.15s">
+                  <span style="color:#f87171;font-weight:bold">#${c.index + 1} (${escHtml(c.errorDetails?.tool || 'tool')})</span>
+                  <span style="color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px">${escHtml(c.errorDetails?.message || '')}</span>
+                </div>
+              `).join('')}
+              ${calls.filter(c => c.hasError).length > 10 ? `<div style="font-size:9.5px;color:var(--text-3);text-align:center">+${calls.filter(c => c.hasError).length - 10} more error turns</div>` : ''}
+            </div>
+          ` : `
+            <div style="font-size:11px;color:var(--green);background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.25);padding:8px;border-radius:2px;margin-top:10px">
+              ✓ All tool executions succeeded without any failure errors.
+            </div>
+          `}
+        </div>
       </div>
     </div>
 
@@ -668,6 +698,7 @@ function renderAnalytics(contentEl) {
             <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:2px;background:#06b6d4;display:inline-block"></span> 💻 Cmd Truncated</span>
             <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:2px;background:#e879f9;display:inline-block"></span> ⚡ Scratch Offloaded</span>
             <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:2px;background:#10b981;display:inline-block"></span> ✂️ History Pruned</span>
+            <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:2px;background:#ef4444;display:inline-block"></span> ⚠️ Tool Error</span>
           </div>
           <span style="color:#38bdf8;font-weight:600;font-size:11px">💡 Tip: Click any bar in the graph to isolate & view that turn's files</span>
         </div>
@@ -919,6 +950,7 @@ function renderCompareAnalyticsView(contentEl, taskIds) {
               <th style="padding:10px">Duration</th>
               <th style="padding:10px">Cache Hit %</th>
               <th style="padding:10px">Pruned Context</th>
+              <th style="padding:10px">⚠️ Errors</th>
               <th style="padding:10px">Primary Model</th>
             </tr>
           </thead>
@@ -942,6 +974,7 @@ function renderCompareAnalyticsView(contentEl, taskIds) {
               const cmdSaved = (cats.truncatedCommands || []).reduce((s, c) => s + c.bytesSaved, 0);
               const scratchSaved = d.scratchSummary?.totalSavedBytes || 0;
               const totalPruned = fileSaved + cmdSaved + (cats.environmentSnapshots?.bytesSaved || 0) + scratchSaved;
+              const errCount = d.errorSummary?.count || calls.filter(c => c.hasError).length;
 
               const modelLabel = d.financialBreakdown?.modelId || calls.find(c => c.modelId)?.modelId || 'Unknown';
 
@@ -955,6 +988,7 @@ function renderCompareAnalyticsView(contentEl, taskIds) {
                   <td class="mono" style="padding:10px">${fmtDuration(durationMs)}</td>
                   <td class="mono" style="padding:10px;color:#06b6d4;font-weight:bold">${cacheHitPct}%</td>
                   <td class="mono" style="padding:10px;color:#38bdf8">${fmtBytes(totalPruned)}</td>
+                  <td class="mono" style="padding:10px;font-weight:bold;color:${errCount > 0 ? '#ef4444' : 'var(--text-3)'}">${errCount > 0 ? `⚠️ ${errCount}` : '0'}</td>
                   <td style="padding:10px;color:var(--text-2);font-family:monospace;font-size:10.5px">${escHtml(modelLabel)}</td>
                 </tr>
               `;
@@ -1308,16 +1342,23 @@ function renderCompareStepInspector(taskIds, stepIdx) {
       `;
     }
 
-    const hitBadge = call.cacheReads > 0 ? '<span style="background:rgba(34,197,94,0.15);color:var(--green);padding:2px 6px;border-radius:8px;font-weight:bold;font-size:9.5px">🎯 Cache Hit</span>' : '<span style="color:var(--text-3);font-size:9.5px">Uncached</span>';
+    const hitBadge = call.hasError
+      ? '<span style="background:rgba(239,68,68,0.18);color:#f87171;padding:2px 6px;border-radius:8px;font-weight:bold;font-size:9.5px">⚠️ Tool Error</span>'
+      : (call.cacheReads > 0 ? '<span style="background:rgba(34,197,94,0.15);color:var(--green);padding:2px 6px;border-radius:8px;font-weight:bold;font-size:9.5px">🎯 Cache Hit</span>' : '<span style="color:var(--text-3);font-size:9.5px">Uncached</span>');
 
     return `
-      <div class="panel" style="background:var(--bg-2);border:1px solid var(--border);border-left:4px solid #38bdf8;padding:12px;border-radius:var(--radius-sm)">
+      <div class="panel" style="background:var(--bg-2);border:1px solid var(--border);border-left:4px solid ${call.hasError ? '#ef4444' : '#38bdf8'};padding:12px;border-radius:var(--radius-sm)">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
           <div style="display:flex;align-items:center;gap:6px;overflow:hidden;max-width:210px">
             ${labelHeader}
           </div>
           ${hitBadge}
         </div>
+        ${call.hasError ? `
+          <div style="font-size:10px;color:#f87171;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.25);padding:4px 6px;border-radius:3px;margin-bottom:8px;line-height:1.3">
+            <strong>⚠️ Error (${escHtml(call.errorDetails?.tool || 'tool')}):</strong> ${escHtml(call.errorDetails?.message || 'Tool execution failed')}
+          </div>
+        ` : ''}
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:10.5px;background:var(--bg-3);padding:8px;border-radius:var(--radius-sm)">
           <div>
             <span style="color:var(--text-3)">📦 Payload:</span> <strong style="color:#38bdf8">${fmtBytes(call.requestSize)}</strong>
@@ -1881,6 +1922,8 @@ function filterReductionEvents(events, category, searchQuery = '') {
     res = res.filter(e => e.category === 'Stale Environment Snapshot Removed');
   } else if (category === 'SCRATCH') {
     res = res.filter(e => e.isScratch || e.scratchFilename || (e.category && e.category.includes('Scratch')));
+  } else if (category === 'ERROR' || category === 'ERRORS') {
+    res = res.filter(e => e.isError || e.category === 'Tool Error' || (e.category && e.category.includes('Error')));
   }
 
   if (searchQuery && searchQuery.trim()) {
@@ -1931,11 +1974,13 @@ function renderReductionSequenceFeed(body, events) {
   const countSkills = filterReductionEvents(queryFiltered, 'SKILL').length;
   const countEnv = filterReductionEvents(queryFiltered, 'ENV').length;
   const countScratch = filterReductionEvents(queryFiltered, 'SCRATCH').length;
+  const countErrors = filterReductionEvents(queryFiltered, 'ERROR').length;
 
   const filterBar = document.getElementById('pa-cat-filters-bar');
   if (filterBar) {
     const pills = [
       { cat: 'ALL', label: `All (${countAll})` },
+      countErrors > 0 ? { cat: 'ERROR', label: `⚠️ Errors (${countErrors})` } : null,
       countSys > 0 ? { cat: 'SYSTEM', label: `🛡️ System (${countSys})` } : null,
       countReads > 0 ? { cat: 'FILE_READ', label: `📁 Reads (${countReads})` } : null,
       countEdits > 0 ? { cat: 'FILE_EDIT', label: `📝 Edits (${countEdits})` } : null,
@@ -2442,6 +2487,9 @@ function renderReductionEventCard(ev, defaultExpanded = false) {
   if (ev.isSystemPrompt || ev.category.includes('System')) {
     icon = '🛡️';
     catColor = '#38bdf8';
+  } else if (ev.isError || ev.category === 'Tool Error' || (ev.category && ev.category.includes('Error'))) {
+    icon = '⚠️';
+    catColor = '#ef4444';
   } else if (ev.category === 'File Read Truncated' || ev.toolName === 'read_file') {
     icon = '📁';
     catColor = 'var(--green)';
@@ -2474,6 +2522,9 @@ function renderReductionEventCard(ev, defaultExpanded = false) {
     bytesSaved: ev.bytesSaved,
     isScratch: ev.isScratch,
     isSystemPrompt: ev.isSystemPrompt,
+    isError: ev.isError,
+    errorMessage: ev.errorMessage,
+    errorDetails: ev.errorDetails,
     scratchFilename: ev.scratchFilename,
     toolName: ev.toolName,
   };
@@ -2492,24 +2543,30 @@ function renderDiffBoxMarkup(item, prevCallIdx, callIdx, category, targetName, i
   const bytesDelta = item.bytesDelta != null ? item.bytesDelta : (afterSize - beforeSize);
   const isExpanded = bytesDelta > 10;
   const isReduced = bytesDelta < -10;
-  const metricColor = isExpanded ? '#f59e0b' : (isReduced ? 'var(--green)' : '#38bdf8');
-  const metricLabel = isExpanded
-    ? `Expanded ${fmtBytes(bytesDelta)}`
-    : (isReduced ? `Saved ${fmtBytes(Math.abs(bytesDelta))}` : 'Base Context');
   const isScratch = !!item.isScratch;
   const isSys = !!item.isSystemPrompt;
+  const isErr = !!item.isError;
 
-  const bannerTitle = isSys
-    ? `🛡️ SYSTEM INSTRUCTIONS & BASE CONTEXT SENT IN PROMPT:`
-    : (isScratch
-      ? `✂️ EXACT BULK OUTPUT OFFLOADED TO DISK (scratch/${escHtml(item.scratchFilename || '')}):`
-      : (isExpanded
-        ? `🟢 EXACT CONTENT ADDED IN CALL #${callIdx + 1}:`
-        : (isReduced ? `✂️ EXACT CONTENT REMOVED FROM CALL #${prevCallIdx + 1}:` : '🔁 EXACT CONTENT CHANGED:')));
+  const metricColor = isErr ? '#ef4444' : (isExpanded ? '#f59e0b' : (isReduced ? 'var(--green)' : '#38bdf8'));
+  const metricLabel = isErr
+    ? '⚠️ Tool Execution Error'
+    : (isExpanded
+      ? `Expanded ${fmtBytes(bytesDelta)}`
+      : (isReduced ? `Saved ${fmtBytes(Math.abs(bytesDelta))}` : 'Base Context'));
+
+  const bannerTitle = isErr
+    ? `⚠️ TOOL EXECUTION FAILED / RETRY ON CALL #${callIdx + 1}:`
+    : (isSys
+      ? `🛡️ SYSTEM INSTRUCTIONS & BASE CONTEXT SENT IN PROMPT:`
+      : (isScratch
+        ? `✂️ EXACT BULK OUTPUT OFFLOADED TO DISK (scratch/${escHtml(item.scratchFilename || '')}):`
+        : (isExpanded
+          ? `🟢 EXACT CONTENT ADDED IN CALL #${callIdx + 1}:`
+          : (isReduced ? `✂️ EXACT CONTENT REMOVED FROM CALL #${prevCallIdx + 1}:` : '🔁 EXACT CONTENT CHANGED:'))));
   const bannerText = isExpanded ? insertedText : (removedText || insertedText || '(Content changed)');
-  const bannerColor = isSys ? '#38bdf8' : (isExpanded ? 'var(--green)' : (isReduced ? 'var(--red)' : '#38bdf8'));
-  const bannerBg = isSys ? 'rgba(56,189,248,0.08)' : (isExpanded ? 'rgba(34,197,94,0.08)' : (isReduced ? 'rgba(239,68,68,0.08)' : 'rgba(56,189,248,0.08)'));
-  const callSubtext = isSys ? `Call #1 (Base System Context)` : (isScratch ? `Call #${callIdx + 1} (Write-Time Scratch Offload)` : `Call #${prevCallIdx + 1} → Call #${callIdx + 1}`);
+  const bannerColor = isErr ? '#ef4444' : (isSys ? '#38bdf8' : (isExpanded ? 'var(--green)' : (isReduced ? 'var(--red)' : '#38bdf8')));
+  const bannerBg = isErr ? 'rgba(239,68,68,0.08)' : (isSys ? 'rgba(56,189,248,0.08)' : (isExpanded ? 'rgba(34,197,94,0.08)' : (isReduced ? 'rgba(239,68,68,0.08)' : 'rgba(56,189,248,0.08)')));
+  const callSubtext = isErr ? `Call #${callIdx + 1} (Tool Error / Retry)` : (isSys ? `Call #1 (Base System Context)` : (isScratch ? `Call #${callIdx + 1} (Write-Time Scratch Offload)` : `Call #${prevCallIdx + 1} → Call #${callIdx + 1}`));
   const beforeHeader = isScratch ? `🔴 RAW UNTRUNCATED OUTPUT (scratch/${escHtml(item.scratchFilename || '')})` : `🔴 BEFORE in Call #${prevCallIdx + 1}`;
   const afterHeader = isScratch ? `🟢 RETAINED PROMPT (Sent to LLM in Call #${callIdx + 1})` : `🟢 AFTER in Call #${callIdx + 1}`;
 
@@ -2519,29 +2576,42 @@ function renderDiffBoxMarkup(item, prevCallIdx, callIdx, category, targetName, i
     </span>
   ` : '';
 
-  const isInitiallyExpanded = defaultExpanded || isSys;
+  const isInitiallyExpanded = defaultExpanded || isSys || isErr;
 
   return `
-    <div class="pa-sbs-card panel" data-call="${callIdx}" data-target="${escHtml(targetName || '')}" style="border:1px solid ${isSys ? 'rgba(56,189,248,0.35)' : 'var(--border)'};border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-2)">
+    <div class="pa-sbs-card panel" data-call="${callIdx}" data-target="${escHtml(targetName || '')}" style="border:1px solid ${isErr ? 'rgba(239,68,68,0.4)' : (isSys ? 'rgba(56,189,248,0.35)' : 'var(--border)')};border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-2)">
       <div class="pa-card-header" onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'none' ? 'block' : 'none'; const btn = this.querySelector('.pa-card-toggle-btn'); if (btn) btn.innerText = this.nextElementSibling.style.display === 'none' ? '▼ View Diff' : '▲ Hide Diff';" style="background:var(--bg-3);padding:10px 14px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);cursor:pointer;user-select:none">
         <div style="display:flex;align-items:center;gap:10px;overflow:hidden">
           <strong style="color:var(--text);font-size:12px">msg[${item.index}]</strong>
-          <span style="text-transform:uppercase;font-weight:700;color:var(--accent-2);font-size:10.5px">(${item.role})</span>
+          <span style="text-transform:uppercase;font-weight:700;color:${isErr ? '#ef4444' : 'var(--accent-2)'};font-size:10.5px">(${item.role})</span>
           <span style="color:var(--text-3);font-size:11px;white-space:nowrap">${callSubtext}</span>
           ${headerLabel}
         </div>
         <div style="display:flex;align-items:center;gap:10px;white-space:nowrap">
           <span class="mono" style="color:${metricColor};font-weight:bold;font-size:11.5px;background:rgba(255,255,255,0.06);padding:3px 8px;border-radius:var(--radius-sm);border:1px solid rgba(255,255,255,0.12)">
-            ${isSys ? `🛡️ ${fmtBytes(beforeSize)} Base` : `${metricLabel} (${fmtBytes(beforeSize)} → ${fmtBytes(afterSize)})`}
+            ${isErr ? `⚠️ Tool Error` : (isSys ? `🛡️ ${fmtBytes(beforeSize)} Base` : `${metricLabel} (${fmtBytes(beforeSize)} → ${fmtBytes(afterSize)})`)}
           </span>
           <button class="action-btn secondary pa-card-toggle-btn" style="padding:2px 8px;font-size:10px">
-            ${isInitiallyExpanded ? '▲ Hide Diff' : '▼ View Diff'}
+            ${isInitiallyExpanded ? '▲ Hide Details' : '▼ View Details'}
           </button>
         </div>
       </div>
 
       <div class="pa-sbs-body" style="display:${isInitiallyExpanded ? 'block' : 'none'}">
-        ${isSys ? `
+        ${isErr ? `
+          <div style="padding:12px 14px;background:var(--bg-2)">
+            <div style="font-weight:bold;font-size:11px;color:#f87171;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
+              <span>⚠️ TOOL EXECUTION FAILED / RETRY ON CALL #${callIdx + 1} (${escHtml(item.toolName || 'tool')})</span>
+              <div style="display:flex;align-items:center;gap:10px">
+                <span class="mono" style="color:var(--text-3);font-size:10.5px">Payload: <strong>${fmtBytes(beforeSize)}</strong></span>
+                <button class="action-btn secondary" style="padding:2px 8px;font-size:10px;color:#f87171;cursor:pointer" onclick="navigator.clipboard.writeText(this.closest('.pa-sbs-body').querySelector('.mono-error').innerText); this.innerText = '✓ Copied'; setTimeout(() => this.innerText = '📋 Copy', 1500);">📋 Copy</button>
+              </div>
+            </div>
+            <div class="mono mono-error" style="font-size:11px;line-height:1.45;color:#f87171;background:rgba(239,68,68,0.08);padding:10px 12px;border-radius:var(--radius-sm);border:1px solid rgba(239,68,68,0.25);max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all">
+              ${escHtml(item.diffChunks?.insertedText || item.errorMessage || 'Tool execution failed')}
+            </div>
+          </div>
+        ` : (isSys ? `
           <div style="padding:12px 14px;background:var(--bg-2)">
             <div style="font-weight:bold;font-size:11px;color:#38bdf8;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
               <span>🛡️ INITIAL SYSTEM PROMPT INSTRUCTIONS (Static Base Context)</span>
@@ -2580,7 +2650,7 @@ function renderDiffBoxMarkup(item, prevCallIdx, callIdx, category, targetName, i
               </div>
             </div>
           </div>
-        `}
+        `)}
       </div>
     </div>
   `;
@@ -2627,13 +2697,19 @@ function renderCallPillsStrip(calls, container) {
         const hasFile = (c.fileTruncationBytes || 0) > 50 || c.hasFilePruning;
         const hasCmd = (c.commandTruncationBytes || 0) > 50 || c.hasCommandPruning;
         const hasScratch = (c.scratchOffloadedBytes || 0) > 50;
-        const badge = hasFile ? (hasScratch ? '📁⚡' : '📁') : (hasCmd ? '💻' : (hasScratch ? '⚡' : ''));
-        const bg = isFocused ? '#0284c7' : (hasFile ? 'rgba(16,185,129,0.15)' : (hasCmd ? 'rgba(6,182,212,0.15)' : (hasScratch ? 'rgba(232,121,249,0.15)' : 'var(--bg-3)')));
-        const border = isFocused ? '#38bdf8' : (hasFile ? '#10b981' : (hasCmd ? '#06b6d4' : (hasScratch ? '#e879f9' : 'var(--border)')));
-        const color = isFocused ? '#ffffff' : (hasFile ? '#10b981' : (hasCmd ? '#06b6d4' : (hasScratch ? '#e879f9' : 'var(--text-2)')));
+        const hasErr = c.hasError;
+
+        let badge = hasErr ? '⚠️' : (hasFile ? (hasScratch ? '📁⚡' : '📁') : (hasCmd ? '💻' : (hasScratch ? '⚡' : '')));
+        if (hasErr && (hasFile || hasScratch)) badge = hasScratch ? '⚠️⚡' : '⚠️📁';
+
+        const bg = isFocused ? '#0284c7' : (hasErr ? 'rgba(239,68,68,0.18)' : (hasFile ? 'rgba(16,185,129,0.15)' : (hasCmd ? 'rgba(6,182,212,0.15)' : (hasScratch ? 'rgba(232,121,249,0.15)' : 'var(--bg-3)'))));
+        const border = isFocused ? '#38bdf8' : (hasErr ? '#ef4444' : (hasFile ? '#10b981' : (hasCmd ? '#06b6d4' : (hasScratch ? '#e879f9' : 'var(--border)'))));
+        const color = isFocused ? '#ffffff' : (hasErr ? '#f87171' : (hasFile ? '#10b981' : (hasCmd ? '#06b6d4' : (hasScratch ? '#e879f9' : 'var(--text-2)'))));
+
+        const errTitle = hasErr ? ` [⚠️ Error: ${c.errorDetails?.message || 'Failed'}]` : '';
 
         return `
-          <button class="pa-call-pill-btn" data-call="${idx}" style="background:${bg};border:1px solid ${border};color:${color};padding:2px 7px;border-radius:4px;font-size:10.5px;font-weight:bold;cursor:pointer;white-space:nowrap;transition:all 0.15s;display:flex;align-items:center;gap:3px" title="Call #${idx + 1} (${fmtBytes(c.requestSize)}) - Click to isolate & view diff">
+          <button class="pa-call-pill-btn" data-call="${idx}" style="background:${bg};border:1px solid ${border};color:${color};padding:2px 7px;border-radius:4px;font-size:10.5px;font-weight:bold;cursor:pointer;white-space:nowrap;transition:all 0.15s;display:flex;align-items:center;gap:3px" title="Call #${idx + 1} (${fmtBytes(c.requestSize)})${errTitle} - Click to isolate & view diff">
             #${idx + 1}${badge ? `<span style="font-size:9px">${badge}</span>` : ''}
           </button>
         `;
@@ -2889,9 +2965,19 @@ function drawTimelineChart(calls, targetCanvas = null, zoomRange = null, crossha
         barBorderColor = 'rgba(232, 121, 249, 0.9)';
         badgeIcon = '⚡';
         badgeColor = '#e879f9';
+      } else if (c.hasError && chartSeries.errors !== false) {
+        grad.addColorStop(0, '#ef4444');
+        grad.addColorStop(1, 'rgba(239, 68, 68, 0.45)');
+        barBorderColor = 'rgba(239, 68, 68, 0.95)';
+        badgeIcon = '⚠️';
+        badgeColor = '#ef4444';
       } else {
         grad.addColorStop(0, '#38bdf8');
         grad.addColorStop(1, 'rgba(14, 165, 233, 0.45)');
+      }
+
+      if (c.hasError && chartSeries.errors !== false && badgeIcon !== '⚠️') {
+        badgeIcon = `${badgeIcon}⚠️`;
       }
 
       ctx.fillStyle = grad;
@@ -3255,11 +3341,16 @@ function handleChartHover(e, calls, targetCanvas = null, tooltipId = 'pa-chart-t
     ? `<div style="color:#e879f9;font-weight:bold;font-size:10.5px">⚡ Scratch Offloaded: <strong>${fmtBytes(c.scratchOffloadedBytes)}</strong></div>`
     : '';
 
+  const errorHtml = c.hasError
+    ? `<div style="color:#f87171;background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.35);padding:4px 8px;border-radius:4px;font-size:10.5px;margin-bottom:4px;line-height:1.3"><strong>⚠️ Turn Error (${escHtml(c.errorDetails?.tool || 'tool')}):</strong> ${escHtml(c.errorDetails?.message || 'Tool execution failed or error returned on this turn')}</div>`
+    : '';
+
   tooltip.innerHTML = `
     <div style="font-weight:bold;color:var(--text);margin-bottom:4px;display:flex;justify-content:space-between">
       <span>API Call #${foundPt.index + 1}</span>
       <span style="color:var(--text-3);font-weight:normal">${fmtTime(c.ts)} ${elapsedStr ? `<strong style="color:#38bdf8">${elapsedStr}</strong>` : ''}</span>
     </div>
+    ${errorHtml}
     ${modelStr}
     <div style="color:#38bdf8;font-weight:600;font-size:10.5px">📦 Accumulated Payload: <strong>${fmtBytes(c.requestSize)}</strong></div>
     <div style="color:#38bdf8;font-size:10.5px">⚡ Per-Turn New Input: <strong>${fmtBytes(c.turnDeltaSize || Math.max(0, c.sizeDelta))}</strong></div>
