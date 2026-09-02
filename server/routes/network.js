@@ -80,10 +80,10 @@ module.exports = (getStore, getStatus, getClientCount, getMockRules, addMockRule
       });
 
       let responseBody = '';
-      const maxBodySize = 100 * 1024;
+      const maxBodySize = 50 * 1024 * 1024; // 50MB
       try {
         responseBody = rawResBody.length > maxBodySize
-          ? rawResBody.slice(0, maxBodySize).toString('utf-8') + '\n... [truncated]'
+          ? rawResBody.slice(0, maxBodySize).toString('utf-8') + '\n... [payload capped at 50MB]'
           : rawResBody.toString('utf-8');
       } catch (e) {
         responseBody = '[binary data]';

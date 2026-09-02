@@ -81,10 +81,10 @@ function decodeBody(buffer, headers) {
     // Fall back to original buffer
   }
 
-  const maxBodySize = 100 * 1024; // 100KB
+  const maxBodySize = 50 * 1024 * 1024; // 50MB — retain full LLM prompt & completion payloads
   try {
     return decompressed.length > maxBodySize
-      ? decompressed.slice(0, maxBodySize).toString('utf-8') + '\n... [truncated]'
+      ? decompressed.slice(0, maxBodySize).toString('utf-8') + '\n... [payload capped at 50MB]'
       : decompressed.toString('utf-8');
   } catch (e) {
     return '[binary data]';

@@ -295,6 +295,7 @@ let requests = [];
 let selectedRequest = null;
 let activeFilters = { host: 'all', method: '', status: '', search: '', limit: 'all' };
 let activeDetailTab = 'headers';
+let bodyViewModes = { request: 'human', response: 'human' };
 let mockRulesState = [];
 let compareBaseRequest = null;
 
@@ -1462,6 +1463,64 @@ function bindTableEvents() {
 
   // Close detail
   document.getElementById('network-detail-close')?.addEventListener('click', hideDetail);
+
+  // Delegated events for View Mode Switcher and Copy Buttons inside detail body
+  const detailBody = document.getElementById('network-detail-body');
+  if (detailBody && !detailBody._hasBoundDelegated) {
+    detailBody._hasBoundDelegated = true;
+    detailBody.addEventListener('click', (e) => {
+      // 1. View Mode Switcher
+      const viewBtn = e.target.closest('.network-view-btn');
+      if (viewBtn) {
+        e.stopPropagation();
+        const tabType = viewBtn.dataset.tabType;
+        const mode = viewBtn.dataset.mode;
+        if (tabType && mode) {
+          bodyViewModes[tabType] = mode;
+          if (selectedRequest) renderDetailContent(selectedRequest);
+        }
+        return;
+      }
+
+      // 2. Copy Buttons
+      const copyBtn = e.target.closest('.network-copy-btn');
+      if (copyBtn) {
+        e.stopPropagation();
+        const targetId = copyBtn.dataset.target;
+        let textToCopy = '';
+        if (targetId) {
+          const el = document.getElementById(targetId);
+          if (el) textToCopy = el.innerText || el.textContent;
+        } else if (copyBtn.dataset.copyText) {
+          textToCopy = copyBtn.dataset.copyText;
+        }
+        if (textToCopy) {
+          navigator.clipboard.writeText(textToCopy);
+          const origText = copyBtn.innerHTML;
+          copyBtn.innerHTML = '✓ Copied';
+          setTimeout(() => { copyBtn.innerHTML = origText; }, 1500);
+        }
+        return;
+      }
+
+      // 3. Collapsible Card Headers
+      const collapseHeader = e.target.closest('.network-collapsible-header');
+      if (collapseHeader) {
+        e.stopPropagation();
+        const targetBodyId = collapseHeader.dataset.target;
+        if (targetBodyId) {
+          const targetBody = document.getElementById(targetBodyId);
+          const arrowEl = collapseHeader.querySelector('.network-collapse-arrow');
+          if (targetBody) {
+            const isHidden = targetBody.style.display === 'none';
+            targetBody.style.display = isHidden ? 'block' : 'none';
+            if (arrowEl) arrowEl.textContent = isHidden ? '▼' : '▶';
+          }
+        }
+        return;
+      }
+    });
+  }
 }
 
 // ── Add a request ──
@@ -1607,6 +1666,335 @@ function hideDetail() {
   document.querySelectorAll('.network-table tbody tr').forEach(tr => tr.classList.remove('selected'));
 }
 
+function parseSseStream(text) {
+  if (!text || typeof text !== 'string') return null;
+  const lines = text.split('\n');
+  let accumulatedText = '';
+  let accumulatedReasoning = '';
+  const toolCallsMap = {};
+  let model = '';
+  let finishReason = '';
+  let usage = null;
+  let eventCount = 0;
+  let isSse = false;
+  const rawEvents = [];
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    if (line.startsWith('data:') || line.startsWith('event:')) {
+      isSse = true;
+    }
+    if (line.startsWith('data:')) {
+      eventCount++;
+      const jsonStr = line.slice(5).trim();
+      if (jsonStr === '[DONE]') continue;
+      try {
+        const d = JSON.parse(jsonStr);
+        rawEvents.push(d);
+        if (d.model && !model) model = d.model;
+
+        // OpenAI streaming delta format
+        if (Array.isArray(d.choices)) {
+          for (const choice of d.choices) {
+            if (choice.delta) {
+              if (choice.delta.content) accumulatedText += choice.delta.content;
+              if (choice.delta.reasoning_content) accumulatedReasoning += choice.delta.reasoning_content;
+              if (choice.delta.thinking) accumulatedReasoning += choice.delta.thinking;
+              if (Array.isArray(choice.delta.tool_calls)) {
+                for (const tc of choice.delta.tool_calls) {
+                  const idx = tc.index ?? Object.keys(toolCallsMap).length;
+                  if (!toolCallsMap[idx]) {
+                    toolCallsMap[idx] = { id: tc.id || `call_${idx}`, name: tc.function?.name || '', args: '' };
+                  }
+                  if (tc.function?.name) toolCallsMap[idx].name = tc.function.name;
+                  if (tc.function?.arguments) toolCallsMap[idx].args += tc.function.arguments;
+                }
+              }
+            }
+            if (choice.finish_reason) finishReason = choice.finish_reason;
+          }
+        }
+
+        // Anthropic streaming SSE format
+        if (d.type === 'message_start' && d.message) {
+          if (d.message.model) model = d.message.model;
+          if (d.message.usage) usage = d.message.usage;
+        } else if (d.type === 'content_block_start' && d.content_block) {
+          if (d.content_block.type === 'tool_use') {
+            const idx = d.index ?? Object.keys(toolCallsMap).length;
+            toolCallsMap[idx] = { id: d.content_block.id || `call_${idx}`, name: d.content_block.name || '', args: '' };
+          }
+        } else if (d.type === 'content_block_delta' && d.delta) {
+          if (d.delta.type === 'text_delta' && d.delta.text) {
+            accumulatedText += d.delta.text;
+          } else if (d.delta.type === 'thinking_delta' && d.delta.thinking) {
+            accumulatedReasoning += d.delta.thinking;
+          } else if (d.delta.type === 'input_json_delta' && d.delta.partial_json) {
+            const idx = d.index ?? (Object.keys(toolCallsMap).length - 1);
+            if (toolCallsMap[idx]) toolCallsMap[idx].args += d.delta.partial_json;
+          }
+        } else if (d.type === 'message_delta') {
+          if (d.delta?.stop_reason) finishReason = d.delta.stop_reason;
+          if (d.usage) usage = { ...(usage || {}), ...d.usage };
+        }
+
+        if (d.usage) {
+          usage = d.usage;
+        }
+      } catch (e) {
+        // Skip malformed chunk
+      }
+    }
+  }
+
+  if (!isSse && eventCount === 0) return null;
+
+  const toolCalls = Object.values(toolCallsMap).map(tc => {
+    let parsedArgs = null;
+    try { parsedArgs = JSON.parse(tc.args); } catch { parsedArgs = tc.args; }
+    return { id: tc.id, name: tc.name, args: parsedArgs, rawArgs: tc.args };
+  });
+
+  return {
+    isSse: true,
+    model,
+    text: accumulatedText,
+    reasoning: accumulatedReasoning,
+    toolCalls,
+    finishReason,
+    usage,
+    rawEventsCount: eventCount,
+    rawEvents,
+  };
+}
+
+function parseLlmRequest(bodyStr) {
+  if (!bodyStr) return null;
+  let d = null;
+  try {
+    d = typeof bodyStr === 'object' ? bodyStr : JSON.parse(bodyStr);
+  } catch {
+    return null;
+  }
+  if (!d || typeof d !== 'object') return null;
+
+  const model = d.model || d.modelId || '';
+  let systemPrompt = '';
+  if (typeof d.system === 'string') {
+    systemPrompt = d.system;
+  } else if (Array.isArray(d.system)) {
+    systemPrompt = d.system.map(s => (typeof s === 'string' ? s : s.text || JSON.stringify(s))).join('\n');
+  } else if (d.systemInstruction?.parts) {
+    systemPrompt = d.systemInstruction.parts.map(p => p.text || '').join('\n');
+  }
+
+  const rawMessages = d.messages || d.contents || [];
+  const messages = [];
+
+  if (Array.isArray(rawMessages)) {
+    for (const m of rawMessages) {
+      const role = (m.role || 'user').toLowerCase();
+      if (role === 'system' && !systemPrompt) {
+        systemPrompt = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+        continue;
+      }
+
+      let text = '';
+      const toolCalls = [];
+      let toolResult = null;
+      const images = [];
+
+      // OpenAI tool_calls
+      if (Array.isArray(m.tool_calls)) {
+        for (const tc of m.tool_calls) {
+          let args = null;
+          try { args = JSON.parse(tc.function?.arguments || '{}'); } catch { args = tc.function?.arguments; }
+          toolCalls.push({ id: tc.id, name: tc.function?.name || 'tool', args, rawArgs: tc.function?.arguments });
+        }
+      }
+
+      // OpenAI tool response message
+      if (role === 'tool') {
+        toolResult = {
+          toolCallId: m.tool_call_id,
+          name: m.name,
+          content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content, null, 2)
+        };
+      }
+
+      // Content handling (string or array of blocks)
+      if (typeof m.content === 'string') {
+        text = m.content;
+      } else if (Array.isArray(m.content)) {
+        for (const block of m.content) {
+          if (typeof block === 'string') {
+            text += (text ? '\n' : '') + block;
+          } else if (block.type === 'text') {
+            text += (text ? '\n' : '') + (block.text || '');
+          } else if (block.type === 'tool_use') {
+            toolCalls.push({ id: block.id, name: block.name, args: block.input, rawArgs: JSON.stringify(block.input) });
+          } else if (block.type === 'tool_result') {
+            const resText = typeof block.content === 'string' ? block.content : JSON.stringify(block.content, null, 2);
+            toolResult = {
+              toolCallId: block.tool_use_id,
+              isError: block.is_error,
+              content: resText
+            };
+          } else if (block.type === 'image' || block.type === 'image_url') {
+            images.push(block);
+          }
+        }
+      } else if (Array.isArray(m.parts)) {
+        // Gemini parts
+        for (const p of m.parts) {
+          if (p.text) text += (text ? '\n' : '') + p.text;
+          if (p.functionCall) {
+            toolCalls.push({ name: p.functionCall.name, args: p.functionCall.args, rawArgs: JSON.stringify(p.functionCall.args) });
+          }
+          if (p.functionResponse) {
+            toolResult = { name: p.functionResponse.name, content: JSON.stringify(p.functionResponse.response, null, 2) };
+          }
+        }
+      }
+
+      messages.push({
+        role,
+        text,
+        toolCalls,
+        toolResult,
+        images,
+        raw: m
+      });
+    }
+  }
+
+  // Extract tools
+  const tools = [];
+  const rawTools = d.tools || d.functions || [];
+  if (Array.isArray(rawTools)) {
+    for (const t of rawTools) {
+      if (t.type === 'function' && t.function) {
+        tools.push({ name: t.function.name, description: t.function.description, parameters: t.function.parameters });
+      } else if (t.name) {
+        tools.push({ name: t.name, description: t.description, parameters: t.input_schema || t.parameters });
+      } else if (t.functionDeclarations) {
+        for (const fd of t.functionDeclarations) {
+          tools.push({ name: fd.name, description: fd.description, parameters: fd.parameters });
+        }
+      }
+    }
+  }
+
+  const params = {
+    temperature: d.temperature,
+    max_tokens: d.max_tokens || d.maxOutputTokens,
+    top_p: d.top_p,
+    top_k: d.top_k,
+    stream: d.stream,
+    thinking: d.thinking
+  };
+
+  const isLlm = !!(model || messages.length > 0 || systemPrompt || tools.length > 0);
+
+  return {
+    isLlm,
+    model,
+    systemPrompt,
+    messages,
+    tools,
+    params,
+    raw: d
+  };
+}
+
+function parseLlmResponse(bodyStr, headers) {
+  if (!bodyStr) return null;
+
+  // Check SSE first
+  const isSseHeader = headers && Object.entries(headers).some(([k, v]) => k.toLowerCase() === 'content-type' && String(v).includes('text/event-stream'));
+  if (isSseHeader || bodyStr.startsWith('data:') || bodyStr.includes('\ndata: ') || bodyStr.startsWith('event:')) {
+    const sseResult = parseSseStream(bodyStr);
+    if (sseResult) return { ...sseResult, isLlm: true };
+  }
+
+  let d = null;
+  try {
+    d = typeof bodyStr === 'object' ? bodyStr : JSON.parse(bodyStr);
+  } catch {
+    return null;
+  }
+  if (!d || typeof d !== 'object') return null;
+
+  let model = d.model || '';
+  let text = '';
+  let reasoning = '';
+  const toolCalls = [];
+  let finishReason = '';
+  let usage = d.usage || d.usageMetadata || null;
+  let error = d.error ? (d.error.message || d.error.detail || JSON.stringify(d.error)) : null;
+
+  // OpenAI non-streaming
+  if (Array.isArray(d.choices) && d.choices.length > 0) {
+    const c = d.choices[0];
+    finishReason = c.finish_reason || '';
+    if (c.message) {
+      if (typeof c.message.content === 'string') text = c.message.content;
+      if (c.message.reasoning_content) reasoning = c.message.reasoning_content;
+      if (c.message.thinking) reasoning = c.message.thinking;
+      if (Array.isArray(c.message.tool_calls)) {
+        for (const tc of c.message.tool_calls) {
+          let args = null;
+          try { args = JSON.parse(tc.function?.arguments || '{}'); } catch { args = tc.function?.arguments; }
+          toolCalls.push({ id: tc.id, name: tc.function?.name || 'tool', args, rawArgs: tc.function?.arguments });
+        }
+      }
+    }
+  }
+
+  // Anthropic non-streaming
+  if (Array.isArray(d.content)) {
+    finishReason = d.stop_reason || '';
+    for (const block of d.content) {
+      if (block.type === 'text') {
+        text += (text ? '\n' : '') + (block.text || '');
+      } else if (block.type === 'thinking') {
+        reasoning += (reasoning ? '\n' : '') + (block.thinking || '');
+      } else if (block.type === 'tool_use') {
+        toolCalls.push({ id: block.id, name: block.name, args: block.input, rawArgs: JSON.stringify(block.input) });
+      }
+    }
+  }
+
+  // Gemini non-streaming
+  if (Array.isArray(d.candidates) && d.candidates.length > 0) {
+    const cand = d.candidates[0];
+    finishReason = cand.finishReason || '';
+    if (cand.content?.parts) {
+      for (const p of cand.content.parts) {
+        if (p.text) text += (text ? '\n' : '') + p.text;
+        if (p.functionCall) {
+          toolCalls.push({ name: p.functionCall.name, args: p.functionCall.args, rawArgs: JSON.stringify(p.functionCall.args) });
+        }
+      }
+    }
+  }
+
+  const isLlm = !!(model || text || reasoning || toolCalls.length > 0 || usage || error);
+
+  return {
+    isLlm,
+    model,
+    text,
+    reasoning,
+    toolCalls,
+    finishReason,
+    usage,
+    error,
+    raw: d
+  };
+}
+
 function renderDetailContent(record) {
   const body = document.getElementById('network-detail-body');
   if (!body) return;
@@ -1616,10 +2004,10 @@ function renderDetailContent(record) {
       body.innerHTML = renderHeadersTab(record);
       break;
     case 'request':
-      body.innerHTML = renderBodyTab(record.requestBody, 'Request Body');
+      body.innerHTML = renderRequestTab(record);
       break;
     case 'response':
-      body.innerHTML = renderBodyTab(record.responseBody, 'Response Body');
+      body.innerHTML = renderResponseTab(record);
       break;
     case 'timing':
       body.innerHTML = renderTimingTab(record);
@@ -1627,55 +2015,388 @@ function renderDetailContent(record) {
   }
 }
 
-function renderHeadersTab(r) {
-  const usage = calculateUsageAndCost(r);
+function renderRequestTab(record) {
+  const bodyStr = record.requestBody;
+  if (!bodyStr) {
+    return `<div class="empty-state" style="padding:30px;min-height:auto"><p>No request body</p></div>`;
+  }
+
+  const parsedReq = parseLlmRequest(bodyStr);
+  const currentMode = bodyViewModes.request || 'human';
+
+  const viewToolbar = `
+    <div class="network-view-toolbar">
+      <div class="network-view-modes">
+        <button class="network-view-btn ${currentMode === 'human' ? 'active' : ''}" data-tab-type="request" data-mode="human">
+          💬 Human-Readable
+        </button>
+        <button class="network-view-btn ${currentMode === 'json' ? 'active' : ''}" data-tab-type="request" data-mode="json">
+          { } Pretty JSON
+        </button>
+        <button class="network-view-btn ${currentMode === 'raw' ? 'active' : ''}" data-tab-type="request" data-mode="raw">
+          📄 Raw Payload
+        </button>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="mono" style="font-size:10px;color:var(--text-3)">${fmtBytes(Buffer.byteLength(bodyStr, 'utf8'))}</span>
+        <button class="action-btn secondary network-copy-btn" data-target="net-req-content-pane" style="padding:2px 8px;font-size:10.5px">
+          📋 Copy Payload
+        </button>
+      </div>
+    </div>
+  `;
+
+  let contentHtml = '';
+  if (currentMode === 'human' && parsedReq && parsedReq.isLlm) {
+    contentHtml = renderHumanReadableRequest(parsedReq, record);
+  } else if (currentMode === 'human' && !parsedReq?.isLlm) {
+    // If generic JSON or plain text
+    try {
+      const obj = JSON.parse(bodyStr);
+      contentHtml = `
+        <div class="network-detail-section">
+          <h4 class="network-detail-section-title">Structured JSON Payload</h4>
+          <pre id="net-req-content-pane" class="network-body-pre">${syntaxHighlight(JSON.stringify(obj, null, 2))}</pre>
+        </div>
+      `;
+    } catch {
+      contentHtml = `
+        <div class="network-detail-section">
+          <h4 class="network-detail-section-title">Text Payload</h4>
+          <pre id="net-req-content-pane" class="network-body-pre">${escHtml(bodyStr)}</pre>
+        </div>
+      `;
+    }
+  } else if (currentMode === 'json') {
+    const pretty = prettyJson(bodyStr);
+    contentHtml = `<pre id="net-req-content-pane" class="network-body-pre">${syntaxHighlight(pretty)}</pre>`;
+  } else {
+    contentHtml = `<pre id="net-req-content-pane" class="network-body-pre">${escHtml(bodyStr)}</pre>`;
+  }
+
   return `
-    <div class="network-detail-section">
-      <h4 class="network-detail-section-title">General</h4>
-      <div class="network-kv-table">
-        <div class="network-kv-row"><span class="network-kv-key">Request URL</span><span class="network-kv-val mono">${escHtml(r.url)}</span></div>
-        <div class="network-kv-row"><span class="network-kv-key">Method</span><span class="network-kv-val"><span class="badge ${methodClass(r.method)}">${escHtml(r.method)}</span></span></div>
-        <div class="network-kv-row"><span class="network-kv-key">Status Code</span><span class="network-kv-val"><span class="badge ${statusClass(r.statusCode)}">${r.statusCode || 'Error'}</span>${r.error ? ` <span style="color:var(--red);font-size:11px">${escHtml(r.error)}</span>` : ''}</span></div>
-        <div class="network-kv-row"><span class="network-kv-key">Host</span><span class="network-kv-val mono">${escHtml(r.host)}</span></div>
-        <div class="network-kv-row"><span class="network-kv-key">Tag</span><span class="network-kv-val"><span class="badge ${tagColorClass(r.tag)}">${escHtml(tagLabel(r.tag))}</span></span></div>
-        ${usage ? `
-          <div class="network-kv-row"><span class="network-kv-key">LLM Model</span><span class="network-kv-val mono">${escHtml(usage.model)}</span></div>
-          <div class="network-kv-row"><span class="network-kv-key">Tokens Usage</span><span class="network-kv-val mono">${usage.inputTokens.toLocaleString()} input / ${usage.outputTokens.toLocaleString()} output (${usage.totalTokens.toLocaleString()} total)</span></div>
-          <div class="network-kv-row"><span class="network-kv-key">Estimated Cost</span><span class="network-kv-val mono" style="color:var(--green);font-weight:bold">$${usage.cost.toFixed(5)}</span></div>
-        ` : ''}
-      </div>
+    <div class="network-tab-pane">
+      ${viewToolbar}
+      ${contentHtml}
     </div>
-    <div class="network-detail-section">
-      <h4 class="network-detail-section-title">Request Headers</h4>
-      <div class="network-kv-table">
-        ${Object.entries(r.requestHeaders || {}).map(([k, v]) => `
-          <div class="network-kv-row"><span class="network-kv-key mono">${escHtml(k)}</span><span class="network-kv-val mono">${escHtml(typeof v === 'string' ? v : JSON.stringify(v))}</span></div>
-        `).join('') || '<div class="network-kv-row" style="color:var(--text-3)">No request headers</div>'}
+  `;
+}
+
+function renderHumanReadableRequest(parsed, record) {
+  const model = parsed.model || record.tag || 'LLM';
+  const msgCount = parsed.messages.length;
+  const toolCount = parsed.tools.length;
+  const hasSys = !!parsed.systemPrompt;
+  const sysChars = parsed.systemPrompt ? parsed.systemPrompt.length : 0;
+  const sysTokEst = Math.round(sysChars / 4);
+
+  return `
+    <div id="net-req-content-pane" class="network-human-container">
+      <!-- Top LLM Parameter Chips Bar -->
+      <div class="network-llm-meta-bar">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="font-weight:bold;color:#818cf8;font-size:12.5px;display:flex;align-items:center;gap:5px">
+            <span>🤖</span> ${escHtml(model)}
+          </span>
+          ${parsed.params.stream ? `<span class="badge cyan" style="font-size:9.5px">⚡ Streaming</span>` : ''}
+          ${parsed.params.temperature != null ? `<span class="mono" style="font-size:10px;color:var(--text-3);background:var(--bg-3);padding:1px 6px;border-radius:6px">temp: ${parsed.params.temperature}</span>` : ''}
+          ${parsed.params.max_tokens ? `<span class="mono" style="font-size:10px;color:var(--text-3);background:var(--bg-3);padding:1px 6px;border-radius:6px">max_tokens: ${parsed.params.max_tokens}</span>` : ''}
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;font-size:11px" class="mono">
+          <span style="color:var(--text-2)">💬 <strong>${msgCount}</strong> messages</span>
+          ${toolCount > 0 ? `<span style="color:#f59e0b">🔧 <strong>${toolCount}</strong> tools</span>` : ''}
+        </div>
       </div>
-    </div>
-    <div class="network-detail-section">
-      <h4 class="network-detail-section-title">Response Headers</h4>
-      <div class="network-kv-table">
-        ${Object.entries(r.responseHeaders || {}).map(([k, v]) => `
-          <div class="network-kv-row"><span class="network-kv-key mono">${escHtml(k)}</span><span class="network-kv-val mono">${escHtml(typeof v === 'string' ? v : JSON.stringify(v))}</span></div>
-        `).join('') || '<div class="network-kv-row" style="color:var(--text-3)">No response headers</div>'}
+
+      <!-- System Prompt Card (if present) -->
+      ${hasSys ? `
+        <div class="network-system-card">
+          <div class="network-system-header network-collapsible-header" data-target="net-system-prompt-body">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span class="network-collapse-arrow" style="font-size:10px;color:#38bdf8">▼</span>
+              <span style="font-weight:bold;color:#38bdf8;font-size:11.5px">🛡️ System Prompt Instructions</span>
+              <span class="mono" style="font-size:10px;color:var(--text-3)">(${sysChars.toLocaleString()} chars · ~${sysTokEst.toLocaleString()} tok)</span>
+            </div>
+            <button class="action-btn secondary network-copy-btn" data-target="net-system-prompt-text" style="padding:1px 6px;font-size:9.5px;color:#38bdf8">
+              📋 Copy Prompt
+            </button>
+          </div>
+          <div id="net-system-prompt-body" class="network-system-body">
+            <div id="net-system-prompt-text">${escHtml(parsed.systemPrompt)}</div>
+          </div>
+        </div>
+      ` : ''}
+
+      <!-- Available Tools Card (if present) -->
+      ${toolCount > 0 ? `
+        <div class="network-tools-card">
+          <div class="network-tools-header network-collapsible-header" data-target="net-tools-palette-body">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span class="network-collapse-arrow" style="font-size:10px;color:#f59e0b">▶</span>
+              <span style="font-weight:bold;color:#f59e0b;font-size:11.5px">🔧 Tools & Function Declarations (${toolCount})</span>
+            </div>
+            <span style="font-size:10px;color:var(--text-3)">Click to view schema</span>
+          </div>
+          <div id="net-tools-palette-body" style="display:none;padding:10px;background:var(--bg-1);flex-direction:column;gap:8px">
+            ${parsed.tools.map(t => `
+              <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:4px;padding:8px">
+                <div style="font-weight:bold;color:#f59e0b;font-size:11px;margin-bottom:2px" class="mono">${escHtml(t.name)}</div>
+                ${t.description ? `<div style="font-size:10.5px;color:var(--text-2);margin-bottom:4px">${escHtml(t.description)}</div>` : ''}
+                ${t.parameters ? `
+                  <pre class="network-body-pre" style="max-height:140px;padding:6px;font-size:10px;background:var(--bg-3)">${syntaxHighlight(JSON.stringify(t.parameters, null, 2))}</pre>
+                ` : ''}
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      ` : ''}
+
+      <!-- Conversation Messages Flow -->
+      <div class="network-chat-thread">
+        <div style="font-size:10.5px;font-weight:bold;color:var(--text-3);text-transform:uppercase;letter-spacing:0.06em;margin:4px 0">
+          💬 Conversation History (${msgCount} turns)
+        </div>
+        ${parsed.messages.map((m, idx) => {
+          const roleClass = m.role === 'user' ? 'msg-user' : (m.role === 'assistant' ? 'msg-assistant' : 'msg-tool');
+          const roleIcon = m.role === 'user' ? '👤' : (m.role === 'assistant' ? '🤖' : '🔧');
+          const roleTitle = m.role.toUpperCase();
+
+          return `
+            <div class="network-chat-msg ${roleClass}">
+              <div class="network-msg-header">
+                <div style="display:flex;align-items:center;gap:6px">
+                  <span>${roleIcon}</span>
+                  <strong style="font-size:11px">${roleTitle}</strong>
+                  <span class="mono" style="font-size:10px;color:var(--text-3)">#${idx + 1}</span>
+                </div>
+                <button class="action-btn secondary network-copy-btn" data-target="net-msg-body-${idx}" style="padding:1px 6px;font-size:9.5px">
+                  📋 Copy
+                </button>
+              </div>
+              <div id="net-msg-body-${idx}" class="network-msg-body">
+                ${m.text ? `<div>${escHtml(m.text)}</div>` : ''}
+                
+                ${m.toolCalls && m.toolCalls.length > 0 ? `
+                  <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">
+                    ${m.toolCalls.map(tc => `
+                      <div class="network-tool-call-card">
+                        <div style="font-weight:bold;color:#f59e0b;font-size:10.5px;margin-bottom:3px" class="mono">
+                          ⚡ Tool Invocation: <code>${escHtml(tc.name)}</code>
+                        </div>
+                        <pre class="network-body-pre" style="max-height:160px;padding:6px;font-size:10.5px;background:var(--bg-3)">${syntaxHighlight(typeof tc.args === 'object' ? JSON.stringify(tc.args, null, 2) : tc.rawArgs)}</pre>
+                      </div>
+                    `).join('')}
+                  </div>
+                ` : ''}
+
+                ${m.toolResult ? `
+                  <div style="margin-top:6px;background:rgba(0,0,0,0.25);border:1px solid var(--border);border-radius:4px;padding:8px">
+                    <div style="font-weight:bold;color:var(--text-2);font-size:10.5px;margin-bottom:3px">
+                      📥 Tool Result Output ${m.toolResult.isError ? `<span style="color:var(--red)">(Error)</span>` : ''}
+                    </div>
+                    <pre class="network-body-pre" style="max-height:200px;padding:6px;font-size:10.5px">${escHtml(m.toolResult.content)}</pre>
+                  </div>
+                ` : ''}
+              </div>
+            </div>
+          `;
+        }).join('')}
       </div>
     </div>
   `;
 }
 
-function renderBodyTab(bodyStr, label) {
+function renderResponseTab(record) {
+  const bodyStr = record.responseBody;
   if (!bodyStr) {
-    return `<div class="empty-state" style="padding:30px;min-height:auto"><p>No ${label.toLowerCase()}</p></div>`;
+    return `<div class="empty-state" style="padding:30px;min-height:auto"><p>No response body</p></div>`;
   }
 
-  const pretty = prettyJson(bodyStr);
-  const highlighted = syntaxHighlight(pretty);
+  const parsedRes = parseLlmResponse(bodyStr, record.responseHeaders);
+  const currentMode = bodyViewModes.response || 'human';
+
+  const viewToolbar = `
+    <div class="network-view-toolbar">
+      <div class="network-view-modes">
+        <button class="network-view-btn ${currentMode === 'human' ? 'active' : ''}" data-tab-type="response" data-mode="human">
+          💬 Human-Readable
+        </button>
+        <button class="network-view-btn ${currentMode === 'json' ? 'active' : ''}" data-tab-type="response" data-mode="json">
+          { } ${parsedRes?.isSse ? 'Reconstructed JSON' : 'Pretty JSON'}
+        </button>
+        ${parsedRes?.isSse ? `
+          <button class="network-view-btn ${currentMode === 'sse' ? 'active' : ''}" data-tab-type="response" data-mode="sse">
+            📡 SSE Stream (${parsedRes.rawEventsCount || 0})
+          </button>
+        ` : ''}
+        <button class="network-view-btn ${currentMode === 'raw' ? 'active' : ''}" data-tab-type="response" data-mode="raw">
+          📄 Raw Payload
+        </button>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="mono" style="font-size:10px;color:var(--text-3)">${fmtBytes(record.size || Buffer.byteLength(bodyStr, 'utf8'))}</span>
+        <button class="action-btn secondary network-copy-btn" data-target="net-res-content-pane" style="padding:2px 8px;font-size:10.5px">
+          📋 Copy Response
+        </button>
+      </div>
+    </div>
+  `;
+
+  let contentHtml = '';
+  if (currentMode === 'human' && parsedRes && parsedRes.isLlm) {
+    contentHtml = renderHumanReadableResponse(parsedRes, record);
+  } else if (currentMode === 'human' && !parsedRes?.isLlm) {
+    try {
+      const obj = JSON.parse(bodyStr);
+      contentHtml = `
+        <div class="network-detail-section">
+          <h4 class="network-detail-section-title">Structured JSON Response</h4>
+          <pre id="net-res-content-pane" class="network-body-pre">${syntaxHighlight(JSON.stringify(obj, null, 2))}</pre>
+        </div>
+      `;
+    } catch {
+      contentHtml = `
+        <div class="network-detail-section">
+          <h4 class="network-detail-section-title">Response Content</h4>
+          <pre id="net-res-content-pane" class="network-body-pre">${escHtml(bodyStr)}</pre>
+        </div>
+      `;
+    }
+  } else if (currentMode === 'json') {
+    const jsonOutput = parsedRes?.raw ? JSON.stringify(parsedRes.raw, null, 2) : prettyJson(bodyStr);
+    contentHtml = `<pre id="net-res-content-pane" class="network-body-pre">${syntaxHighlight(jsonOutput)}</pre>`;
+  } else if (currentMode === 'sse') {
+    contentHtml = `<pre id="net-res-content-pane" class="network-body-pre" style="font-size:10px">${escHtml(bodyStr)}</pre>`;
+  } else {
+    contentHtml = `<pre id="net-res-content-pane" class="network-body-pre">${escHtml(bodyStr)}</pre>`;
+  }
 
   return `
-    <div class="network-detail-section">
-      <h4 class="network-detail-section-title">${escHtml(label)}</h4>
-      <pre class="network-body-pre">${highlighted}</pre>
+    <div class="network-tab-pane">
+      ${viewToolbar}
+      ${contentHtml}
+    </div>
+  `;
+}
+
+function renderHumanReadableResponse(parsed, record) {
+  const model = parsed.model || record.tag || 'LLM';
+  const finishReason = parsed.finishReason ? `Finish: ${parsed.finishReason}` : 'Completed';
+  const hasText = !!parsed.text;
+  const hasReasoning = !!parsed.reasoning;
+  const hasTools = parsed.toolCalls && parsed.toolCalls.length > 0;
+  const hasError = !!(parsed.error || record.statusCode >= 400);
+
+  const usage = calculateUsageAndCost(record);
+
+  return `
+    <div id="net-res-content-pane" class="network-human-container">
+      <!-- Top Response Banner -->
+      <div class="network-llm-meta-bar" style="background:rgba(34,197,94,0.06);border-color:rgba(34,197,94,0.25)">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span class="badge ${statusClass(record.statusCode)}">${record.statusCode || 200}</span>
+          <span style="font-weight:bold;color:var(--text);font-size:12px;display:flex;align-items:center;gap:4px">
+            <span>🤖</span> ${escHtml(model)}
+          </span>
+          <span class="mono" style="font-size:10px;color:var(--text-3);background:var(--bg-3);padding:1px 6px;border-radius:6px">
+            ${escHtml(finishReason)}
+          </span>
+          ${parsed.isSse ? `<span class="badge cyan" style="font-size:9.5px">⚡ SSE Streamed (${parsed.rawEventsCount} chunks)</span>` : ''}
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;font-size:11px" class="mono">
+          <span style="color:var(--text-3)">⏱️ ${fmtDuration(record.duration)}</span>
+          ${usage ? `<span style="color:var(--green);font-weight:bold">$${usage.cost.toFixed(5)}</span>` : ''}
+        </div>
+      </div>
+
+      <!-- Error Box (if present) -->
+      ${hasError ? `
+        <div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.35);border-radius:var(--radius-sm);padding:12px">
+          <div style="color:#f87171;font-weight:bold;font-size:11.5px;margin-bottom:4px">⚠️ Upstream LLM Error Response</div>
+          <div class="mono" style="color:#f87171;font-size:11px;white-space:pre-wrap">${escHtml(parsed.error || record.error || 'Request failed with status ' + record.statusCode)}</div>
+        </div>
+      ` : ''}
+
+      <!-- Reasoning / Extended Thinking Box (if present) -->
+      ${hasReasoning ? `
+        <div class="network-thinking-box">
+          <div style="font-weight:bold;color:#f59e0b;font-size:11px;margin-bottom:4px;display:flex;align-items:center;gap:5px">
+            <span>🧠 Model Thinking / Extended Reasoning</span>
+            <span class="mono" style="font-size:9.5px;color:var(--text-3)">(${parsed.reasoning.length.toLocaleString()} chars)</span>
+          </div>
+          <div style="white-space:pre-wrap;max-height:220px;overflow-y:auto;line-height:1.45">${escHtml(parsed.reasoning)}</div>
+        </div>
+      ` : ''}
+
+      <!-- Assistant Generated Output Text -->
+      ${hasText ? `
+        <div class="network-chat-msg msg-assistant">
+          <div class="network-msg-header">
+            <div style="display:flex;align-items:center;gap:6px">
+              <span>🤖</span>
+              <strong style="font-size:11px">Assistant Generated Output</strong>
+              <span class="mono" style="font-size:10px;color:var(--text-3)">(${parsed.text.length.toLocaleString()} chars)</span>
+            </div>
+            <button class="action-btn secondary network-copy-btn" data-target="net-res-assistant-text" style="padding:1px 6px;font-size:9.5px">
+              📋 Copy Text
+            </button>
+          </div>
+          <div id="net-res-assistant-text" class="network-msg-body" style="max-height:420px">
+            ${escHtml(parsed.text)}
+          </div>
+        </div>
+      ` : ''}
+
+      <!-- Tool Invocations by Assistant (if any) -->
+      ${hasTools ? `
+        <div class="network-detail-section">
+          <div style="font-weight:bold;color:#f59e0b;font-size:11.5px;margin-bottom:8px;display:flex;align-items:center;gap:6px">
+            <span>⚡ Tool Calls Requested by Model (${parsed.toolCalls.length})</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            ${parsed.toolCalls.map((tc, idx) => `
+              <div style="background:var(--bg-2);border:1px solid rgba(245,158,11,0.35);border-radius:var(--radius-sm);overflow:hidden">
+                <div style="background:rgba(245,158,11,0.1);padding:6px 12px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(245,158,11,0.2)">
+                  <span class="mono" style="font-weight:bold;color:#f59e0b;font-size:11px">
+                    🔧 #${idx + 1} <code>${escHtml(tc.name)}</code>
+                  </span>
+                  <button class="action-btn secondary network-copy-btn" data-target="net-tc-args-${idx}" style="padding:1px 6px;font-size:9.5px">
+                    📋 Copy Args
+                  </button>
+                </div>
+                <div id="net-tc-args-${idx}" style="padding:8px 12px">
+                  <pre class="network-body-pre" style="max-height:180px;padding:8px;font-size:10.5px;background:var(--bg-3)">${syntaxHighlight(typeof tc.args === 'object' ? JSON.stringify(tc.args, null, 2) : tc.rawArgs)}</pre>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      ` : ''}
+
+      <!-- Token Usage & Cost Summary Card -->
+      ${usage ? `
+        <div class="network-detail-section">
+          <h4 class="network-detail-section-title">Token Usage & Economics</h4>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(130px, 1fr));gap:8px;padding:10px;background:var(--bg-3);border:1px solid var(--border);border-radius:var(--radius-sm)">
+            <div>
+              <div style="font-size:10px;color:var(--text-3)">Input Tokens</div>
+              <div class="mono" style="font-weight:bold;font-size:12px;color:var(--text)">${usage.inputTokens.toLocaleString()}</div>
+            </div>
+            <div>
+              <div style="font-size:10px;color:var(--text-3)">Output Tokens</div>
+              <div class="mono" style="font-weight:bold;font-size:12px;color:#e879f9">${usage.outputTokens.toLocaleString()}</div>
+            </div>
+            <div>
+              <div style="font-size:10px;color:var(--text-3)">Total Tokens</div>
+              <div class="mono" style="font-weight:bold;font-size:12px;color:#38bdf8">${usage.totalTokens.toLocaleString()}</div>
+            </div>
+            <div>
+              <div style="font-size:10px;color:var(--text-3)">Estimated Cost</div>
+              <div class="mono" style="font-weight:bold;font-size:12px;color:var(--green)">$${usage.cost.toFixed(5)}</div>
+            </div>
+          </div>
+        </div>
+      ` : ''}
     </div>
   `;
 }

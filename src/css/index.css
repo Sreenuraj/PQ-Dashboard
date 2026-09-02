@@ -2137,23 +2137,214 @@ html[data-theme="light"] .oneshot-bar-bg {
   font-size: 11px;
   color: var(--text-2);
   white-space: pre-wrap;
-  word-break: break-all;
+  word-break: break-word;
   line-height: 1.6;
   background: var(--bg-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 12px;
-  max-height: 300px;
+  max-height: 520px;
   overflow-y: auto;
   margin: 0;
 }
 
 /* JSON Syntax Highlighting */
-.json-key    { color: var(--blue); }
-.json-string { color: var(--green); }
-.json-number { color: var(--yellow); }
-.json-bool   { color: var(--purple); }
-.json-null   { color: var(--text-3); }
+.json-key    { color: #38bdf8; font-weight: 500; }
+.json-string { color: #34d399; }
+.json-number { color: #fbbf24; }
+.json-bool   { color: #c084fc; font-weight: 600; }
+.json-null   { color: var(--text-3); font-style: italic; }
+
+/* ── Human-Readable Network Inspector Styles ── */
+.network-view-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.network-view-modes {
+  display: flex;
+  gap: 4px;
+  background: var(--bg-3);
+  padding: 3px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+.network-view-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-3);
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  transition: all 0.15s ease;
+}
+
+.network-view-btn:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.network-view-btn.active {
+  background: var(--accent);
+  color: #ffffff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+}
+
+.network-human-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.network-llm-meta-bar {
+  background: rgba(99, 102, 241, 0.08);
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.network-system-card {
+  background: rgba(56, 189, 248, 0.05);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.network-system-header {
+  background: rgba(56, 189, 248, 0.1);
+  padding: 8px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+}
+
+.network-system-body {
+  padding: 12px;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text);
+  background: var(--bg-1);
+  max-height: 280px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+}
+
+.network-tools-card {
+  background: rgba(245, 158, 11, 0.05);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.network-tools-header {
+  background: rgba(245, 158, 11, 0.1);
+  padding: 8px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+}
+
+.network-chat-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.network-chat-msg {
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+}
+
+.network-chat-msg.msg-user {
+  border-color: rgba(56, 189, 248, 0.35);
+  background: rgba(56, 189, 248, 0.03);
+}
+
+.network-chat-msg.msg-assistant {
+  border-color: rgba(129, 140, 248, 0.35);
+  background: rgba(129, 140, 248, 0.03);
+}
+
+.network-chat-msg.msg-tool {
+  border-color: rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.03);
+}
+
+.network-msg-header {
+  padding: 7px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+
+.msg-user .network-msg-header {
+  background: rgba(56, 189, 248, 0.1);
+}
+
+.msg-assistant .network-msg-header {
+  background: rgba(129, 140, 248, 0.1);
+}
+
+.msg-tool .network-msg-header {
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.network-msg-body {
+  padding: 10px 12px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 380px;
+  overflow-y: auto;
+}
+
+.network-thinking-box {
+  background: rgba(245, 158, 11, 0.06);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  font-size: 10.5px;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+
+.network-tool-call-card {
+  background: var(--bg-1);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin-top: 6px;
+}
 
 /* ── Timing Bars ── */
 .network-timing-bar-group {
