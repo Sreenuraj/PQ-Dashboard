@@ -2743,7 +2743,7 @@ function renderDiffBoxMarkup(item, prevCallIdx, callIdx, category, targetName, i
               </div>
             </div>
           </div>
-        `)}
+        `))}
       </div>
     </div>
   `;
