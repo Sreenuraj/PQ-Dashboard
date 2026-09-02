@@ -77,6 +77,7 @@ let chartSeries = {
   cacheHitPct: true,
   stepLatency: false,
   errors: true,
+  subagents: true,
 };
 
 let requestSizeMode = 'accumulated'; // 'accumulated' | 'delta'
@@ -109,11 +110,14 @@ function renderLegendFilterMarkup(extraControlsHtml = '') {
       <button class="pa-legend-chip ${chartSeries.cacheHitPct ? 'active' : ''}" data-series="cacheHitPct" title="Toggle Prompt Cache Hit %">
         <span class="pa-legend-color" style="background:#06b6d4"></span> Cache Hit %
       </button>
+      <button class="pa-legend-chip ${chartSeries.subagents ? 'active' : ''}" data-series="subagents" title="Toggle 🤖 Subagent Parallel Execution Badges on Turns">
+        <span class="pa-legend-color" style="background:#6366f1"></span> 🤖 Subagents
+      </button>
       <button class="pa-legend-chip ${chartSeries.errors ? 'active' : ''}" data-series="errors" title="Toggle ⚠️ Error / Retry Indicators on Turns">
         <span class="pa-legend-color" style="background:#ef4444"></span> ⚠️ Errors
       </button>
       <button class="pa-legend-chip ${chartSeries.stepLatency ? 'active' : ''}" data-series="stepLatency" title="Toggle Step Latency (s)">
-        <span class="pa-legend-color" style="background:#6366f1"></span> Latency (s)
+        <span class="pa-legend-color" style="background:#64748b"></span> Latency (s)
       </button>
       ${extraControlsHtml}
     </div>
@@ -670,18 +674,18 @@ function renderAnalytics(contentEl) {
 
         <!-- Subagents Parallel Runs Card -->
         ${(data.subagentSummary?.hasSubagents) ? `
-        <div class="panel" style="background:var(--bg-2);border:1px solid var(--border);border-left:4px solid #a855f7;padding:12px;border-radius:var(--radius-sm)">
+        <div class="panel" style="background:var(--bg-2);border:1px solid var(--border);border-left:4px solid #6366f1;padding:12px;border-radius:var(--radius-sm)">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-            <span style="font-weight:bold;font-size:11.5px;color:#a855f7">🤖 Subagent Parallel Runs</span>
-            <span class="mono" style="font-size:11px;font-weight:bold;color:#a855f7">${data.subagentSummary.totalWorkers} workers (${data.subagentSummary.totalRuns} runs)</span>
+            <span style="font-weight:bold;font-size:11.5px;color:#818cf8">🤖 Subagent Parallel Runs</span>
+            <span class="mono" style="font-size:11px;font-weight:bold;color:#818cf8">${data.subagentSummary.totalWorkers} workers (${data.subagentSummary.totalRuns} runs)</span>
           </div>
           <div style="font-size:10.5px;color:var(--text-3);margin-bottom:8px">
-            Subagent Cost: <strong style="color:var(--green)">${fmtCost(data.subagentSummary.totalCost)}</strong> · Tools: <strong class="mono">${data.subagentSummary.totalToolCalls}</strong>
+            Cost: <strong style="color:var(--green)">${fmtCost(data.subagentSummary.totalCost)}</strong> · Tokens: <strong class="mono" style="color:var(--text)">↑${fmtTokens(data.subagentSummary.totalInputTokens || 0)} ↓${fmtTokens(data.subagentSummary.totalOutputTokens || 0)}</strong> · Tools: <strong class="mono" style="color:#818cf8">${data.subagentSummary.totalToolCalls}</strong>
           </div>
           <div style="display:flex;flex-direction:column;gap:4px;max-height:120px;overflow-y:auto">
             ${calls.filter(c => c.hasSubagents).map(c => `
-              <div class="pa-summary-row" title="Call #${c.turn}: ${c.subagents?.total || c.subagents?.items?.length || 1} workers (${c.subagents?.modelId || 'subagent'})" data-call-index="${c.index}" style="display:flex;justify-content:space-between;font-size:10px;background:rgba(168,85,247,0.1);border:1px solid rgba(168,85,247,0.25);padding:4px 8px;border-radius:3px;cursor:pointer;transition:background 0.15s">
-                <span style="color:#c084fc;font-weight:bold">#${c.turn} (${c.subagents?.items?.length || c.subagents?.total || 1} workers)</span>
+              <div class="pa-summary-row" title="Call #${c.turn}: ${c.subagents?.total || c.subagents?.items?.length || 1} workers (${c.subagents?.modelId || 'subagent'})" data-call-index="${c.index}" style="display:flex;justify-content:space-between;font-size:10px;background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.25);padding:4px 8px;border-radius:3px;cursor:pointer;transition:background 0.15s">
+                <span style="color:#818cf8;font-weight:bold">#${c.turn} (${c.subagents?.items?.length || c.subagents?.total || 1} workers)</span>
                 <span style="color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px;font-family:monospace">${escHtml((c.subagents?.modelId || '').split('/').pop() || 'worker')}</span>
               </div>
             `).join('')}
@@ -719,6 +723,7 @@ function renderAnalytics(contentEl) {
             <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:2px;background:#06b6d4;display:inline-block"></span> 💻 Cmd Truncated</span>
             <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:2px;background:#e879f9;display:inline-block"></span> ⚡ Scratch Offloaded</span>
             <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:2px;background:#10b981;display:inline-block"></span> ✂️ History Pruned</span>
+            <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:2px;background:#6366f1;display:inline-block"></span> 🤖 Subagents</span>
             <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:2px;background:#ef4444;display:inline-block"></span> ⚠️ Tool Error</span>
           </div>
           <span style="color:#38bdf8;font-weight:600;font-size:11px">💡 Tip: Click any bar in the graph to isolate & view that turn's files</span>
@@ -1975,10 +1980,20 @@ function filterReductionEvents(events, category, searchQuery = '') {
   if (searchQuery && searchQuery.trim()) {
     const q = searchQuery.trim().toLowerCase();
     res = res.filter(e => {
-      return (e.targetName && e.targetName.toLowerCase().includes(q)) ||
-             (e.scratchFilename && e.scratchFilename.toLowerCase().includes(q)) ||
-             (e.toolName && e.toolName.toLowerCase().includes(q)) ||
-             (e.category && e.category.toLowerCase().includes(q));
+      const basicMatch = (e.targetName && e.targetName.toLowerCase().includes(q)) ||
+                         (e.scratchFilename && e.scratchFilename.toLowerCase().includes(q)) ||
+                         (e.toolName && e.toolName.toLowerCase().includes(q)) ||
+                         (e.category && e.category.toLowerCase().includes(q));
+      if (basicMatch) return true;
+      if (e.isSubagent && e.subagentData?.items) {
+        return e.subagentData.items.some(it =>
+          (it.prompt && it.prompt.toLowerCase().includes(q)) ||
+          (it.result && it.result.toLowerCase().includes(q)) ||
+          (it.modelId && it.modelId.toLowerCase().includes(q)) ||
+          (it.latestToolCall && it.latestToolCall.toLowerCase().includes(q))
+        );
+      }
+      return false;
     });
   }
 
@@ -1996,10 +2011,20 @@ function renderReductionSequenceFeed(body, events) {
 
   const queryFiltered = reductionSearchQuery ? callScopeEvents.filter(e => {
     const q = reductionSearchQuery.trim().toLowerCase();
-    return (e.targetName && e.targetName.toLowerCase().includes(q)) ||
-           (e.scratchFilename && e.scratchFilename.toLowerCase().includes(q)) ||
-           (e.toolName && e.toolName.toLowerCase().includes(q)) ||
-           (e.category && e.category.toLowerCase().includes(q));
+    const basicMatch = (e.targetName && e.targetName.toLowerCase().includes(q)) ||
+                       (e.scratchFilename && e.scratchFilename.toLowerCase().includes(q)) ||
+                       (e.toolName && e.toolName.toLowerCase().includes(q)) ||
+                       (e.category && e.category.toLowerCase().includes(q));
+    if (basicMatch) return true;
+    if (e.isSubagent && e.subagentData?.items) {
+      return e.subagentData.items.some(it =>
+        (it.prompt && it.prompt.toLowerCase().includes(q)) ||
+        (it.result && it.result.toLowerCase().includes(q)) ||
+        (it.modelId && it.modelId.toLowerCase().includes(q)) ||
+        (it.latestToolCall && it.latestToolCall.toLowerCase().includes(q))
+      );
+    }
+    return false;
   }) : callScopeEvents;
 
   let filteredEvents = filterReductionEvents(queryFiltered, activeCategoryFilter);
@@ -2537,7 +2562,7 @@ function renderReductionEventCard(ev, defaultExpanded = false) {
     catColor = '#38bdf8';
   } else if (ev.isSubagent || ev.category === 'Subagents' || (ev.category && ev.category.includes('Subagent'))) {
     icon = '🤖';
-    catColor = '#a855f7';
+    catColor = '#818cf8';
   } else if (ev.isError || ev.category === 'Tool Error' || (ev.category && ev.category.includes('Error'))) {
     icon = '⚠️';
     catColor = '#ef4444';
@@ -2585,6 +2610,182 @@ function renderReductionEventCard(ev, defaultExpanded = false) {
   return renderDiffBoxMarkup(item, ev.prevCallIndex, ev.callIndex, ev.category, ev.targetName, icon, catColor, defaultExpanded);
 }
 
+function renderSubagentWorkerCardsMarkup(subagentData, callIdx) {
+  if (!subagentData) return '';
+  const items = subagentData.items || [];
+  const workerCount = items.length || subagentData.total || 1;
+  const totalCost = subagentData.totalCost || items.reduce((s, it) => s + (it.totalCost || 0), 0);
+  const totalIn = subagentData.totalInputTokens || items.reduce((s, it) => s + (it.inputTokens || 0), 0);
+  const totalOut = subagentData.totalOutputTokens || items.reduce((s, it) => s + (it.outputTokens || 0), 0);
+  const totalTools = subagentData.totalToolCalls || items.reduce((s, it) => s + (it.toolCalls || 0), 0);
+  const peakContextPct = subagentData.maxContextUsagePercentage || Math.max(...items.map(it => it.contextUsagePercentage || 0), 0);
+  const primaryModel = subagentData.modelId || (items[0]?.modelId) || 'subagent';
+
+  const cardId = `subagent-deck-${callIdx}`;
+
+  return `
+    <div id="${cardId}" class="pa-subagent-deck" style="padding:14px;background:var(--bg-2)">
+      <!-- Top Aggregate Subagent Banner -->
+      <div style="background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.3);border-radius:var(--radius-sm);padding:12px;margin-bottom:12px">
+        <div style="font-weight:bold;font-size:12px;color:#818cf8;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <span style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:14px">🤖</span>
+            <span>PARALLEL SUBAGENTS EXECUTED ON CALL #${callIdx + 1}</span>
+            <span class="mono" style="background:rgba(99,102,241,0.2);color:#c7d2fe;padding:2px 8px;border-radius:8px;font-size:10.5px;font-weight:bold">
+              ${escHtml(primaryModel)}
+            </span>
+          </span>
+          <div style="display:flex;align-items:center;gap:12px">
+            <span class="mono" style="color:var(--green);font-size:12px;font-weight:bold">Total Cost: ${fmtCost(totalCost)}</span>
+          </div>
+        </div>
+
+        <!-- 5-Column Summary Metrics -->
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(130px, 1fr));gap:8px;font-size:11px">
+          <div style="background:var(--bg-2);padding:6px 10px;border-radius:4px;border:1px solid var(--border)">
+            <div style="color:var(--text-3);font-size:10px;margin-bottom:2px">Parallel Workers</div>
+            <div class="mono" style="font-weight:bold;color:var(--text)">${workerCount} Workers</div>
+          </div>
+          <div style="background:var(--bg-2);padding:6px 10px;border-radius:4px;border:1px solid var(--border)">
+            <div style="color:var(--text-3);font-size:10px;margin-bottom:2px">Input Tokens</div>
+            <div class="mono" style="font-weight:bold;color:#38bdf8">↑${fmtTokens(totalIn)}</div>
+          </div>
+          <div style="background:var(--bg-2);padding:6px 10px;border-radius:4px;border:1px solid var(--border)">
+            <div style="color:var(--text-3);font-size:10px;margin-bottom:2px">Output Tokens</div>
+            <div class="mono" style="font-weight:bold;color:#e879f9">↓${fmtTokens(totalOut)}</div>
+          </div>
+          <div style="background:var(--bg-2);padding:6px 10px;border-radius:4px;border:1px solid var(--border)">
+            <div style="color:var(--text-3);font-size:10px;margin-bottom:2px">Tools Executed</div>
+            <div class="mono" style="font-weight:bold;color:#818cf8">🔧 ${totalTools} calls</div>
+          </div>
+          <div style="background:var(--bg-2);padding:6px 10px;border-radius:4px;border:1px solid var(--border)">
+            <div style="color:var(--text-3);font-size:10px;margin-bottom:2px">Peak Context Used</div>
+            <div class="mono" style="font-weight:bold;color:${peakContextPct >= 80 ? '#ef4444' : peakContextPct >= 50 ? '#f59e0b' : '#10b981'}">🪟 ${peakContextPct.toFixed(1)}%</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Worker Selector Sub-Tabs (if multiple workers) -->
+      ${items.length > 1 ? `
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:12px;overflow-x:auto;padding-bottom:4px">
+          <span style="font-size:11px;font-weight:bold;color:var(--text-3);margin-right:4px">View:</span>
+          <button class="action-btn primary pa-sub-tab-btn" data-target="all" style="padding:3px 10px;font-size:10.5px;cursor:pointer;border-radius:12px">
+            👥 All Workers (${items.length})
+          </button>
+          ${items.map((it, idx) => `
+            <button class="action-btn secondary pa-sub-tab-btn" data-target="worker-${it.index || idx + 1}" style="padding:3px 10px;font-size:10.5px;cursor:pointer;border-radius:12px">
+              🤖 Worker #${it.index || idx + 1} (${escHtml((it.modelId || primaryModel).split('/').pop())})
+            </button>
+          `).join('')}
+        </div>
+      ` : ''}
+
+      <!-- Subagent Workers List -->
+      <div class="pa-workers-list" style="display:flex;flex-direction:column;gap:14px">
+        ${items.map((it, idx) => {
+          const wNum = it.index || idx + 1;
+          const wModel = it.modelId || primaryModel || 'subagent';
+          const wCtxPct = it.contextUsagePercentage != null ? it.contextUsagePercentage : (it.contextTokens && it.contextWindow ? (it.contextTokens / it.contextWindow * 100) : 0);
+          const ctxBarColor = wCtxPct >= 80 ? '#ef4444' : wCtxPct >= 50 ? '#f59e0b' : '#10b981';
+          const promptChars = (it.prompt || '').length;
+          const promptTokensEst = Math.round(promptChars / 4);
+          const resultChars = (it.result || '').length;
+
+          return `
+            <div class="pa-worker-card" data-worker-id="worker-${wNum}" style="background:var(--bg-3);border:1px solid rgba(99,102,241,0.35);border-radius:var(--radius-sm);overflow:hidden;box-shadow:var(--shadow-sm)">
+              <!-- Worker Header Bar -->
+              <div style="background:rgba(99,102,241,0.1);padding:10px 14px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(99,102,241,0.25);flex-wrap:wrap;gap:8px">
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                  <span style="font-weight:bold;color:#818cf8;font-size:12.5px;display:flex;align-items:center;gap:4px">
+                    <span>🤖</span> Worker #${wNum}
+                  </span>
+                  <span class="mono" style="font-size:10.5px;color:var(--text-2);background:var(--bg-2);border:1px solid var(--border);padding:2px 8px;border-radius:8px">
+                    ${escHtml(wModel)}
+                  </span>
+                  <span style="font-size:10.5px;padding:2px 8px;border-radius:8px;font-weight:bold;background:${it.status === 'completed' ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)'};color:${it.status === 'completed' ? 'var(--green)' : '#f59e0b'}">
+                    ${it.status === 'completed' ? '✓ Completed' : '⏸ ' + (it.status || 'Running')}
+                  </span>
+                </div>
+                <div style="display:flex;align-items:center;gap:12px;font-size:11px" class="mono">
+                  <span style="color:var(--text-2)">🔧 <strong>${it.toolCalls || 0}</strong> tool calls</span>
+                  <span style="color:var(--green);font-weight:bold">${fmtCost(it.totalCost || 0)}</span>
+                </div>
+              </div>
+
+              <!-- Worker Token & Context Metrics Grid -->
+              <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(130px, 1fr));gap:8px;padding:10px 14px;background:var(--bg-2);border-bottom:1px solid var(--border)">
+                <div>
+                  <div style="font-size:10px;color:var(--text-3);margin-bottom:2px">📥 Input Tokens</div>
+                  <div class="mono" style="font-weight:bold;font-size:12px;color:var(--text)">${fmtTokens(it.inputTokens || 0)}</div>
+                </div>
+                <div>
+                  <div style="font-size:10px;color:var(--text-3);margin-bottom:2px">📤 Output Tokens</div>
+                  <div class="mono" style="font-weight:bold;font-size:12px;color:#e879f9">${fmtTokens(it.outputTokens || 0)}</div>
+                </div>
+                <div>
+                  <div style="font-size:10px;color:var(--text-3);margin-bottom:2px">💵 Worker Cost</div>
+                  <div class="mono" style="font-weight:bold;font-size:12px;color:var(--green)">${fmtCost(it.totalCost || 0)}</div>
+                </div>
+                <div style="grid-column:span 2">
+                  <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-3);margin-bottom:3px">
+                    <span>🪟 Context Window Utilization</span>
+                    <span class="mono" style="color:${ctxBarColor};font-weight:bold">${wCtxPct.toFixed(1)}% (${fmtTokens(it.contextTokens || 0)} / ${fmtTokens(it.contextWindow || 200000)})</span>
+                  </div>
+                  <div style="width:100%;height:6px;background:var(--bg-3);border-radius:3px;overflow:hidden;border:1px solid var(--border)">
+                    <div style="width:${Math.min(100, Math.max(3, wCtxPct))}%;height:100%;background:${ctxBarColor};border-radius:3px"></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Worker Prompt & Findings Body -->
+              <div style="padding:12px 14px;font-size:11px">
+                <!-- Delegated Prompt / Goal Section -->
+                <div style="margin-bottom:12px">
+                  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                    <div style="font-weight:bold;color:#818cf8;font-size:11px;display:flex;align-items:center;gap:6px">
+                      <span>🎯 Delegated Goal & Full Request Prompt</span>
+                      <span class="mono" style="color:var(--text-3);font-size:9.5px;font-weight:normal">(${promptChars.toLocaleString()} chars · ~${promptTokensEst.toLocaleString()} tok)</span>
+                    </div>
+                    <button class="action-btn secondary" style="padding:2px 8px;font-size:10px;color:#818cf8;cursor:pointer" onclick="navigator.clipboard.writeText(this.closest('.pa-worker-card').querySelector('.pa-prompt-content').innerText); this.innerText = '✓ Copied'; setTimeout(() => this.innerText = '📋 Copy Prompt', 1500);">
+                      📋 Copy Prompt
+                    </button>
+                  </div>
+                  <div class="pa-prompt-content" style="background:var(--bg-1);padding:10px 12px;border-radius:4px;border:1px solid rgba(99,102,241,0.25);color:var(--text);font-size:11px;max-height:220px;overflow-y:auto;white-space:pre-wrap;line-height:1.45;font-family:inherit">
+                    ${escHtml(it.prompt || '(No prompt provided)')}
+                  </div>
+                </div>
+
+                <!-- Returned Findings & Output Results -->
+                ${it.result ? `
+                  <div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                      <div style="font-weight:bold;color:var(--green);font-size:11px;display:flex;align-items:center;gap:6px">
+                        <span>📋 Findings & Returned Result Output</span>
+                        <span class="mono" style="color:var(--text-3);font-size:9.5px;font-weight:normal">(${resultChars.toLocaleString()} chars)</span>
+                      </div>
+                      <button class="action-btn secondary" style="padding:2px 8px;font-size:10px;color:var(--green);cursor:pointer" onclick="navigator.clipboard.writeText(this.closest('.pa-worker-card').querySelector('.pa-result-content').innerText); this.innerText = '✓ Copied'; setTimeout(() => this.innerText = '📋 Copy Result', 1500);">
+                        📋 Copy Result
+                      </button>
+                    </div>
+                    <div class="mono pa-result-content" style="background:var(--bg-1);padding:10px 12px;border-radius:4px;border:1px solid var(--border);color:var(--text);font-size:11px;max-height:360px;overflow-y:auto;white-space:pre-wrap;line-height:1.5;word-break:break-word">
+                      ${escHtml(it.result)}
+                    </div>
+                  </div>
+                ` : (it.latestToolCall ? `
+                  <div style="color:var(--text-3);font-size:10.5px;background:var(--bg-1);padding:8px 10px;border-radius:4px;border:1px solid var(--border);display:flex;align-items:center;gap:8px">
+                    <span>⚡ Latest Tool Call:</span>
+                    <code style="color:#818cf8;background:rgba(99,102,241,0.15);padding:2px 6px;border-radius:4px">${escHtml(it.latestToolCall)}</code>
+                  </div>
+                ` : '')}
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+  `;
+}
+
 function renderDiffBoxMarkup(item, prevCallIdx, callIdx, category, targetName, icon, catColor, defaultExpanded = false) {
   const diff = item.diffChunks || {};
   const prefix = diff.prefix || '';
@@ -2601,7 +2802,7 @@ function renderDiffBoxMarkup(item, prevCallIdx, callIdx, category, targetName, i
   const isErr = !!item.isError;
   const isSubagent = !!item.isSubagent || category === 'Subagents';
 
-  const metricColor = isSubagent ? '#a855f7' : (isErr ? '#ef4444' : (isExpanded ? '#f59e0b' : (isReduced ? 'var(--green)' : '#38bdf8')));
+  const metricColor = isSubagent ? '#818cf8' : (isErr ? '#ef4444' : (isExpanded ? '#f59e0b' : (isReduced ? 'var(--green)' : '#38bdf8')));
   const metricLabel = isSubagent
     ? '🤖 Subagents Parallel Run'
     : (isErr
@@ -2628,11 +2829,11 @@ function renderDiffBoxMarkup(item, prevCallIdx, callIdx, category, targetName, i
   const isInitiallyExpanded = defaultExpanded || isSys || isErr || isSubagent;
 
   return `
-    <div class="pa-sbs-card panel" data-call="${callIdx}" data-target="${escHtml(targetName || '')}" style="border:1px solid ${isSubagent ? 'rgba(168,85,247,0.4)' : (isErr ? 'rgba(239,68,68,0.4)' : (isSys ? 'rgba(56,189,248,0.35)' : 'var(--border)'))};border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-2)">
+    <div class="pa-sbs-card panel" data-call="${callIdx}" data-target="${escHtml(targetName || '')}" style="border:1px solid ${isSubagent ? 'rgba(99,102,241,0.45)' : (isErr ? 'rgba(239,68,68,0.4)' : (isSys ? 'rgba(56,189,248,0.35)' : 'var(--border)'))};border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-2)">
       <div class="pa-card-header" onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'none' ? 'block' : 'none'; const btn = this.querySelector('.pa-card-toggle-btn'); if (btn) btn.innerText = this.nextElementSibling.style.display === 'none' ? '▼ View Diff' : '▲ Hide Diff';" style="background:var(--bg-3);padding:10px 14px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);cursor:pointer;user-select:none">
         <div style="display:flex;align-items:center;gap:10px;overflow:hidden">
           <strong style="color:var(--text);font-size:12px">msg[${item.index}]</strong>
-          <span style="text-transform:uppercase;font-weight:700;color:${isSubagent ? '#a855f7' : (isErr ? '#ef4444' : 'var(--accent-2)')};font-size:10.5px">(${item.role})</span>
+          <span style="text-transform:uppercase;font-weight:700;color:${isSubagent ? '#818cf8' : (isErr ? '#ef4444' : 'var(--accent-2)')};font-size:10.5px">(${item.role})</span>
           <span style="color:var(--text-3);font-size:11px;white-space:nowrap">${callSubtext}</span>
           ${headerLabel}
         </div>
@@ -2647,51 +2848,9 @@ function renderDiffBoxMarkup(item, prevCallIdx, callIdx, category, targetName, i
       </div>
 
       <div class="pa-sbs-body" style="display:${isInitiallyExpanded ? 'block' : 'none'}">
-        ${isSubagent ? `
-          <div style="padding:14px;background:var(--bg-2)">
-            <div style="font-weight:bold;font-size:11.5px;color:#c084fc;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-              <span style="display:flex;align-items:center;gap:6px">
-                <span>🤖 PARALLEL SUBAGENTS EXECUTED ON CALL #${callIdx + 1}</span>
-                <span class="mono" style="background:rgba(168,85,247,0.2);color:#d8b4fe;padding:1px 8px;border-radius:8px;font-size:10.5px">Model: ${escHtml(item.subagentData?.modelId || (item.subagentData?.items && item.subagentData.items[0]?.modelId) || 'subagent')}</span>
-              </span>
-              <div style="display:flex;align-items:center;gap:12px">
-                <span class="mono" style="color:var(--text-3);font-size:11px">Workers: <strong style="color:var(--text)">${(item.subagentData?.items || []).length || item.subagentData?.total || 1}</strong></span>
-                <span class="mono" style="color:var(--green);font-size:11px">Total Cost: <strong>${fmtCost(item.subagentData?.totalCost || (item.subagentData?.items ? item.subagentData.items.reduce((is, it) => is + (it.totalCost || 0), 0) : 0))}</strong></span>
-              </div>
-            </div>
-
-            <!-- Subagent Workers Container -->
-            <div style="display:flex;flex-direction:column;gap:12px">
-              ${(item.subagentData?.items || []).map((it, idx) => `
-                <div style="background:var(--bg-3);border:1px solid rgba(168,85,247,0.3);border-radius:var(--radius-sm);overflow:hidden">
-                  <div style="background:rgba(168,85,247,0.08);padding:8px 12px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(168,85,247,0.2);flex-wrap:wrap;gap:6px">
-                    <div style="display:flex;align-items:center;gap:8px">
-                      <span style="font-weight:bold;color:#c084fc;font-size:11.5px">Worker #${it.index || idx + 1}</span>
-                      <span class="mono" style="font-size:10px;color:var(--text-3);background:var(--bg-2);padding:1px 6px;border-radius:8px">🤖 ${escHtml(it.modelId || item.subagentData?.modelId || 'subagent')}</span>
-                      <span style="font-size:10px;padding:1px 6px;border-radius:8px;font-weight:bold;background:${it.status === 'completed' ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)'};color:${it.status === 'completed' ? 'var(--green)' : '#f59e0b'}">${it.status || 'completed'}</span>
-                      ${it.contextUsagePercentage != null ? `<span class="mono" style="font-size:10px;color:#38bdf8">Ctx: ${it.contextUsagePercentage.toFixed(1)}%</span>` : ''}
-                    </div>
-                    <div style="display:flex;align-items:center;gap:12px;font-size:10.5px" class="mono">
-                      <span style="color:var(--text-2)">🔧 ${it.toolCalls || 0} tools</span>
-                      <span style="color:var(--green);font-weight:bold">${fmtCost(it.totalCost || 0)}</span>
-                      <span style="color:var(--text-3)">↑${fmtTokens(it.inputTokens || 0)} ↓${fmtTokens(it.outputTokens || 0)}</span>
-                    </div>
-                  </div>
-                  <div style="padding:10px 12px;font-size:11px">
-                    <div style="font-weight:600;color:var(--text-2);margin-bottom:4px;font-size:10.5px">🎯 Delegated Goal / Prompt:</div>
-                    <div style="background:var(--bg-1);padding:6px 10px;border-radius:4px;border:1px solid var(--border);color:var(--text);margin-bottom:10px;font-size:10.5px;max-height:120px;overflow-y:auto;white-space:pre-wrap">${escHtml(it.prompt || '(No prompt provided)')}</div>
-                    ${it.result ? `
-                      <div style="font-weight:600;color:var(--text-2);margin-bottom:4px;font-size:10.5px">📋 Findings & Returned Result:</div>
-                      <div class="mono" style="background:var(--bg-1);padding:8px 10px;border-radius:4px;border:1px solid var(--border);color:var(--text);font-size:10.5px;max-height:240px;overflow-y:auto;white-space:pre-wrap;line-height:1.45">${escHtml(it.result)}</div>
-                    ` : (it.latestToolCall ? `
-                      <div style="color:var(--text-3);font-size:10px;background:var(--bg-1);padding:6px 8px;border-radius:3px">Latest Action: <code style="color:#c084fc">${escHtml(it.latestToolCall)}</code></div>
-                    ` : '')}
-                  </div>
-                </div>
-              `).join('')}
-            </div>
-          </div>
-        ` : (isErr ? `
+        ${isSubagent ? (
+          renderSubagentWorkerCardsMarkup(item.subagentData, callIdx)
+        ) : (isErr ? `
           <div style="padding:12px 14px;background:var(--bg-2)">
             <div style="font-weight:bold;font-size:11px;color:#f87171;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
               <span>⚠️ TOOL EXECUTION FAILED / RETRY ON CALL #${callIdx + 1} (${escHtml(item.toolName || 'tool')})</span>
@@ -3064,12 +3223,12 @@ function drawTimelineChart(calls, targetCanvas = null, zoomRange = null, crossha
         barBorderColor = 'rgba(239, 68, 68, 0.95)';
         badgeIcon = '⚠️';
         badgeColor = '#ef4444';
-      } else if (c.hasSubagents) {
-        grad.addColorStop(0, '#a855f7');
-        grad.addColorStop(1, 'rgba(168, 85, 247, 0.45)');
-        barBorderColor = 'rgba(168, 85, 247, 0.95)';
+      } else if (c.hasSubagents && chartSeries.subagents !== false) {
+        grad.addColorStop(0, '#6366f1');
+        grad.addColorStop(1, 'rgba(99, 102, 241, 0.45)');
+        barBorderColor = 'rgba(99, 102, 241, 0.95)';
         badgeIcon = '🤖';
-        badgeColor = '#c084fc';
+        badgeColor = '#818cf8';
       } else {
         grad.addColorStop(0, '#38bdf8');
         grad.addColorStop(1, 'rgba(14, 165, 233, 0.45)');
@@ -3078,7 +3237,7 @@ function drawTimelineChart(calls, targetCanvas = null, zoomRange = null, crossha
       if (c.hasError && chartSeries.errors !== false && badgeIcon !== '⚠️') {
         badgeIcon = `${badgeIcon}⚠️`;
       }
-      if (c.hasSubagents && !badgeIcon.includes('🤖')) {
+      if (c.hasSubagents && chartSeries.subagents !== false && !badgeIcon.includes('🤖')) {
         badgeIcon = `${badgeIcon}🤖`;
       }
 
@@ -3320,6 +3479,36 @@ function bindAnalyticsEvents(calls) {
       });
     }
   }
+
+  // Delegated click handler for subagent worker deck tabs
+  const compBody = document.getElementById('pa-comparison-body');
+  if (compBody && !compBody._hasSubTabBound) {
+    compBody._hasSubTabBound = true;
+    compBody.addEventListener('click', (e) => {
+      const tabBtn = e.target.closest('.pa-sub-tab-btn');
+      if (!tabBtn) return;
+      e.stopPropagation();
+      const deck = tabBtn.closest('.pa-subagent-deck');
+      if (!deck) return;
+      const target = tabBtn.dataset.target;
+      deck.querySelectorAll('.pa-sub-tab-btn').forEach(b => {
+        if (b === tabBtn) {
+          b.classList.remove('secondary');
+          b.classList.add('primary');
+        } else {
+          b.classList.remove('primary');
+          b.classList.add('secondary');
+        }
+      });
+      deck.querySelectorAll('.pa-worker-card').forEach(card => {
+        if (target === 'all' || card.dataset.workerId === target) {
+          card.style.display = 'block';
+        } else {
+          card.style.display = 'none';
+        }
+      });
+    });
+  }
 }
 
 function redrawTargetCanvas(canvas, calls = null) {
@@ -3448,9 +3637,25 @@ function handleChartHover(e, calls, targetCanvas = null, tooltipId = 'pa-chart-t
     : '';
 
   const subagentHtml = c.hasSubagents && c.subagents
-    ? `<div style="color:#c084fc;background:rgba(168,85,247,0.15);border:1px solid rgba(168,85,247,0.35);padding:4px 8px;border-radius:4px;font-size:10.5px;margin-bottom:4px;line-height:1.3">
-        <strong>🤖 Subagents (${c.subagents.total || c.subagents.items?.length || 1} workers):</strong>
-        <span style="font-family:monospace">${escHtml((c.subagents.modelId || '').split('/').pop() || 'worker')}</span> · Tools: ${c.subagents.toolCalls || 0} · Cost: ${fmtCost(c.subagents.totalCost || (c.subagents.items ? c.subagents.items.reduce((is, it) => is + (it.totalCost || 0), 0) : 0))}
+    ? `<div style="color:#818cf8;background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.4);padding:6px 8px;border-radius:4px;font-size:10.5px;margin-bottom:6px;line-height:1.35">
+        <div style="font-weight:bold;display:flex;justify-content:space-between;margin-bottom:2px">
+          <span>🤖 Subagents (${c.subagents.total || c.subagents.items?.length || 1} workers)</span>
+          <span style="color:var(--green)">${fmtCost(c.subagents.totalCost || (c.subagents.items ? c.subagents.items.reduce((is, it) => is + (it.totalCost || 0), 0) : 0))}</span>
+        </div>
+        <div style="color:var(--text-3);font-size:10px;font-family:monospace">
+          ${escHtml(c.subagents.modelId || 'subagent')} · ${c.subagents.toolCalls || 0} tools
+        </div>
+        ${(c.subagents.items || []).length > 0 ? `
+          <div style="margin-top:4px;display:flex;flex-direction:column;gap:2px;border-top:1px dashed rgba(99,102,241,0.3);padding-top:3px">
+            ${(c.subagents.items || []).slice(0, 4).map((it, idx) => `
+              <div style="font-size:9.5px;display:flex;justify-content:space-between;color:var(--text-2)">
+                <span>W#${it.index || idx + 1}: <strong style="color:var(--text)">${fmtTokens(it.inputTokens || 0)}</strong> tok (${it.toolCalls || 0} tools)</span>
+                <span style="color:var(--green)">${fmtCost(it.totalCost || 0)}</span>
+              </div>
+            `).join('')}
+            ${(c.subagents.items || []).length > 4 ? `<div style="font-size:9px;color:var(--text-3)">+${c.subagents.items.length - 4} more workers</div>` : ''}
+          </div>
+        ` : ''}
        </div>`
     : '';
 

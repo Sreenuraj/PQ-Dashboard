@@ -593,16 +593,40 @@ module.exports = (db, config, getStore) => {
 
       // 3. Check UI messages until the next api_req_started for subagents
       let subagentRun = null;
+      let initialPrompts = [];
       for (let j = i + 1; j < uiMessages.length; j++) {
         const nextM = uiMessages[j];
         if (nextM.say === 'api_req_started') break;
+        if (nextM.say === 'use_subagents' && nextM.text) {
+          try {
+            const parsed = typeof nextM.text === 'string' ? JSON.parse(nextM.text) : nextM.text;
+            if (Array.isArray(parsed.prompts)) {
+              initialPrompts = parsed.prompts;
+            }
+          } catch (e) {}
+        }
         if (nextM.say === 'subagent' && nextM.text) {
           try {
-            const subObj = JSON.parse(nextM.text);
+            const subObj = typeof nextM.text === 'string' ? JSON.parse(nextM.text) : nextM.text;
             if (!subagentRun || subObj.status === 'completed' || (subObj.completed || 0) >= (subagentRun.completed || 0)) {
               subagentRun = subObj;
             }
           } catch (e) {}
+        }
+      }
+
+      if (subagentRun) {
+        if (Array.isArray(subagentRun.items)) {
+          subagentRun.items.forEach((it, idx) => {
+            if (!it.prompt && initialPrompts[idx]) {
+              it.prompt = initialPrompts[idx];
+            }
+          });
+          subagentRun.totalInputTokens = subagentRun.inputTokens != null ? subagentRun.inputTokens : subagentRun.items.reduce((s, it) => s + (it.inputTokens || 0), 0);
+          subagentRun.totalOutputTokens = subagentRun.outputTokens != null ? subagentRun.outputTokens : subagentRun.items.reduce((s, it) => s + (it.outputTokens || 0), 0);
+        } else {
+          subagentRun.totalInputTokens = subagentRun.inputTokens || 0;
+          subagentRun.totalOutputTokens = subagentRun.outputTokens || 0;
         }
       }
 
@@ -1146,6 +1170,8 @@ module.exports = (db, config, getStore) => {
         const items = sub.items || [];
         return s + (sub.outputTokens || items.reduce((is, it) => is + (it.outputTokens || 0), 0));
       }, 0),
+      get totalInputTokens() { return this.totalTokensIn; },
+      get totalOutputTokens() { return this.totalTokensOut; },
       modelsUsed: Array.from(new Set(apiCalls.filter(c => c.hasSubagents && c.subagents).flatMap(c => {
         const sub = c.subagents;
         const res = [];
