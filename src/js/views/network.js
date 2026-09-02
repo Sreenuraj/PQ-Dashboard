@@ -80,6 +80,16 @@ function syntaxHighlight(json) {
     .replace(/: (null)/g, ': <span class="json-null">$1</span>');
 }
 
+function getByteLength(str) {
+  if (!str) return 0;
+  if (typeof str !== 'string') return 0;
+  try {
+    return (new TextEncoder().encode(str)).length;
+  } catch {
+    return str.length;
+  }
+}
+
 function truncateUrl(url, maxLen = 80) {
   if (!url) return '';
   let clean = url.replace(/^https?:\/\//, '');
@@ -1100,9 +1110,9 @@ export async function renderNetwork(container) {
     renderInterceptPendingQueue();
   }, 1000);
 
-  // Load any existing buffered requests
+  // Load initial batch of requests progressively
   try {
-    const { requests: buffered } = await api.networkRequests({ limit: 200 });
+    const { requests: buffered } = await api.networkRequests({ limit: 50 });
     if (buffered && buffered.length) {
       requests = buffered.reverse(); // oldest first
       renderTable();
@@ -1511,14 +1521,19 @@ function bindTableEvents() {
       if (collapseHeader) {
         e.stopPropagation();
         const targetBodyId = collapseHeader.dataset.target;
+        const hideTargetId = collapseHeader.dataset.hideTarget;
         if (targetBodyId) {
           const targetBody = document.getElementById(targetBodyId);
           const arrowEl = collapseHeader.querySelector('.network-collapse-arrow');
           if (targetBody) {
-            const isHidden = targetBody.style.display === 'none';
-            targetBody.style.display = isHidden ? 'block' : 'none';
+            const isHidden = targetBody.style.display === 'none' || getComputedStyle(targetBody).display === 'none';
+            targetBody.style.display = isHidden ? 'flex' : 'none';
             if (arrowEl) arrowEl.textContent = isHidden ? '▼' : '▶';
           }
+        }
+        if (hideTargetId) {
+          const hideTarget = document.getElementById(hideTargetId);
+          if (hideTarget) hideTarget.style.display = 'none';
         }
         return;
       }
@@ -2099,7 +2114,7 @@ function renderRequestTab(record) {
         </button>
       </div>
       <div style="display:flex;align-items:center;gap:8px">
-        <span class="mono" style="font-size:10px;color:var(--text-3)">${fmtBytes(Buffer.byteLength(bodyStr, 'utf8'))}</span>
+        <span class="mono" style="font-size:10px;color:var(--text-3)">${fmtBytes(getByteLength(bodyStr))}</span>
         <button class="action-btn secondary network-copy-btn" data-target="net-req-content-pane" style="padding:2px 8px;font-size:10.5px">
           📋 Copy Payload
         </button>
@@ -2111,7 +2126,6 @@ function renderRequestTab(record) {
   if (currentMode === 'human' && parsedReq && parsedReq.isLlm) {
     contentHtml = renderHumanReadableRequest(parsedReq, record);
   } else if (currentMode === 'human' && !parsedReq?.isLlm) {
-    // If generic JSON or plain text
     try {
       const obj = JSON.parse(bodyStr);
       contentHtml = `
@@ -2150,6 +2164,93 @@ function renderHumanReadableRequest(parsed, record) {
   const hasSys = !!parsed.systemPrompt;
   const sysChars = parsed.systemPrompt ? parsed.systemPrompt.length : 0;
   const sysTokEst = Math.round(sysChars / 4);
+
+  // Progressive rendering for conversation messages
+  const isLargeThread = msgCount > 16;
+  const headCount = 4;
+  const tailCount = 4;
+  const hiddenCount = isLargeThread ? (msgCount - headCount - tailCount) : 0;
+
+  const renderSingleMsgCard = (m, idx) => {
+    const roleClass = m.role === 'user' ? 'msg-user' : (m.role === 'assistant' ? 'msg-assistant' : 'msg-tool');
+    const roleIcon = m.role === 'user' ? '👤' : (m.role === 'assistant' ? '🤖' : '🔧');
+    const roleTitle = m.role.toUpperCase();
+    const textLen = m.text ? m.text.length : 0;
+    const isVeryLong = textLen > 2500;
+    const previewText = isVeryLong ? m.text.slice(0, 1000) + '...' : m.text;
+
+    return `
+      <div class="network-chat-msg ${roleClass}">
+        <div class="network-msg-header">
+          <div style="display:flex;align-items:center;gap:6px">
+            <span>${roleIcon}</span>
+            <strong style="font-size:11px">${roleTitle}</strong>
+            <span class="mono" style="font-size:10px;color:var(--text-3)">#${idx + 1}</span>
+            ${textLen > 0 ? `<span class="mono" style="font-size:9.5px;color:var(--text-3)">(${textLen.toLocaleString()} chars)</span>` : ''}
+          </div>
+          <button class="action-btn secondary network-copy-btn" data-target="net-msg-full-${idx}" style="padding:1px 6px;font-size:9.5px">
+            📋 Copy
+          </button>
+        </div>
+        <div id="net-msg-body-${idx}" class="network-msg-body">
+          <div id="net-msg-full-${idx}" style="${isVeryLong ? 'display:none;' : ''}">
+            ${m.text ? `<div>${escHtml(m.text)}</div>` : ''}
+          </div>
+          ${isVeryLong ? `
+            <div id="net-msg-preview-${idx}">
+              <div>${escHtml(previewText)}</div>
+              <button class="action-btn secondary network-collapsible-header" data-target="net-msg-full-${idx}" data-hide-target="net-msg-preview-${idx}" style="margin-top:6px;padding:3px 8px;font-size:10px;border:1px solid rgba(129,140,248,0.3)">
+                📄 Show full message (${textLen.toLocaleString()} chars)
+              </button>
+            </div>
+          ` : ''}
+          
+          ${m.toolCalls && m.toolCalls.length > 0 ? `
+            <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">
+              ${m.toolCalls.map(tc => `
+                <div class="network-tool-call-card">
+                  <div style="font-weight:bold;color:#f59e0b;font-size:10.5px;margin-bottom:3px" class="mono">
+                    ⚡ Tool Invocation: <code>${escHtml(tc.name)}</code>
+                  </div>
+                  <pre class="network-body-pre" style="max-height:160px;padding:6px;font-size:10.5px;background:var(--bg-3)">${syntaxHighlight(typeof tc.args === 'object' ? JSON.stringify(tc.args, null, 2) : tc.rawArgs)}</pre>
+                </div>
+              `).join('')}
+            </div>
+          ` : ''}
+
+          ${m.toolResult ? `
+            <div style="margin-top:6px;background:rgba(0,0,0,0.25);border:1px solid var(--border);border-radius:4px;padding:8px">
+              <div style="font-weight:bold;color:var(--text-2);font-size:10.5px;margin-bottom:3px">
+                📥 Tool Result Output ${m.toolResult.isError ? `<span style="color:var(--red)">(Error)</span>` : ''}
+              </div>
+              <pre class="network-body-pre" style="max-height:200px;padding:6px;font-size:10.5px">${escHtml(m.toolResult.content)}</pre>
+            </div>
+          ` : ''}
+        </div>
+      </div>
+    `;
+  };
+
+  let messagesHtml = '';
+  if (!isLargeThread) {
+    messagesHtml = parsed.messages.map((m, idx) => renderSingleMsgCard(m, idx)).join('');
+  } else {
+    const headHtml = parsed.messages.slice(0, headCount).map((m, idx) => renderSingleMsgCard(m, idx)).join('');
+    const hiddenHtml = parsed.messages.slice(headCount, msgCount - tailCount).map((m, idx) => renderSingleMsgCard(m, headCount + idx)).join('');
+    const tailHtml = parsed.messages.slice(msgCount - tailCount).map((m, idx) => renderSingleMsgCard(m, msgCount - tailCount + idx)).join('');
+
+    messagesHtml = `
+      ${headHtml}
+      <button class="action-btn secondary network-collapsible-header" data-target="net-hidden-msg-container" style="width:100%;margin:6px 0;padding:8px;font-size:11px;background:var(--bg-3);border:1px dashed var(--border);text-align:center;display:flex;align-items:center;justify-content:center;gap:6px">
+        <span class="network-collapse-arrow">▶</span>
+        <span>Show ${hiddenCount} hidden intermediate turns (messages #${headCount + 1} to #${msgCount - tailCount})</span>
+      </button>
+      <div id="net-hidden-msg-container" style="display:none;flex-direction:column;gap:10px">
+        ${hiddenHtml}
+      </div>
+      ${tailHtml}
+    `;
+  }
 
   return `
     <div id="net-req-content-pane" class="network-human-container">
@@ -2217,51 +2318,7 @@ function renderHumanReadableRequest(parsed, record) {
         <div style="font-size:10.5px;font-weight:bold;color:var(--text-3);text-transform:uppercase;letter-spacing:0.06em;margin:4px 0">
           💬 Conversation History (${msgCount} turns)
         </div>
-        ${parsed.messages.map((m, idx) => {
-          const roleClass = m.role === 'user' ? 'msg-user' : (m.role === 'assistant' ? 'msg-assistant' : 'msg-tool');
-          const roleIcon = m.role === 'user' ? '👤' : (m.role === 'assistant' ? '🤖' : '🔧');
-          const roleTitle = m.role.toUpperCase();
-
-          return `
-            <div class="network-chat-msg ${roleClass}">
-              <div class="network-msg-header">
-                <div style="display:flex;align-items:center;gap:6px">
-                  <span>${roleIcon}</span>
-                  <strong style="font-size:11px">${roleTitle}</strong>
-                  <span class="mono" style="font-size:10px;color:var(--text-3)">#${idx + 1}</span>
-                </div>
-                <button class="action-btn secondary network-copy-btn" data-target="net-msg-body-${idx}" style="padding:1px 6px;font-size:9.5px">
-                  📋 Copy
-                </button>
-              </div>
-              <div id="net-msg-body-${idx}" class="network-msg-body">
-                ${m.text ? `<div>${escHtml(m.text)}</div>` : ''}
-                
-                ${m.toolCalls && m.toolCalls.length > 0 ? `
-                  <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">
-                    ${m.toolCalls.map(tc => `
-                      <div class="network-tool-call-card">
-                        <div style="font-weight:bold;color:#f59e0b;font-size:10.5px;margin-bottom:3px" class="mono">
-                          ⚡ Tool Invocation: <code>${escHtml(tc.name)}</code>
-                        </div>
-                        <pre class="network-body-pre" style="max-height:160px;padding:6px;font-size:10.5px;background:var(--bg-3)">${syntaxHighlight(typeof tc.args === 'object' ? JSON.stringify(tc.args, null, 2) : tc.rawArgs)}</pre>
-                      </div>
-                    `).join('')}
-                  </div>
-                ` : ''}
-
-                ${m.toolResult ? `
-                  <div style="margin-top:6px;background:rgba(0,0,0,0.25);border:1px solid var(--border);border-radius:4px;padding:8px">
-                    <div style="font-weight:bold;color:var(--text-2);font-size:10.5px;margin-bottom:3px">
-                      📥 Tool Result Output ${m.toolResult.isError ? `<span style="color:var(--red)">(Error)</span>` : ''}
-                    </div>
-                    <pre class="network-body-pre" style="max-height:200px;padding:6px;font-size:10.5px">${escHtml(m.toolResult.content)}</pre>
-                  </div>
-                ` : ''}
-              </div>
-            </div>
-          `;
-        }).join('')}
+        ${messagesHtml}
       </div>
     </div>
   `;
@@ -2295,7 +2352,7 @@ function renderResponseTab(record) {
         </button>
       </div>
       <div style="display:flex;align-items:center;gap:8px">
-        <span class="mono" style="font-size:10px;color:var(--text-3)">${fmtBytes(record.size || Buffer.byteLength(bodyStr, 'utf8'))}</span>
+        <span class="mono" style="font-size:10px;color:var(--text-3)">${fmtBytes(record.size || getByteLength(bodyStr))}</span>
         <button class="action-btn secondary network-copy-btn" data-target="net-res-content-pane" style="padding:2px 8px;font-size:10.5px">
           📋 Copy Response
         </button>
