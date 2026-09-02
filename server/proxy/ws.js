@@ -92,7 +92,23 @@ function initWebSocket(server) {
  * @param {Object} record - The captured request record
  */
 function broadcast(record) {
-  const msg = JSON.stringify({ type: 'request', data: record });
+  const maxWsBodyLen = 8192; // 8KB
+  const reqBodyTooLarge = record.requestBody && record.requestBody.length > maxWsBodyLen;
+  const resBodyTooLarge = record.responseBody && record.responseBody.length > maxWsBodyLen;
+
+  let wsRecord = record;
+  if (reqBodyTooLarge || resBodyTooLarge) {
+    wsRecord = {
+      ...record,
+      requestBody: reqBodyTooLarge ? record.requestBody.slice(0, 1024) + '... [click row to load full]' : record.requestBody,
+      responseBody: resBodyTooLarge ? record.responseBody.slice(0, 1024) + '... [click row to load full]' : record.responseBody,
+      isTruncatedSummary: true,
+      fullRequestBodySize: record.requestBody ? record.requestBody.length : 0,
+      fullResponseBodySize: record.responseBody ? record.responseBody.length : (record.size || 0)
+    };
+  }
+
+  const msg = JSON.stringify({ type: 'request', data: wsRecord });
   for (const client of clients) {
     if (!client.paused && client.ws.readyState === client.ws.OPEN) {
       try {

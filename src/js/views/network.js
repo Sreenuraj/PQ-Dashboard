@@ -69,6 +69,9 @@ function prettyJson(str) {
 
 function syntaxHighlight(json) {
   if (!json) return '';
+  if (json.length > 60000) {
+    return escHtml(json);
+  }
   return escHtml(json)
     .replace(/"([^"]+)":/g, '<span class="json-key">"$1"</span>:')
     .replace(/: "(.*?)"/g, ': <span class="json-string">"$1"</span>')
@@ -1646,7 +1649,7 @@ function updateRequestCount() {
 }
 
 // ── Detail Panel ──
-function showDetail(record) {
+async function showDetail(record) {
   const panel = document.getElementById('network-detail-panel');
   if (!panel) return;
   panel.style.display = '';
@@ -1657,6 +1660,24 @@ function showDetail(record) {
   }
 
   renderDetailContent(record);
+
+  // If lightweight summary was sent for table performance, fetch complete untruncated payload in background
+  if ((record.isTruncatedSummary || !record._hasFullPayload) && record.id) {
+    try {
+      const res = await fetch(`/api/network/requests/${record.id}`);
+      if (res.ok) {
+        const full = await res.json();
+        Object.assign(record, full);
+        record._hasFullPayload = true;
+        record.isTruncatedSummary = false;
+        if (selectedRequest && selectedRequest.id === record.id) {
+          renderDetailContent(record);
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to load complete request payload:', e);
+    }
+  }
 }
 
 function hideDetail() {
@@ -2013,6 +2034,46 @@ function renderDetailContent(record) {
       body.innerHTML = renderTimingTab(record);
       break;
   }
+}
+
+function renderHeadersTab(r) {
+  const usage = calculateUsageAndCost(r);
+  const reqHeaders = r.requestHeaders || {};
+  const resHeaders = r.responseHeaders || {};
+
+  return `
+    <div class="network-detail-section">
+      <h4 class="network-detail-section-title">General</h4>
+      <div class="network-kv-table">
+        <div class="network-kv-row"><span class="network-kv-key">Request URL</span><span class="network-kv-val mono">${escHtml(r.url || '')}</span></div>
+        <div class="network-kv-row"><span class="network-kv-key">Method</span><span class="network-kv-val"><span class="badge ${methodClass(r.method)}">${escHtml(r.method || 'GET')}</span></span></div>
+        <div class="network-kv-row"><span class="network-kv-key">Status Code</span><span class="network-kv-val"><span class="badge ${statusClass(r.statusCode)}">${r.statusCode || 'Error'}</span>${r.error ? ` <span style="color:var(--red);font-size:11px">${escHtml(r.error)}</span>` : ''}</span></div>
+        <div class="network-kv-row"><span class="network-kv-key">Host</span><span class="network-kv-val mono">${escHtml(r.host || '')}</span></div>
+        <div class="network-kv-row"><span class="network-kv-key">Tag</span><span class="network-kv-val"><span class="badge ${tagColorClass(r.tag)}">${escHtml(tagLabel(r.tag))}</span></span></div>
+        ${usage ? `
+          <div class="network-kv-row"><span class="network-kv-key">LLM Model</span><span class="network-kv-val mono" style="color:#818cf8;font-weight:bold">${escHtml(usage.model)}</span></div>
+          <div class="network-kv-row"><span class="network-kv-key">Tokens Usage</span><span class="network-kv-val mono">${usage.inputTokens.toLocaleString()} input / ${usage.outputTokens.toLocaleString()} output (${usage.totalTokens.toLocaleString()} total)</span></div>
+          <div class="network-kv-row"><span class="network-kv-key">Estimated Cost</span><span class="network-kv-val mono" style="color:var(--green);font-weight:bold">$${usage.cost.toFixed(5)}</span></div>
+        ` : ''}
+      </div>
+    </div>
+    <div class="network-detail-section">
+      <h4 class="network-detail-section-title">Request Headers (${Object.keys(reqHeaders).length})</h4>
+      <div class="network-kv-table">
+        ${Object.entries(reqHeaders).map(([k, v]) => `
+          <div class="network-kv-row"><span class="network-kv-key mono">${escHtml(k)}</span><span class="network-kv-val mono">${escHtml(typeof v === 'string' ? v : JSON.stringify(v))}</span></div>
+        `).join('') || '<div class="network-kv-row" style="color:var(--text-3)">No request headers</div>'}
+      </div>
+    </div>
+    <div class="network-detail-section">
+      <h4 class="network-detail-section-title">Response Headers (${Object.keys(resHeaders).length})</h4>
+      <div class="network-kv-table">
+        ${Object.entries(resHeaders).map(([k, v]) => `
+          <div class="network-kv-row"><span class="network-kv-key mono">${escHtml(k)}</span><span class="network-kv-val mono">${escHtml(typeof v === 'string' ? v : JSON.stringify(v))}</span></div>
+        `).join('') || '<div class="network-kv-row" style="color:var(--text-3)">No response headers</div>'}
+      </div>
+    </div>
+  `;
 }
 
 function renderRequestTab(record) {

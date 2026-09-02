@@ -66,9 +66,27 @@ class NetworkStore {
     const total = results.length;
     const offset = parseInt(filters.offset) || 0;
     const limit = parseInt(filters.limit) || 100;
-    results = results.slice(offset, offset + limit);
+    const sliced = results.slice(offset, offset + limit);
 
-    return { requests: results, total, offset, limit };
+    // If full detail is not explicitly requested, strip massive bodies for table listing performance
+    const maxInlineBodyLen = 8192; // 8KB
+    const lightweight = sliced.map(r => {
+      const reqBodyTooLarge = r.requestBody && r.requestBody.length > maxInlineBodyLen;
+      const resBodyTooLarge = r.responseBody && r.responseBody.length > maxInlineBodyLen;
+
+      if (!reqBodyTooLarge && !resBodyTooLarge) return r;
+
+      return {
+        ...r,
+        requestBody: reqBodyTooLarge ? r.requestBody.slice(0, 1024) + '... [click row to load full]' : r.requestBody,
+        responseBody: resBodyTooLarge ? r.responseBody.slice(0, 1024) + '... [click row to load full]' : r.responseBody,
+        isTruncatedSummary: true,
+        fullRequestBodySize: r.requestBody ? r.requestBody.length : 0,
+        fullResponseBodySize: r.responseBody ? r.responseBody.length : (r.size || 0)
+      };
+    });
+
+    return { requests: lightweight, total, offset, limit };
   }
 
   /**
