@@ -667,6 +667,27 @@ function renderAnalytics(contentEl) {
             </div>
           `}
         </div>
+
+        <!-- Subagents Parallel Runs Card -->
+        ${(data.subagentSummary?.hasSubagents) ? `
+        <div class="panel" style="background:var(--bg-2);border:1px solid var(--border);border-left:4px solid #a855f7;padding:12px;border-radius:var(--radius-sm)">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <span style="font-weight:bold;font-size:11.5px;color:#a855f7">🤖 Subagent Parallel Runs</span>
+            <span class="mono" style="font-size:11px;font-weight:bold;color:#a855f7">${data.subagentSummary.totalWorkers} workers (${data.subagentSummary.totalRuns} runs)</span>
+          </div>
+          <div style="font-size:10.5px;color:var(--text-3);margin-bottom:8px">
+            Subagent Cost: <strong style="color:var(--green)">${fmtCost(data.subagentSummary.totalCost)}</strong> · Tools: <strong class="mono">${data.subagentSummary.totalToolCalls}</strong>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:4px;max-height:120px;overflow-y:auto">
+            ${calls.filter(c => c.hasSubagents).map(c => `
+              <div class="pa-summary-row" title="Call #${c.turn}: ${c.subagents?.total || c.subagents?.items?.length || 1} workers (${c.subagents?.modelId || 'subagent'})" data-call-index="${c.index}" style="display:flex;justify-content:space-between;font-size:10px;background:rgba(168,85,247,0.1);border:1px solid rgba(168,85,247,0.25);padding:4px 8px;border-radius:3px;cursor:pointer;transition:background 0.15s">
+                <span style="color:#c084fc;font-weight:bold">#${c.turn} (${c.subagents?.items?.length || c.subagents?.total || 1} workers)</span>
+                <span style="color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px;font-family:monospace">${escHtml((c.subagents?.modelId || '').split('/').pop() || 'worker')}</span>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+        ` : ''}
       </div>
     </div>
 
@@ -951,6 +972,7 @@ function renderCompareAnalyticsView(contentEl, taskIds) {
               <th style="padding:10px">Cache Hit %</th>
               <th style="padding:10px">Pruned Context</th>
               <th style="padding:10px">⚠️ Errors</th>
+              <th style="padding:10px">🤖 Subagents</th>
               <th style="padding:10px">Primary Model</th>
             </tr>
           </thead>
@@ -976,6 +998,13 @@ function renderCompareAnalyticsView(contentEl, taskIds) {
               const totalPruned = fileSaved + cmdSaved + (cats.environmentSnapshots?.bytesSaved || 0) + scratchSaved;
               const errCount = d.errorSummary?.count || calls.filter(c => c.hasError).length;
 
+              const subSummary = d.subagentSummary || {};
+              const subCount = subSummary.totalWorkers || (calls.filter(c => c.hasSubagents).reduce((s, c) => s + (c.subagents?.total || c.subagents?.items?.length || 0), 0));
+              const subModel = subSummary.modelsUsed?.length ? subSummary.modelsUsed.map(m => m.split('/').pop()).join(', ') : '';
+              const subCell = subCount > 0
+                ? `<span style="color:#c084fc;font-weight:bold" title="${subCount} workers (${subModel})">🤖 ${subCount} (${subModel || 'workers'})</span>`
+                : `<span style="color:var(--text-3)">—</span>`;
+
               const modelLabel = d.financialBreakdown?.modelId || calls.find(c => c.modelId)?.modelId || 'Unknown';
 
               return `
@@ -989,6 +1018,7 @@ function renderCompareAnalyticsView(contentEl, taskIds) {
                   <td class="mono" style="padding:10px;color:#06b6d4;font-weight:bold">${cacheHitPct}%</td>
                   <td class="mono" style="padding:10px;color:#38bdf8">${fmtBytes(totalPruned)}</td>
                   <td class="mono" style="padding:10px;font-weight:bold;color:${errCount > 0 ? '#ef4444' : 'var(--text-3)'}">${errCount > 0 ? `⚠️ ${errCount}` : '0'}</td>
+                  <td class="mono" style="padding:10px">${subCell}</td>
                   <td style="padding:10px;color:var(--text-2);font-family:monospace;font-size:10.5px">${escHtml(modelLabel)}</td>
                 </tr>
               `;
@@ -1380,6 +1410,20 @@ function renderCompareStepInspector(taskIds, stepIdx) {
           </div>
           ${(call.scratchOffloadedBytes || 0) > 0 ? `<div style="grid-column:span 2;color:#e879f9;font-weight:bold"><span style="color:var(--text-3)">⚡ Scratch Offload:</span> ${fmtBytes(call.scratchOffloadedBytes)}</div>` : ''}
         </div>
+        ${call.hasSubagents && call.subagents ? `
+          <div style="margin-top:8px;background:rgba(168,85,247,0.12);border:1px solid rgba(168,85,247,0.3);padding:6px 8px;border-radius:4px;font-size:10px">
+            <div style="display:flex;justify-content:space-between;align-items:center;color:#c084fc;font-weight:bold;margin-bottom:4px">
+              <span>🤖 Subagents (${call.subagents.total || call.subagents.items?.length || 1} workers)</span>
+              <span>Tools: ${call.subagents.toolCalls || 0}</span>
+            </div>
+            <div style="color:var(--text-3);font-family:monospace;margin-bottom:4px">Model: ${escHtml(call.subagents.modelId || 'same')} · Cost: ${fmtCost(call.subagents.totalCost || (call.subagents.items ? call.subagents.items.reduce((is, it) => is + (it.totalCost || 0), 0) : 0))}</div>
+            ${(call.subagents.items || []).slice(0, 3).map((it, idx) => `
+              <div style="background:var(--bg-3);padding:3px 6px;border-radius:2px;margin-top:3px;font-size:9.5px;color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(it.prompt || '')}">
+                <strong style="color:#c084fc">W#${it.index || idx + 1}:</strong> ${escHtml((it.prompt || '').substring(0, 50))}
+              </div>
+            `).join('')}
+          </div>
+        ` : ''}
         ${call.modelId ? `<div style="font-size:9.5px;color:var(--text-3);margin-top:6px;font-family:monospace">🤖 ${escHtml(call.modelId)}</div>` : ''}
       </div>
     `;
@@ -1924,6 +1968,8 @@ function filterReductionEvents(events, category, searchQuery = '') {
     res = res.filter(e => e.isScratch || e.scratchFilename || (e.category && e.category.includes('Scratch')));
   } else if (category === 'ERROR' || category === 'ERRORS') {
     res = res.filter(e => e.isError || e.category === 'Tool Error' || (e.category && e.category.includes('Error')));
+  } else if (category === 'SUBAGENTS' || category === 'SUBAGENT') {
+    res = res.filter(e => e.isSubagent || e.category === 'Subagents' || (e.category && e.category.includes('Subagent')));
   }
 
   if (searchQuery && searchQuery.trim()) {
@@ -1966,6 +2012,8 @@ function renderReductionSequenceFeed(body, events) {
 
   // Render Granular Category Filter Pills
   const countAll = queryFiltered.length;
+  const countSubagents = filterReductionEvents(queryFiltered, 'SUBAGENTS').length;
+  const countErrors = filterReductionEvents(queryFiltered, 'ERROR').length;
   const countSys = filterReductionEvents(queryFiltered, 'SYSTEM').length;
   const countReads = filterReductionEvents(queryFiltered, 'FILE_READ').length;
   const countEdits = filterReductionEvents(queryFiltered, 'FILE_EDIT').length;
@@ -1974,12 +2022,12 @@ function renderReductionSequenceFeed(body, events) {
   const countSkills = filterReductionEvents(queryFiltered, 'SKILL').length;
   const countEnv = filterReductionEvents(queryFiltered, 'ENV').length;
   const countScratch = filterReductionEvents(queryFiltered, 'SCRATCH').length;
-  const countErrors = filterReductionEvents(queryFiltered, 'ERROR').length;
 
   const filterBar = document.getElementById('pa-cat-filters-bar');
   if (filterBar) {
     const pills = [
       { cat: 'ALL', label: `All (${countAll})` },
+      countSubagents > 0 ? { cat: 'SUBAGENTS', label: `🤖 Subagents (${countSubagents})` } : null,
       countErrors > 0 ? { cat: 'ERROR', label: `⚠️ Errors (${countErrors})` } : null,
       countSys > 0 ? { cat: 'SYSTEM', label: `🛡️ System (${countSys})` } : null,
       countReads > 0 ? { cat: 'FILE_READ', label: `📁 Reads (${countReads})` } : null,
@@ -2487,6 +2535,9 @@ function renderReductionEventCard(ev, defaultExpanded = false) {
   if (ev.isSystemPrompt || ev.category.includes('System')) {
     icon = '🛡️';
     catColor = '#38bdf8';
+  } else if (ev.isSubagent || ev.category === 'Subagents' || (ev.category && ev.category.includes('Subagent'))) {
+    icon = '🤖';
+    catColor = '#a855f7';
   } else if (ev.isError || ev.category === 'Tool Error' || (ev.category && ev.category.includes('Error'))) {
     icon = '⚠️';
     catColor = '#ef4444';
@@ -2523,6 +2574,8 @@ function renderReductionEventCard(ev, defaultExpanded = false) {
     isScratch: ev.isScratch,
     isSystemPrompt: ev.isSystemPrompt,
     isError: ev.isError,
+    isSubagent: ev.isSubagent,
+    subagentData: ev.subagentData,
     errorMessage: ev.errorMessage,
     errorDetails: ev.errorDetails,
     scratchFilename: ev.scratchFilename,
@@ -2546,27 +2599,23 @@ function renderDiffBoxMarkup(item, prevCallIdx, callIdx, category, targetName, i
   const isScratch = !!item.isScratch;
   const isSys = !!item.isSystemPrompt;
   const isErr = !!item.isError;
+  const isSubagent = !!item.isSubagent || category === 'Subagents';
 
-  const metricColor = isErr ? '#ef4444' : (isExpanded ? '#f59e0b' : (isReduced ? 'var(--green)' : '#38bdf8'));
-  const metricLabel = isErr
-    ? '⚠️ Tool Execution Error'
-    : (isExpanded
-      ? `Expanded ${fmtBytes(bytesDelta)}`
-      : (isReduced ? `Saved ${fmtBytes(Math.abs(bytesDelta))}` : 'Base Context'));
+  const metricColor = isSubagent ? '#a855f7' : (isErr ? '#ef4444' : (isExpanded ? '#f59e0b' : (isReduced ? 'var(--green)' : '#38bdf8')));
+  const metricLabel = isSubagent
+    ? '🤖 Subagents Parallel Run'
+    : (isErr
+      ? '⚠️ Tool Execution Error'
+      : (isExpanded
+        ? `Expanded ${fmtBytes(bytesDelta)}`
+        : (isReduced ? `Saved ${fmtBytes(Math.abs(bytesDelta))}` : 'Base Context')));
 
-  const bannerTitle = isErr
-    ? `⚠️ TOOL EXECUTION FAILED / RETRY ON CALL #${callIdx + 1}:`
-    : (isSys
-      ? `🛡️ SYSTEM INSTRUCTIONS & BASE CONTEXT SENT IN PROMPT:`
-      : (isScratch
-        ? `✂️ EXACT BULK OUTPUT OFFLOADED TO DISK (scratch/${escHtml(item.scratchFilename || '')}):`
-        : (isExpanded
-          ? `🟢 EXACT CONTENT ADDED IN CALL #${callIdx + 1}:`
-          : (isReduced ? `✂️ EXACT CONTENT REMOVED FROM CALL #${prevCallIdx + 1}:` : '🔁 EXACT CONTENT CHANGED:'))));
-  const bannerText = isExpanded ? insertedText : (removedText || insertedText || '(Content changed)');
-  const bannerColor = isErr ? '#ef4444' : (isSys ? '#38bdf8' : (isExpanded ? 'var(--green)' : (isReduced ? 'var(--red)' : '#38bdf8')));
-  const bannerBg = isErr ? 'rgba(239,68,68,0.08)' : (isSys ? 'rgba(56,189,248,0.08)' : (isExpanded ? 'rgba(34,197,94,0.08)' : (isReduced ? 'rgba(239,68,68,0.08)' : 'rgba(56,189,248,0.08)')));
-  const callSubtext = isErr ? `Call #${callIdx + 1} (Tool Error / Retry)` : (isSys ? `Call #1 (Base System Context)` : (isScratch ? `Call #${callIdx + 1} (Write-Time Scratch Offload)` : `Call #${prevCallIdx + 1} → Call #${callIdx + 1}`));
+  const callSubtext = isSubagent
+    ? `Call #${callIdx + 1} (Parallel Subagent Workers)`
+    : (isErr
+      ? `Call #${callIdx + 1} (Tool Error / Retry)`
+      : (isSys ? `Call #1 (Base System Context)` : (isScratch ? `Call #${callIdx + 1} (Write-Time Scratch Offload)` : `Call #${prevCallIdx + 1} → Call #${callIdx + 1}`)));
+
   const beforeHeader = isScratch ? `🔴 RAW UNTRUNCATED OUTPUT (scratch/${escHtml(item.scratchFilename || '')})` : `🔴 BEFORE in Call #${prevCallIdx + 1}`;
   const afterHeader = isScratch ? `🟢 RETAINED PROMPT (Sent to LLM in Call #${callIdx + 1})` : `🟢 AFTER in Call #${callIdx + 1}`;
 
@@ -2576,20 +2625,20 @@ function renderDiffBoxMarkup(item, prevCallIdx, callIdx, category, targetName, i
     </span>
   ` : '';
 
-  const isInitiallyExpanded = defaultExpanded || isSys || isErr;
+  const isInitiallyExpanded = defaultExpanded || isSys || isErr || isSubagent;
 
   return `
-    <div class="pa-sbs-card panel" data-call="${callIdx}" data-target="${escHtml(targetName || '')}" style="border:1px solid ${isErr ? 'rgba(239,68,68,0.4)' : (isSys ? 'rgba(56,189,248,0.35)' : 'var(--border)')};border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-2)">
+    <div class="pa-sbs-card panel" data-call="${callIdx}" data-target="${escHtml(targetName || '')}" style="border:1px solid ${isSubagent ? 'rgba(168,85,247,0.4)' : (isErr ? 'rgba(239,68,68,0.4)' : (isSys ? 'rgba(56,189,248,0.35)' : 'var(--border)'))};border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-2)">
       <div class="pa-card-header" onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'none' ? 'block' : 'none'; const btn = this.querySelector('.pa-card-toggle-btn'); if (btn) btn.innerText = this.nextElementSibling.style.display === 'none' ? '▼ View Diff' : '▲ Hide Diff';" style="background:var(--bg-3);padding:10px 14px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);cursor:pointer;user-select:none">
         <div style="display:flex;align-items:center;gap:10px;overflow:hidden">
           <strong style="color:var(--text);font-size:12px">msg[${item.index}]</strong>
-          <span style="text-transform:uppercase;font-weight:700;color:${isErr ? '#ef4444' : 'var(--accent-2)'};font-size:10.5px">(${item.role})</span>
+          <span style="text-transform:uppercase;font-weight:700;color:${isSubagent ? '#a855f7' : (isErr ? '#ef4444' : 'var(--accent-2)')};font-size:10.5px">(${item.role})</span>
           <span style="color:var(--text-3);font-size:11px;white-space:nowrap">${callSubtext}</span>
           ${headerLabel}
         </div>
         <div style="display:flex;align-items:center;gap:10px;white-space:nowrap">
           <span class="mono" style="color:${metricColor};font-weight:bold;font-size:11.5px;background:rgba(255,255,255,0.06);padding:3px 8px;border-radius:var(--radius-sm);border:1px solid rgba(255,255,255,0.12)">
-            ${isErr ? `⚠️ Tool Error` : (isSys ? `🛡️ ${fmtBytes(beforeSize)} Base` : `${metricLabel} (${fmtBytes(beforeSize)} → ${fmtBytes(afterSize)})`)}
+            ${isSubagent ? `🤖 ${(item.subagentData?.items || []).length || item.subagentData?.total || 1} Workers` : (isErr ? `⚠️ Tool Error` : (isSys ? `🛡️ ${fmtBytes(beforeSize)} Base` : `${metricLabel} (${fmtBytes(beforeSize)} → ${fmtBytes(afterSize)})`))}
           </span>
           <button class="action-btn secondary pa-card-toggle-btn" style="padding:2px 8px;font-size:10px">
             ${isInitiallyExpanded ? '▲ Hide Details' : '▼ View Details'}
@@ -2598,7 +2647,51 @@ function renderDiffBoxMarkup(item, prevCallIdx, callIdx, category, targetName, i
       </div>
 
       <div class="pa-sbs-body" style="display:${isInitiallyExpanded ? 'block' : 'none'}">
-        ${isErr ? `
+        ${isSubagent ? `
+          <div style="padding:14px;background:var(--bg-2)">
+            <div style="font-weight:bold;font-size:11.5px;color:#c084fc;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+              <span style="display:flex;align-items:center;gap:6px">
+                <span>🤖 PARALLEL SUBAGENTS EXECUTED ON CALL #${callIdx + 1}</span>
+                <span class="mono" style="background:rgba(168,85,247,0.2);color:#d8b4fe;padding:1px 8px;border-radius:8px;font-size:10.5px">Model: ${escHtml(item.subagentData?.modelId || (item.subagentData?.items && item.subagentData.items[0]?.modelId) || 'subagent')}</span>
+              </span>
+              <div style="display:flex;align-items:center;gap:12px">
+                <span class="mono" style="color:var(--text-3);font-size:11px">Workers: <strong style="color:var(--text)">${(item.subagentData?.items || []).length || item.subagentData?.total || 1}</strong></span>
+                <span class="mono" style="color:var(--green);font-size:11px">Total Cost: <strong>${fmtCost(item.subagentData?.totalCost || (item.subagentData?.items ? item.subagentData.items.reduce((is, it) => is + (it.totalCost || 0), 0) : 0))}</strong></span>
+              </div>
+            </div>
+
+            <!-- Subagent Workers Container -->
+            <div style="display:flex;flex-direction:column;gap:12px">
+              ${(item.subagentData?.items || []).map((it, idx) => `
+                <div style="background:var(--bg-3);border:1px solid rgba(168,85,247,0.3);border-radius:var(--radius-sm);overflow:hidden">
+                  <div style="background:rgba(168,85,247,0.08);padding:8px 12px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(168,85,247,0.2);flex-wrap:wrap;gap:6px">
+                    <div style="display:flex;align-items:center;gap:8px">
+                      <span style="font-weight:bold;color:#c084fc;font-size:11.5px">Worker #${it.index || idx + 1}</span>
+                      <span class="mono" style="font-size:10px;color:var(--text-3);background:var(--bg-2);padding:1px 6px;border-radius:8px">🤖 ${escHtml(it.modelId || item.subagentData?.modelId || 'subagent')}</span>
+                      <span style="font-size:10px;padding:1px 6px;border-radius:8px;font-weight:bold;background:${it.status === 'completed' ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)'};color:${it.status === 'completed' ? 'var(--green)' : '#f59e0b'}">${it.status || 'completed'}</span>
+                      ${it.contextUsagePercentage != null ? `<span class="mono" style="font-size:10px;color:#38bdf8">Ctx: ${it.contextUsagePercentage.toFixed(1)}%</span>` : ''}
+                    </div>
+                    <div style="display:flex;align-items:center;gap:12px;font-size:10.5px" class="mono">
+                      <span style="color:var(--text-2)">🔧 ${it.toolCalls || 0} tools</span>
+                      <span style="color:var(--green);font-weight:bold">${fmtCost(it.totalCost || 0)}</span>
+                      <span style="color:var(--text-3)">↑${fmtTokens(it.inputTokens || 0)} ↓${fmtTokens(it.outputTokens || 0)}</span>
+                    </div>
+                  </div>
+                  <div style="padding:10px 12px;font-size:11px">
+                    <div style="font-weight:600;color:var(--text-2);margin-bottom:4px;font-size:10.5px">🎯 Delegated Goal / Prompt:</div>
+                    <div style="background:var(--bg-1);padding:6px 10px;border-radius:4px;border:1px solid var(--border);color:var(--text);margin-bottom:10px;font-size:10.5px;max-height:120px;overflow-y:auto;white-space:pre-wrap">${escHtml(it.prompt || '(No prompt provided)')}</div>
+                    ${it.result ? `
+                      <div style="font-weight:600;color:var(--text-2);margin-bottom:4px;font-size:10.5px">📋 Findings & Returned Result:</div>
+                      <div class="mono" style="background:var(--bg-1);padding:8px 10px;border-radius:4px;border:1px solid var(--border);color:var(--text);font-size:10.5px;max-height:240px;overflow-y:auto;white-space:pre-wrap;line-height:1.45">${escHtml(it.result)}</div>
+                    ` : (it.latestToolCall ? `
+                      <div style="color:var(--text-3);font-size:10px;background:var(--bg-1);padding:6px 8px;border-radius:3px">Latest Action: <code style="color:#c084fc">${escHtml(it.latestToolCall)}</code></div>
+                    ` : '')}
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        ` : (isErr ? `
           <div style="padding:12px 14px;background:var(--bg-2)">
             <div style="font-weight:bold;font-size:11px;color:#f87171;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
               <span>⚠️ TOOL EXECUTION FAILED / RETRY ON CALL #${callIdx + 1} (${escHtml(item.toolName || 'tool')})</span>
@@ -2971,6 +3064,12 @@ function drawTimelineChart(calls, targetCanvas = null, zoomRange = null, crossha
         barBorderColor = 'rgba(239, 68, 68, 0.95)';
         badgeIcon = '⚠️';
         badgeColor = '#ef4444';
+      } else if (c.hasSubagents) {
+        grad.addColorStop(0, '#a855f7');
+        grad.addColorStop(1, 'rgba(168, 85, 247, 0.45)');
+        barBorderColor = 'rgba(168, 85, 247, 0.95)';
+        badgeIcon = '🤖';
+        badgeColor = '#c084fc';
       } else {
         grad.addColorStop(0, '#38bdf8');
         grad.addColorStop(1, 'rgba(14, 165, 233, 0.45)');
@@ -2978,6 +3077,9 @@ function drawTimelineChart(calls, targetCanvas = null, zoomRange = null, crossha
 
       if (c.hasError && chartSeries.errors !== false && badgeIcon !== '⚠️') {
         badgeIcon = `${badgeIcon}⚠️`;
+      }
+      if (c.hasSubagents && !badgeIcon.includes('🤖')) {
+        badgeIcon = `${badgeIcon}🤖`;
       }
 
       ctx.fillStyle = grad;
@@ -3345,12 +3447,20 @@ function handleChartHover(e, calls, targetCanvas = null, tooltipId = 'pa-chart-t
     ? `<div style="color:#f87171;background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.35);padding:4px 8px;border-radius:4px;font-size:10.5px;margin-bottom:4px;line-height:1.3"><strong>⚠️ Turn Error (${escHtml(c.errorDetails?.tool || 'tool')}):</strong> ${escHtml(c.errorDetails?.message || 'Tool execution failed or error returned on this turn')}</div>`
     : '';
 
+  const subagentHtml = c.hasSubagents && c.subagents
+    ? `<div style="color:#c084fc;background:rgba(168,85,247,0.15);border:1px solid rgba(168,85,247,0.35);padding:4px 8px;border-radius:4px;font-size:10.5px;margin-bottom:4px;line-height:1.3">
+        <strong>🤖 Subagents (${c.subagents.total || c.subagents.items?.length || 1} workers):</strong>
+        <span style="font-family:monospace">${escHtml((c.subagents.modelId || '').split('/').pop() || 'worker')}</span> · Tools: ${c.subagents.toolCalls || 0} · Cost: ${fmtCost(c.subagents.totalCost || (c.subagents.items ? c.subagents.items.reduce((is, it) => is + (it.totalCost || 0), 0) : 0))}
+       </div>`
+    : '';
+
   tooltip.innerHTML = `
     <div style="font-weight:bold;color:var(--text);margin-bottom:4px;display:flex;justify-content:space-between">
       <span>API Call #${foundPt.index + 1}</span>
       <span style="color:var(--text-3);font-weight:normal">${fmtTime(c.ts)} ${elapsedStr ? `<strong style="color:#38bdf8">${elapsedStr}</strong>` : ''}</span>
     </div>
     ${errorHtml}
+    ${subagentHtml}
     ${modelStr}
     <div style="color:#38bdf8;font-weight:600;font-size:10.5px">📦 Accumulated Payload: <strong>${fmtBytes(c.requestSize)}</strong></div>
     <div style="color:#38bdf8;font-size:10.5px">⚡ Per-Turn New Input: <strong>${fmtBytes(c.turnDeltaSize || Math.max(0, c.sizeDelta))}</strong></div>

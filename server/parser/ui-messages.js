@@ -230,6 +230,44 @@ function parseUIMessages(filePath, apiHistoryPath, maxFileSize) {
       event.content_preview = msg.text;
     }
 
+    // ── use_subagents (dispatching parallel subagent workers) ──
+    if (subType === 'use_subagents' && msg.text) {
+      let promptCount = 1;
+      try {
+        const d = JSON.parse(msg.text);
+        if (Array.isArray(d.prompts)) promptCount = d.prompts.length;
+      } catch (e) {}
+      event.tool_name = 'use_subagents';
+      event.content_preview = `Launched ${promptCount} parallel subagents`;
+    }
+
+    // ── subagent (worker status, progress, tool calls, and results) ──
+    if (subType === 'subagent' && msg.text) {
+      try {
+        const d = JSON.parse(msg.text);
+        event.tool_name = 'subagents';
+        const total = d.total || (d.items ? d.items.length : 0);
+        const completed = d.completed || 0;
+        const subModel = d.modelId || (d.items && d.items[0]?.modelId) || null;
+        if (subModel) {
+          event.model_id = subModel;
+          modelsUsed.add(`subagent::${subModel}::subagent`);
+        }
+        event.content_preview = `Subagents [${completed}/${total} completed] · Model: ${subModel || 'same'} · Tools: ${d.toolCalls || 0}`;
+        const items = d.items || [];
+        const itemsCost = items.reduce((s, it) => s + (it.totalCost || 0), 0);
+        if (itemsCost > 0 || d.totalCost) {
+          event.cost = itemsCost || d.totalCost;
+        }
+        if (d.inputTokens) event.tokens_in = d.inputTokens;
+        if (d.outputTokens) event.tokens_out = d.outputTokens;
+        if (d.toolCalls) toolCallCount += d.toolCalls;
+      } catch (e) {
+        event.tool_name = 'subagents';
+        event.content_preview = msg.text.substring(0, 200);
+      }
+    }
+
     events.push(event);
   }
 

@@ -349,21 +349,36 @@ module.exports = (db, config, getStore) => {
   }
 
   function resolveTaskPath(taskId) {
-    const task = db.prepare('SELECT source FROM tasks WHERE id = ?').get(taskId);
-    if (!task) return null;
+    let taskSource = null;
+    try {
+      const task = db.prepare('SELECT source FROM tasks WHERE id = ?').get(taskId);
+      if (task) taskSource = task.source;
+    } catch (e) {}
 
-    for (const src of config.sources) {
-      if (!src.enabled) continue;
-      if (src.name === task.source) {
-        const dir = path.join(resolvePath(src.path), taskId);
-        if (fs.existsSync(dir)) return dir;
+    if (taskSource) {
+      for (const src of (config.sources || [])) {
+        if (!src.enabled) continue;
+        if (src.name === taskSource) {
+          const dir = path.join(resolvePath(src.path), taskId);
+          if (fs.existsSync(dir)) return dir;
+        }
       }
     }
 
-    for (const src of config.sources) {
+    for (const src of (config.sources || [])) {
       if (!src.enabled) continue;
       const dir = path.join(resolvePath(src.path), taskId);
       if (fs.existsSync(dir)) return dir;
+    }
+
+    // Direct fallback search across common globalStorage locations
+    const directPaths = [
+      path.join(os.homedir(), 'Library', 'Application Support', 'Code - Insiders', 'User', 'globalStorage', 'postqode.postqode', 'tasks', taskId),
+      path.join(os.homedir(), 'Library', 'Application Support', 'Code', 'User', 'globalStorage', 'postqode.postqode', 'tasks', taskId),
+      path.join(os.homedir(), '.postqode', 'tasks', taskId),
+    ];
+    for (const dp of directPaths) {
+      if (fs.existsSync(dp)) return dp;
     }
 
     return null;
@@ -576,6 +591,21 @@ module.exports = (db, config, getStore) => {
         };
       }
 
+      // 3. Check UI messages until the next api_req_started for subagents
+      let subagentRun = null;
+      for (let j = i + 1; j < uiMessages.length; j++) {
+        const nextM = uiMessages[j];
+        if (nextM.say === 'api_req_started') break;
+        if (nextM.say === 'subagent' && nextM.text) {
+          try {
+            const subObj = JSON.parse(nextM.text);
+            if (!subagentRun || subObj.status === 'completed' || (subObj.completed || 0) >= (subagentRun.completed || 0)) {
+              subagentRun = subObj;
+            }
+          } catch (e) {}
+        }
+      }
+
       // ── Per-call context window utilization (with error smoothing) ──
       // Looks up the model's context window from the registry and computes how
       // much of it was used: (uncached input + cache reads + system prompt tokens) / context window
@@ -620,6 +650,8 @@ module.exports = (db, config, getStore) => {
         hasCommandPruning: false,
         hasError,
         errorDetails,
+        hasSubagents: !!subagentRun,
+        subagents: subagentRun,
         requestText: data.request || null,
         modelId: mId,
         providerId: msg.modelInfo?.providerId || null,
@@ -1014,6 +1046,39 @@ module.exports = (db, config, getStore) => {
           ts: c.ts,
         });
       }
+
+      // ── Register Subagent Parallel Runs in Reduction Timeline ──
+      if (c.hasSubagents && c.subagents) {
+        const sub = c.subagents;
+        const items = sub.items || [];
+        const workerModel = sub.modelId || items[0]?.modelId || c.modelId || 'unknown';
+        const totalCost = sub.totalCost || items.reduce((s, it) => s + (it.totalCost || 0), 0);
+        const totalTools = sub.toolCalls || items.reduce((s, it) => s + (it.toolCalls || 0), 0);
+        const totalIn = sub.inputTokens || items.reduce((s, it) => s + (it.inputTokens || 0), 0);
+        const totalOut = sub.outputTokens || items.reduce((s, it) => s + (it.outputTokens || 0), 0);
+
+        reductionEvents.push({
+          eventIndex: reductionEvents.length,
+          callIndex: c.index,
+          prevCallIndex: c.index > 0 ? c.index - 1 : 0,
+          msgIndex: c.historyIndex >= 0 ? c.historyIndex : 0,
+          role: 'subagent',
+          category: 'Subagents',
+          targetName: `🤖 Subagents: ${items.length || sub.total || 1} parallel workers (${workerModel.split('/').pop()})`,
+          beforeSize: totalIn * 4,
+          afterSize: totalOut * 4,
+          bytesSaved: 0,
+          diffChunks: {
+            prefix: `[Subagent Parallel Execution on Call #${c.turn}]\nModel: ${workerModel}\nWorkers: ${items.length || sub.total || 1} (${sub.completed || items.length} completed)\nTools Executed: ${totalTools}\nInput Tokens: ${totalIn.toLocaleString()} | Output Tokens: ${totalOut.toLocaleString()}\nSubagent Total Cost: $${totalCost.toFixed(4)}`,
+            removedText: '',
+            insertedText: items.map((it, idx) => `=== Worker #${it.index || idx + 1} [${it.status || 'completed'}] Model: ${it.modelId || workerModel} (Tools: ${it.toolCalls || 0}, Cost: $${(it.totalCost || 0).toFixed(4)}) ===\nGoal / Prompt:\n${it.prompt || ''}\n\nFindings & Results:\n${it.result || it.latestToolCall || '(Running / no result returned)'}\n`).join('\n---\n'),
+            suffix: '',
+          },
+          isSubagent: true,
+          subagentData: sub,
+          ts: c.ts,
+        });
+      }
     }
 
     reductionEvents.sort((a, b) => (a.callIndex - b.callIndex) || ((a.isSystemPrompt ? -1 : 0) - (b.isSystemPrompt ? -1 : 0)) || ((a.isScratch ? 1 : 0) - (b.isScratch ? 1 : 0)) || a.eventIndex - b.eventIndex);
@@ -1051,7 +1116,46 @@ module.exports = (db, config, getStore) => {
       })),
     };
 
-    // Calculate Financial Cost Breakdown per API Call (Supports mid-task model switches!)
+    // ── Build Comprehensive Subagent Summary ──
+    const subagentSummary = {
+      hasSubagents: apiCalls.some(c => c.hasSubagents),
+      totalRuns: apiCalls.filter(c => c.hasSubagents).length,
+      totalWorkers: apiCalls.reduce((s, c) => s + (c.subagents?.total || c.subagents?.items?.length || 0), 0),
+      totalCost: apiCalls.reduce((s, c) => {
+        if (!c.hasSubagents || !c.subagents) return s;
+        const sub = c.subagents;
+        const items = sub.items || [];
+        const cost = sub.totalCost || items.reduce((is, it) => is + (it.totalCost || 0), 0);
+        return s + (cost || 0);
+      }, 0),
+      totalToolCalls: apiCalls.reduce((s, c) => {
+        if (!c.hasSubagents || !c.subagents) return s;
+        const sub = c.subagents;
+        const items = sub.items || [];
+        return s + (sub.toolCalls || items.reduce((is, it) => is + (it.toolCalls || 0), 0));
+      }, 0),
+      totalTokensIn: apiCalls.reduce((s, c) => {
+        if (!c.hasSubagents || !c.subagents) return s;
+        const sub = c.subagents;
+        const items = sub.items || [];
+        return s + (sub.inputTokens || items.reduce((is, it) => is + (it.inputTokens || 0), 0));
+      }, 0),
+      totalTokensOut: apiCalls.reduce((s, c) => {
+        if (!c.hasSubagents || !c.subagents) return s;
+        const sub = c.subagents;
+        const items = sub.items || [];
+        return s + (sub.outputTokens || items.reduce((is, it) => is + (it.outputTokens || 0), 0));
+      }, 0),
+      modelsUsed: Array.from(new Set(apiCalls.filter(c => c.hasSubagents && c.subagents).flatMap(c => {
+        const sub = c.subagents;
+        const res = [];
+        if (sub.modelId) res.push(sub.modelId);
+        if (sub.items) sub.items.forEach(it => { if (it.modelId) res.push(it.modelId); });
+        return res;
+      }))),
+    };
+
+    // Calculate Financial Cost Breakdown per API Call (Supports mid-task model switches & Subagents!)
     let totalInputCost = 0;
     let totalOutputCost = 0;
     let totalCacheReadCost = 0;
@@ -1094,9 +1198,36 @@ module.exports = (db, config, getStore) => {
       totalOutputCost += (outTok / 1e6) * rates.outRate;
       totalCacheReadCost += (readTok / 1e6) * rates.readRate;
       totalCacheWriteCost += (writeTok / 1e6) * rates.writeRate;
+
+      // Also account for subagent worker models and tokens if present
+      if (c.hasSubagents && c.subagents) {
+        const sub = c.subagents;
+        const items = sub.items || [];
+        for (const it of items) {
+          const sModel = it.modelId || sub.modelId || callModel;
+          modelsUsedSet.add(sModel);
+          if (!modelRateMap[sModel]) {
+            const pricing = getModelCachePricing(sModel, openrouterCache);
+            const info = getModelInfo(sModel);
+            const inRate = pricing?.prompt || info?.inputPrice || 3.0;
+            const outRate = pricing?.completion || info?.outputPrice || 15.0;
+            const readRate = pricing?.cacheRead || (inRate * 0.1);
+            const writeRate = pricing?.cacheWrite || (inRate * 1.25);
+            modelRateMap[sModel] = { inRate, outRate, readRate, writeRate };
+          }
+        }
+      }
     }
 
-    const calculatedTotalCost = apiCalls.reduce((s, c) => s + (c.cost || 0), 0);
+    const calculatedTotalCost = apiCalls.reduce((s, c) => {
+      let turnCost = c.cost || 0;
+      if (c.hasSubagents && c.subagents) {
+        const subCost = c.subagents.totalCost || (c.subagents.items ? c.subagents.items.reduce((is, it) => is + (it.totalCost || 0), 0) : 0);
+        // Add subagent cost if not already included in c.cost
+        turnCost += (subCost || 0);
+      }
+      return s + turnCost;
+    }, 0);
     const modelsUsedList = Array.from(modelsUsedSet);
 
     const avgInputRate = totalTokensIn > 0 ? (totalInputCost / totalTokensIn) * 1e6 : (modelRateMap[detectedModelId]?.inRate || 3.0);
@@ -1113,6 +1244,7 @@ module.exports = (db, config, getStore) => {
       output: { tokens: totalTokensOut, pricePerM: avgOutputRate, cost: totalOutputCost },
       cacheRead: { tokens: totalCacheReads, pricePerM: avgCacheReadRate, cost: totalCacheReadCost },
       cacheWrite: { tokens: totalCacheWrites, pricePerM: avgCacheWriteRate, cost: totalCacheWriteCost },
+      subagents: subagentSummary,
     };
 
     const liveTotalCost = financialBreakdown.totalCost || calculatedTotalCost || 0;
@@ -1179,6 +1311,7 @@ module.exports = (db, config, getStore) => {
       scratchSummary,
       scratchEvents,
       errorSummary,
+      subagentSummary,
       totalMessages: apiHistory.length,
       systemPromptCapture, // null if proxy never captured it for this task
       systemPromptNote: systemPromptAvailable

@@ -191,6 +191,8 @@ function renderListItem(e, i) {
 }
 
 function getTitle(e) {
+    if (e.tool_name === 'subagents' || e.sub_type === 'subagent') return '🤖 ' + (e.content_preview || 'Subagent Execution');
+    if (e.tool_name === 'use_subagents' || e.sub_type === 'use_subagents') return '🚀 ' + (e.content_preview || 'Launched Subagents');
     if (e.tool_name) return '🔧 ' + e.tool_name;
     if (e.command_text) return '$ ' + e.command_text;
     if (e.sub_type === 'api_req_started') return e.model_id ? 'API: ' + e.model_id : 'API Request';
@@ -281,6 +283,7 @@ function renderEventDetail(e) {
 
 function eventBadgeColor(e) {
   if (e.error_category) return 'red';
+  if (e.sub_type === 'subagent' || e.tool_name === 'subagents' || e.sub_type === 'use_subagents') return 'purple';
   if (e.sub_type === 'reasoning') return 'purple';
   if (e.sub_type === 'api_req_started') return 'accent';
   if (e.sub_type === 'completion_result') return 'green';

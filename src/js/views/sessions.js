@@ -309,7 +309,10 @@ async function loadSessions(container, dateRange = {}, drilldown = {}) {
           <input type="checkbox" class="session-checkbox" data-id="${t.id}" ${selectedTasks.has(t.id) ? 'checked' : ''} style="cursor:pointer" />
         </td>
         <td>
-          <div style="font-size:11px;color:var(--text-3);font-family:'JetBrains Mono',monospace">${t.id.substring(0,20)}…</div>
+          <div style="display:flex;align-items:center;gap:6px">
+            <span style="font-size:11px;color:var(--text-3);font-family:'JetBrains Mono',monospace">${t.id.substring(0,20)}…</span>
+            ${t.is_multi_agent || (t.models && t.models.some(m => m.mode === 'subagent')) ? `<span class="badge purple" style="font-size:9.5px;padding:1px 5px">🤖 Subagents</span>` : ''}
+          </div>
           <div style="font-size:12px;color:var(--text-2);margin-top:2px;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
             ${t.first_message || '—'}
           </div>
