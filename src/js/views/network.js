@@ -1832,7 +1832,13 @@ function parseLlmRequest(bodyStr) {
     for (const m of rawMessages) {
       const role = (m.role || 'user').toLowerCase();
       if (role === 'system' && !systemPrompt) {
-        systemPrompt = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+        if (typeof m.content === 'string') {
+          systemPrompt = m.content;
+        } else if (Array.isArray(m.content)) {
+          systemPrompt = m.content.map(b => typeof b === 'string' ? b : (b.text || JSON.stringify(b))).join('\n');
+        } else {
+          systemPrompt = JSON.stringify(m.content);
+        }
         continue;
       }
 
