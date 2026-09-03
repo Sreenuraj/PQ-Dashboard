@@ -309,6 +309,11 @@ let selectedRequest = null;
 let activeFilters = { host: 'all', method: '', status: '', search: '', limit: 'all' };
 let activeDetailTab = 'headers';
 let bodyViewModes = { request: 'human', response: 'human' };
+let payloadSearchState = {
+  request: { query: '', matchIndex: 0, matches: [] },
+  response: { query: '', matchIndex: 0, matches: [] },
+  headers: { query: '', matchIndex: 0, matches: [] }
+};
 let mockRulesState = [];
 let compareBaseRequest = null;
 
@@ -1537,6 +1542,86 @@ function bindTableEvents() {
         }
         return;
       }
+
+      // 4. In-Payload Search Navigation Buttons
+      const searchNavBtn = e.target.closest('.network-search-nav-btn');
+      if (searchNavBtn) {
+        e.stopPropagation();
+        const tabType = searchNavBtn.dataset.tabType;
+        const dir = searchNavBtn.dataset.dir || 'next';
+        if (tabType) stepPayloadSearch(tabType, dir);
+        return;
+      }
+
+      // 5. In-Payload Search Clear Button
+      const searchClearBtn = e.target.closest('.network-search-clear-btn');
+      if (searchClearBtn) {
+        e.stopPropagation();
+        const tabType = searchClearBtn.dataset.tabType;
+        if (tabType && payloadSearchState[tabType]) {
+          payloadSearchState[tabType].query = '';
+          const input = detailBody.querySelector(`.network-payload-search-input[data-tab-type="${tabType}"]`);
+          if (input) {
+            input.value = '';
+            input.focus();
+          }
+          applyActivePayloadSearch(tabType);
+          searchClearBtn.remove();
+        }
+        return;
+      }
+    });
+
+    detailBody.addEventListener('input', (e) => {
+      const searchInput = e.target.closest('.network-payload-search-input');
+      if (searchInput) {
+        const tabType = searchInput.dataset.tabType;
+        if (tabType && payloadSearchState[tabType]) {
+          payloadSearchState[tabType].query = searchInput.value;
+          const searchBox = searchInput.closest('.network-payload-search-box');
+          let clearBtn = searchBox?.querySelector('.network-search-clear-btn');
+          if (searchInput.value) {
+            if (!clearBtn && searchBox) {
+              clearBtn = document.createElement('button');
+              clearBtn.className = 'network-search-clear-btn';
+              clearBtn.dataset.tabType = tabType;
+              clearBtn.title = 'Clear search';
+              clearBtn.textContent = '✕';
+              searchBox.appendChild(clearBtn);
+            } else if (clearBtn) {
+              clearBtn.style.display = 'block';
+            }
+          } else if (clearBtn) {
+            clearBtn.remove();
+          }
+          applyActivePayloadSearch(tabType, { keepIndex: false, jumpToMatch: true });
+        }
+      }
+    });
+
+    detailBody.addEventListener('keydown', (e) => {
+      const searchInput = e.target.closest('.network-payload-search-input');
+      if (searchInput) {
+        const tabType = searchInput.dataset.tabType;
+        if (!tabType || !payloadSearchState[tabType]) return;
+
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          if (e.shiftKey) {
+            stepPayloadSearch(tabType, 'prev');
+          } else {
+            stepPayloadSearch(tabType, 'next');
+          }
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          payloadSearchState[tabType].query = '';
+          searchInput.value = '';
+          applyActivePayloadSearch(tabType);
+          const searchBox = searchInput.closest('.network-payload-search-box');
+          const clearBtn = searchBox?.querySelector('.network-search-clear-btn');
+          if (clearBtn) clearBtn.remove();
+        }
+      }
     });
   }
 }
@@ -2037,6 +2122,204 @@ function parseLlmResponse(bodyStr, headers) {
   };
 }
 
+// ── In-Payload Search Helpers ──
+function clearPayloadHighlights(container) {
+  if (!container) return;
+  const marks = container.querySelectorAll('mark.network-search-match');
+  marks.forEach(mark => {
+    const parent = mark.parentNode;
+    if (parent) {
+      parent.replaceChild(document.createTextNode(mark.textContent), mark);
+      parent.normalize();
+    }
+  });
+}
+
+function updateSearchCounter(tabType, currentIdx, totalMatches) {
+  const counterEl = document.getElementById(`net-${tabType}-search-counter`);
+  const controlsEl = document.getElementById(`net-${tabType}-search-controls`);
+  const prevBtn = document.querySelector(`.network-search-nav-btn[data-tab-type="${tabType}"][data-dir="prev"]`);
+  const nextBtn = document.querySelector(`.network-search-nav-btn[data-tab-type="${tabType}"][data-dir="next"]`);
+
+  if (!counterEl) return;
+
+  if (totalMatches === 0) {
+    counterEl.textContent = '0 matches';
+    counterEl.classList.add('no-matches');
+    if (prevBtn) prevBtn.disabled = true;
+    if (nextBtn) nextBtn.disabled = true;
+  } else {
+    counterEl.textContent = `${currentIdx + 1} of ${totalMatches}`;
+    counterEl.classList.remove('no-matches');
+    if (prevBtn) prevBtn.disabled = false;
+    if (nextBtn) nextBtn.disabled = false;
+  }
+
+  if (controlsEl) {
+    controlsEl.style.display = payloadSearchState[tabType]?.query ? 'flex' : 'none';
+  }
+}
+
+function applyActivePayloadSearch(tabType, options = { keepIndex: false, jumpToMatch: true }) {
+  const containerId = tabType === 'request' ? 'net-req-content-pane' : (tabType === 'response' ? 'net-res-content-pane' : 'net-headers-content-pane');
+  const container = document.getElementById(containerId);
+  if (!container) return;
+
+  const state = payloadSearchState[tabType];
+  if (!state) return;
+  const query = (state.query || '').trim();
+
+  clearPayloadHighlights(container);
+  state.matches = [];
+
+  if (!query) {
+    updateSearchCounter(tabType, 0, 0);
+    return;
+  }
+
+  const lowerQuery = query.toLowerCase();
+  const textNodes = [];
+
+  const walker = document.createTreeWalker(
+    container,
+    NodeFilter.SHOW_TEXT,
+    {
+      acceptNode(node) {
+        if (!node.textContent || !node.textContent.toLowerCase().includes(lowerQuery)) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        const parent = node.parentElement;
+        if (!parent || parent.closest('.network-view-toolbar') || parent.tagName === 'BUTTON' || parent.tagName === 'INPUT') {
+          return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    }
+  );
+
+  let n;
+  while ((n = walker.nextNode())) {
+    textNodes.push(n);
+  }
+
+  const matches = [];
+  for (const node of textNodes) {
+    const text = node.textContent;
+    const lowerText = text.toLowerCase();
+    let startIndex = 0;
+    let matchIdx;
+    const frag = document.createDocumentFragment();
+
+    while ((matchIdx = lowerText.indexOf(lowerQuery, startIndex)) !== -1) {
+      if (matchIdx > startIndex) {
+        frag.appendChild(document.createTextNode(text.slice(startIndex, matchIdx)));
+      }
+
+      const mark = document.createElement('mark');
+      mark.className = 'network-search-match';
+      mark.textContent = text.slice(matchIdx, matchIdx + query.length);
+      frag.appendChild(mark);
+      matches.push(mark);
+
+      startIndex = matchIdx + query.length;
+    }
+
+    if (startIndex < text.length) {
+      frag.appendChild(document.createTextNode(text.slice(startIndex)));
+    }
+
+    if (node.parentNode) {
+      node.parentNode.replaceChild(frag, node);
+    }
+  }
+
+  state.matches = matches;
+
+  // Auto-expand any collapsed accordions containing matching marks
+  matches.forEach(mark => {
+    // 1. System Prompt card
+    const sysBody = mark.closest('#net-system-prompt-body');
+    if (sysBody && (sysBody.style.display === 'none' || getComputedStyle(sysBody).display === 'none')) {
+      sysBody.style.display = 'block';
+      const arrow = document.querySelector('[data-target="net-system-prompt-body"] .network-collapse-arrow');
+      if (arrow) arrow.textContent = '▼';
+    }
+
+    // 2. Tools palette card
+    const toolsBody = mark.closest('#net-tools-palette-body');
+    if (toolsBody && (toolsBody.style.display === 'none' || getComputedStyle(toolsBody).display === 'none')) {
+      toolsBody.style.display = 'flex';
+      const arrow = document.querySelector('[data-target="net-tools-palette-body"] .network-collapse-arrow');
+      if (arrow) arrow.textContent = '▼';
+    }
+
+    // 3. Hidden intermediate messages accordion
+    const hiddenMsgs = mark.closest('#net-hidden-msg-container');
+    if (hiddenMsgs && (hiddenMsgs.style.display === 'none' || getComputedStyle(hiddenMsgs).display === 'none')) {
+      hiddenMsgs.style.display = 'flex';
+      const arrow = document.querySelector('[data-target="net-hidden-msg-container"] .network-collapse-arrow');
+      if (arrow) arrow.textContent = '▼';
+    }
+
+    // 4. Hidden long message full content
+    const fullMsgBody = mark.closest('[id^="net-msg-full-"]');
+    if (fullMsgBody && (fullMsgBody.style.display === 'none' || getComputedStyle(fullMsgBody).display === 'none')) {
+      fullMsgBody.style.display = 'block';
+      const idNum = fullMsgBody.id.replace('net-msg-full-', '');
+      const preview = document.getElementById(`net-msg-preview-${idNum}`);
+      if (preview) preview.style.display = 'none';
+    }
+
+    // 5. Thinking / reasoning block
+    const thinkingBody = mark.closest('[id^="net-thinking-body"]');
+    if (thinkingBody && (thinkingBody.style.display === 'none' || getComputedStyle(thinkingBody).display === 'none')) {
+      thinkingBody.style.display = 'block';
+      const arrow = document.querySelector('[data-target="net-thinking-body"] .network-collapse-arrow');
+      if (arrow) arrow.textContent = '▼';
+    }
+  });
+
+  if (matches.length > 0) {
+    if (!options.keepIndex || state.matchIndex >= matches.length || state.matchIndex < 0) {
+      state.matchIndex = 0;
+    }
+    setActiveSearchMatch(tabType, state.matchIndex, options.jumpToMatch);
+  } else {
+    state.matchIndex = 0;
+    updateSearchCounter(tabType, 0, 0);
+  }
+}
+
+function setActiveSearchMatch(tabType, index, scrollIntoView = true) {
+  const state = payloadSearchState[tabType];
+  const matches = state.matches || [];
+  if (!matches.length) return;
+
+  matches.forEach(m => m.classList.remove('current'));
+
+  if (index < 0) index = matches.length - 1;
+  if (index >= matches.length) index = 0;
+
+  state.matchIndex = index;
+  const currentMark = matches[index];
+  if (currentMark) {
+    currentMark.classList.add('current');
+    if (scrollIntoView) {
+      currentMark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
+
+  updateSearchCounter(tabType, index, matches.length);
+}
+
+function stepPayloadSearch(tabType, direction = 'next') {
+  const state = payloadSearchState[tabType];
+  if (!state.matches || !state.matches.length) return;
+
+  const newIndex = direction === 'next' ? (state.matchIndex + 1) : (state.matchIndex - 1);
+  setActiveSearchMatch(tabType, newIndex, true);
+}
+
 function renderDetailContent(record) {
   const body = document.getElementById('network-detail-body');
   if (!body) return;
@@ -2044,12 +2327,15 @@ function renderDetailContent(record) {
   switch (activeDetailTab) {
     case 'headers':
       body.innerHTML = renderHeadersTab(record);
+      applyActivePayloadSearch('headers', { keepIndex: true, jumpToMatch: false });
       break;
     case 'request':
       body.innerHTML = renderRequestTab(record);
+      applyActivePayloadSearch('request', { keepIndex: true, jumpToMatch: false });
       break;
     case 'response':
       body.innerHTML = renderResponseTab(record);
+      applyActivePayloadSearch('response', { keepIndex: true, jumpToMatch: false });
       break;
     case 'timing':
       body.innerHTML = renderTimingTab(record);
@@ -2061,37 +2347,73 @@ function renderHeadersTab(r) {
   const usage = calculateUsageAndCost(r);
   const reqHeaders = r.requestHeaders || {};
   const resHeaders = r.responseHeaders || {};
+  const searchState = payloadSearchState.headers || { query: '' };
+
+  const viewToolbar = `
+    <div class="network-view-toolbar">
+      <div style="font-size:11px;font-weight:600;color:var(--text-2);display:flex;align-items:center;gap:6px">
+        <span>📋</span> Headers & Metadata
+      </div>
+
+      <!-- In-Payload Search Bar -->
+      <div class="network-payload-search-bar" data-tab-type="headers">
+        <div class="network-payload-search-box">
+          <span class="network-payload-search-icon">🔍</span>
+          <input type="text"
+                 class="network-payload-search-input"
+                 data-tab-type="headers"
+                 placeholder="Search headers..."
+                 value="${escHtml(searchState.query || '')}" />
+          ${searchState.query ? `<button class="network-search-clear-btn" data-tab-type="headers" title="Clear search">✕</button>` : ''}
+        </div>
+        <div class="network-search-controls" id="net-headers-search-controls" style="${searchState.query ? '' : 'display:none'}">
+          <span class="network-search-counter" id="net-headers-search-counter">0/0</span>
+          <button class="network-search-nav-btn" data-tab-type="headers" data-dir="prev" title="Previous match (Shift+Enter)">▲</button>
+          <button class="network-search-nav-btn" data-tab-type="headers" data-dir="next" title="Next match (Enter)">▼</button>
+        </div>
+      </div>
+
+      <div style="font-size:10px;color:var(--text-3)" class="mono">
+        ${Object.keys(reqHeaders).length + Object.keys(resHeaders).length} total headers
+      </div>
+    </div>
+  `;
 
   return `
-    <div class="network-detail-section">
-      <h4 class="network-detail-section-title">General</h4>
-      <div class="network-kv-table">
-        <div class="network-kv-row"><span class="network-kv-key">Request URL</span><span class="network-kv-val mono">${escHtml(r.url || '')}</span></div>
-        <div class="network-kv-row"><span class="network-kv-key">Method</span><span class="network-kv-val"><span class="badge ${methodClass(r.method)}">${escHtml(r.method || 'GET')}</span></span></div>
-        <div class="network-kv-row"><span class="network-kv-key">Status Code</span><span class="network-kv-val"><span class="badge ${statusClass(r.statusCode)}">${r.statusCode || 'Error'}</span>${r.error ? ` <span style="color:var(--red);font-size:11px">${escHtml(r.error)}</span>` : ''}</span></div>
-        <div class="network-kv-row"><span class="network-kv-key">Host</span><span class="network-kv-val mono">${escHtml(r.host || '')}</span></div>
-        <div class="network-kv-row"><span class="network-kv-key">Tag</span><span class="network-kv-val"><span class="badge ${tagColorClass(r.tag)}">${escHtml(tagLabel(r.tag))}</span></span></div>
-        ${usage ? `
-          <div class="network-kv-row"><span class="network-kv-key">LLM Model</span><span class="network-kv-val mono" style="color:#818cf8;font-weight:bold">${escHtml(usage.model)}</span></div>
-          <div class="network-kv-row"><span class="network-kv-key">Tokens Usage</span><span class="network-kv-val mono">${usage.inputTokens.toLocaleString()} input / ${usage.outputTokens.toLocaleString()} output (${usage.totalTokens.toLocaleString()} total)</span></div>
-          <div class="network-kv-row"><span class="network-kv-key">Estimated Cost</span><span class="network-kv-val mono" style="color:var(--green);font-weight:bold">$${usage.cost.toFixed(5)}</span></div>
-        ` : ''}
-      </div>
-    </div>
-    <div class="network-detail-section">
-      <h4 class="network-detail-section-title">Request Headers (${Object.keys(reqHeaders).length})</h4>
-      <div class="network-kv-table">
-        ${Object.entries(reqHeaders).map(([k, v]) => `
-          <div class="network-kv-row"><span class="network-kv-key mono">${escHtml(k)}</span><span class="network-kv-val mono">${escHtml(typeof v === 'string' ? v : JSON.stringify(v))}</span></div>
-        `).join('') || '<div class="network-kv-row" style="color:var(--text-3)">No request headers</div>'}
-      </div>
-    </div>
-    <div class="network-detail-section">
-      <h4 class="network-detail-section-title">Response Headers (${Object.keys(resHeaders).length})</h4>
-      <div class="network-kv-table">
-        ${Object.entries(resHeaders).map(([k, v]) => `
-          <div class="network-kv-row"><span class="network-kv-key mono">${escHtml(k)}</span><span class="network-kv-val mono">${escHtml(typeof v === 'string' ? v : JSON.stringify(v))}</span></div>
-        `).join('') || '<div class="network-kv-row" style="color:var(--text-3)">No response headers</div>'}
+    <div class="network-tab-pane">
+      ${viewToolbar}
+      <div id="net-headers-content-pane">
+        <div class="network-detail-section">
+          <h4 class="network-detail-section-title">General</h4>
+          <div class="network-kv-table">
+            <div class="network-kv-row"><span class="network-kv-key">Request URL</span><span class="network-kv-val mono">${escHtml(r.url || '')}</span></div>
+            <div class="network-kv-row"><span class="network-kv-key">Method</span><span class="network-kv-val"><span class="badge ${methodClass(r.method)}">${escHtml(r.method || 'GET')}</span></span></div>
+            <div class="network-kv-row"><span class="network-kv-key">Status Code</span><span class="network-kv-val"><span class="badge ${statusClass(r.statusCode)}">${r.statusCode || 'Error'}</span>${r.error ? ` <span style="color:var(--red);font-size:11px">${escHtml(r.error)}</span>` : ''}</span></div>
+            <div class="network-kv-row"><span class="network-kv-key">Host</span><span class="network-kv-val mono">${escHtml(r.host || '')}</span></div>
+            <div class="network-kv-row"><span class="network-kv-key">Tag</span><span class="network-kv-val"><span class="badge ${tagColorClass(r.tag)}">${escHtml(tagLabel(r.tag))}</span></span></div>
+            ${usage ? `
+              <div class="network-kv-row"><span class="network-kv-key">LLM Model</span><span class="network-kv-val mono" style="color:#818cf8;font-weight:bold">${escHtml(usage.model)}</span></div>
+              <div class="network-kv-row"><span class="network-kv-key">Tokens Usage</span><span class="network-kv-val mono">${usage.inputTokens.toLocaleString()} input / ${usage.outputTokens.toLocaleString()} output (${usage.totalTokens.toLocaleString()} total)</span></div>
+              <div class="network-kv-row"><span class="network-kv-key">Estimated Cost</span><span class="network-kv-val mono" style="color:var(--green);font-weight:bold">$${usage.cost.toFixed(5)}</span></div>
+            ` : ''}
+          </div>
+        </div>
+        <div class="network-detail-section">
+          <h4 class="network-detail-section-title">Request Headers (${Object.keys(reqHeaders).length})</h4>
+          <div class="network-kv-table">
+            ${Object.entries(reqHeaders).map(([k, v]) => `
+              <div class="network-kv-row"><span class="network-kv-key mono">${escHtml(k)}</span><span class="network-kv-val mono">${escHtml(typeof v === 'string' ? v : JSON.stringify(v))}</span></div>
+            `).join('') || '<div class="network-kv-row" style="color:var(--text-3)">No request headers</div>'}
+          </div>
+        </div>
+        <div class="network-detail-section">
+          <h4 class="network-detail-section-title">Response Headers (${Object.keys(resHeaders).length})</h4>
+          <div class="network-kv-table">
+            ${Object.entries(resHeaders).map(([k, v]) => `
+              <div class="network-kv-row"><span class="network-kv-key mono">${escHtml(k)}</span><span class="network-kv-val mono">${escHtml(typeof v === 'string' ? v : JSON.stringify(v))}</span></div>
+            `).join('') || '<div class="network-kv-row" style="color:var(--text-3)">No response headers</div>'}
+          </div>
+        </div>
       </div>
     </div>
   `;
@@ -2105,6 +2427,7 @@ function renderRequestTab(record) {
 
   const parsedReq = parseLlmRequest(bodyStr);
   const currentMode = bodyViewModes.request || 'human';
+  const searchState = payloadSearchState.request || { query: '' };
 
   const viewToolbar = `
     <div class="network-view-toolbar">
@@ -2119,6 +2442,25 @@ function renderRequestTab(record) {
           📄 Raw Payload
         </button>
       </div>
+
+      <!-- In-Payload Search Bar -->
+      <div class="network-payload-search-bar" data-tab-type="request">
+        <div class="network-payload-search-box">
+          <span class="network-payload-search-icon">🔍</span>
+          <input type="text"
+                 class="network-payload-search-input"
+                 data-tab-type="request"
+                 placeholder="Search request..."
+                 value="${escHtml(searchState.query || '')}" />
+          ${searchState.query ? `<button class="network-search-clear-btn" data-tab-type="request" title="Clear search">✕</button>` : ''}
+        </div>
+        <div class="network-search-controls" id="net-request-search-controls" style="${searchState.query ? '' : 'display:none'}">
+          <span class="network-search-counter" id="net-request-search-counter">0/0</span>
+          <button class="network-search-nav-btn" data-tab-type="request" data-dir="prev" title="Previous match (Shift+Enter)">▲</button>
+          <button class="network-search-nav-btn" data-tab-type="request" data-dir="next" title="Next match (Enter)">▼</button>
+        </div>
+      </div>
+
       <div style="display:flex;align-items:center;gap:8px">
         <span class="mono" style="font-size:10px;color:var(--text-3)">${fmtBytes(getByteLength(bodyStr))}</span>
         <button class="action-btn secondary network-copy-btn" data-target="net-req-content-pane" style="padding:2px 8px;font-size:10.5px">
@@ -2338,6 +2680,7 @@ function renderResponseTab(record) {
 
   const parsedRes = parseLlmResponse(bodyStr, record.responseHeaders);
   const currentMode = bodyViewModes.response || 'human';
+  const searchState = payloadSearchState.response || { query: '' };
 
   const viewToolbar = `
     <div class="network-view-toolbar">
@@ -2357,6 +2700,25 @@ function renderResponseTab(record) {
           📄 Raw Payload
         </button>
       </div>
+
+      <!-- In-Payload Search Bar -->
+      <div class="network-payload-search-bar" data-tab-type="response">
+        <div class="network-payload-search-box">
+          <span class="network-payload-search-icon">🔍</span>
+          <input type="text"
+                 class="network-payload-search-input"
+                 data-tab-type="response"
+                 placeholder="Search response..."
+                 value="${escHtml(searchState.query || '')}" />
+          ${searchState.query ? `<button class="network-search-clear-btn" data-tab-type="response" title="Clear search">✕</button>` : ''}
+        </div>
+        <div class="network-search-controls" id="net-response-search-controls" style="${searchState.query ? '' : 'display:none'}">
+          <span class="network-search-counter" id="net-response-search-counter">0/0</span>
+          <button class="network-search-nav-btn" data-tab-type="response" data-dir="prev" title="Previous match (Shift+Enter)">▲</button>
+          <button class="network-search-nav-btn" data-tab-type="response" data-dir="next" title="Next match (Enter)">▼</button>
+        </div>
+      </div>
+
       <div style="display:flex;align-items:center;gap:8px">
         <span class="mono" style="font-size:10px;color:var(--text-3)">${fmtBytes(record.size || getByteLength(bodyStr))}</span>
         <button class="action-btn secondary network-copy-btn" data-target="net-res-content-pane" style="padding:2px 8px;font-size:10.5px">
