@@ -1114,10 +1114,12 @@ function closeDrawer() {
 
 function renderDetailDeck(r) {
   const usage = calculateUsageAndCost(r);
-  const model = usage?.model || r.model || r.tag || 'LLM';
+  const model = usage?.model || r.model || '';
   const hasUsage = usage && (usage.totalTokens > 0 || usage.cost > 0);
   const agentLabel = getAgentLabel(r);
   const isSubagent = agentLabel && /subagent/i.test(agentLabel);
+  const cleanModel = (model || '').toLowerCase().trim();
+  const isDuplicateModel = !cleanModel || cleanModel === 'postqode' || (agentLabel && cleanModel === agentLabel.toLowerCase());
 
   return `
     <div class="network-detail-deck">
@@ -1139,12 +1141,16 @@ function renderDetailDeck(r) {
         <span class="badge ${statusClass(r.statusCode)}">${r.statusCode || 'ERR'}</span>
         ${agentLabel ? `
           <span class="badge ${isSubagent ? 'agent-subagent' : 'agent-main'}" style="font-size:11px;font-weight:700;padding:2px 8px;display:inline-flex;align-items:center;gap:4px" title="Agent identity detected from system prompt">
-            <span>${isSubagent ? '⚡' : '🎯'}</span> ${escHtml(agentLabel)}
+            <span>🤖</span> ${escHtml(agentLabel)}
+          </span>
+        ` : (r.tag ? `
+          <span class="badge ${tagColorClass(r.tag)}" style="font-size:11px;padding:2px 8px">${escHtml(tagLabel(r.tag))}</span>
+        ` : '')}
+        ${!isDuplicateModel && model ? `
+          <span class="network-deck-pill" style="color:#818cf8">
+            <span>🧠</span> <strong>${escHtml(model)}</strong>
           </span>
         ` : ''}
-        <span class="network-deck-pill" style="color:#818cf8">
-          <span>🤖</span> <strong>${escHtml(model)}</strong>
-        </span>
         <span class="network-deck-pill">
           <span>⏱️</span> ${fmtDuration(r.duration)}
         </span>
@@ -2514,18 +2520,30 @@ function renderRow(r) {
   const isChecked = selectedDiffIds.has(r.id);
   const agentLabel = getAgentLabel(r);
   const isSubagent = agentLabel && /subagent/i.test(agentLabel);
-  const agentBadge = agentLabel ? `
-    <span class="badge ${isSubagent ? 'agent-subagent' : 'agent-main'}" style="font-size:9.5px;padding:1px 5px;font-weight:700;display:inline-flex;align-items:center;gap:3px" title="Agent: ${escHtml(agentLabel)}">
-      <span>${isSubagent ? '⚡' : '🎯'}</span>${escHtml(agentLabel)}
-    </span>
-  ` : '';
 
   if (listMode === 'ai') {
     const usage = calculateUsageAndCost(r);
-    const model = usage?.model || r.model || r.tag || '';
+    const model = usage?.model || r.model || '';
     const totalTokens = usage?.totalTokens || 0;
     const cost = usage?.cost || 0;
     const endpoint = getEndpointTail(r.url, 30);
+
+    // Primary Identity Badge (Only one badge!):
+    let identityBadge = '';
+    if (agentLabel) {
+      identityBadge = `<span class="badge ${isSubagent ? 'agent-subagent' : 'agent-main'}" style="font-size:9.5px;padding:1px 5px;font-weight:700;display:inline-flex;align-items:center;gap:3px" title="Agent: ${escHtml(agentLabel)}"><span>🤖</span>${escHtml(agentLabel)}</span>`;
+    } else if (r.tag) {
+      identityBadge = `<span class="badge ${tagColorClass(r.tag)}" style="font-size:9px">${escHtml(tagLabel(r.tag))}</span>`;
+    }
+
+    // Secondary model chip: only show if distinct from agent and not generic tag
+    let modelChip = '';
+    const cleanModel = (model || '').toLowerCase().trim();
+    const isGenericOrDuplicate = !cleanModel || cleanModel === 'postqode' || (agentLabel && cleanModel === agentLabel.toLowerCase());
+    if (!isGenericOrDuplicate) {
+      const shortModel = model.replace(/^[a-z0-9_-]+\//i, '');
+      modelChip = `<span class="mono" style="font-weight:600; color:#818cf8; font-size:10px; background:var(--bg-3); padding:1px 5px; border-radius:4px" title="Model: ${escHtml(model)}">${escHtml(shortModel)}</span>`;
+    }
 
     return `
       <td class="network-ai-row-cell" title="${escHtml(r.url)}">
@@ -2538,8 +2556,8 @@ function renderRow(r) {
             ${r.isReplay ? `<span class="badge grey" style="font-size:8px;padding:1px 3px">REPLAY</span>` : ''}
             ${r.isMocked ? `<span class="badge purple" style="font-size:8px;padding:1px 3px">MOCK</span>` : ''}
             ${interceptBadge}
-            ${agentBadge}
-            ${model ? `<span class="mono" style="font-weight:bold; color:#818cf8; font-size:11px; display:inline-flex; align-items:center; gap:3px"><span>🤖</span>${escHtml(model)}</span>` : `<span class="badge ${tagColorClass(r.tag)}" style="font-size:9px">${escHtml(tagLabel(r.tag))}</span>`}
+            ${identityBadge}
+            ${modelChip}
           </div>
           <span class="mono" style="font-size:10.5px; color:var(--text-2)">${fmtDuration(r.duration)}</span>
         </div>
@@ -2573,7 +2591,7 @@ function renderRow(r) {
     <td class="network-url-cell" title="${escHtml(r.url)}">
       <div style="display:flex;align-items:center;gap:6px">
         <span class="mono" style="color:#a5b4fc;font-weight:600">${escHtml(getEndpointTail(r.url, 40))}</span>
-        ${agentBadge}
+        ${agentLabel ? `<span class="badge ${isSubagent ? 'agent-subagent' : 'agent-main'}" style="font-size:9px;padding:1px 4px;font-weight:600">🤖 ${escHtml(agentLabel)}</span>` : ''}
       </div>
     </td>
     <td><span class="badge ${statusClass(r.statusCode)}">${r.statusCode || 'ERR'}</span></td>
@@ -3652,7 +3670,7 @@ function renderHumanReadableMessageContent(rawText) {
 }
 
 function renderHumanReadableRequest(parsed, record) {
-  const model = parsed.model || record.model || record.tag || 'LLM';
+  const model = parsed.model || record.model || '';
   const msgCount = parsed.messages.length;
   const toolCount = parsed.tools.length;
   const hasSys = !!parsed.systemPrompt;
@@ -3660,6 +3678,8 @@ function renderHumanReadableRequest(parsed, record) {
   const sysTokEst = Math.round(sysChars / 4);
   const agentLabel = parsed.systemPrompt ? extractAgentLabel(parsed.systemPrompt) : getAgentLabel(record);
   const isSubagent = agentLabel && /subagent/i.test(agentLabel);
+  const cleanModel = (model || '').toLowerCase().trim();
+  const isDuplicateModel = !cleanModel || cleanModel === 'postqode' || (agentLabel && cleanModel === agentLabel.toLowerCase());
 
   // Progressive rendering for conversation messages
   const isLargeThread = msgCount > 16;
@@ -3762,12 +3782,16 @@ function renderHumanReadableRequest(parsed, record) {
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           ${agentLabel ? `
             <span class="badge ${isSubagent ? 'agent-subagent' : 'agent-main'}" style="font-size:11px;font-weight:700;padding:2px 8px;display:inline-flex;align-items:center;gap:4px">
-              <span>${isSubagent ? '⚡' : '🎯'}</span> ${escHtml(agentLabel)}
+              <span>🤖</span> ${escHtml(agentLabel)}
+            </span>
+          ` : (record.tag ? `
+            <span class="badge ${tagColorClass(record.tag)}" style="font-size:11px;padding:2px 8px">${escHtml(tagLabel(record.tag))}</span>
+          ` : '')}
+          ${!isDuplicateModel && model ? `
+            <span style="font-weight:bold;color:#818cf8;font-size:12.5px;display:flex;align-items:center;gap:5px">
+              <span>🧠</span> ${escHtml(model)}
             </span>
           ` : ''}
-          <span style="font-weight:bold;color:#818cf8;font-size:12.5px;display:flex;align-items:center;gap:5px">
-            <span>🤖</span> ${escHtml(model)}
-          </span>
           ${parsed.params.stream ? `<span class="badge cyan" style="font-size:9.5px">⚡ Streaming</span>` : ''}
           ${parsed.params.temperature != null ? `<span class="mono" style="font-size:10px;color:var(--text-3);background:var(--bg-3);padding:1px 6px;border-radius:6px">temp: ${parsed.params.temperature}</span>` : ''}
           ${parsed.params.max_tokens ? `<span class="mono" style="font-size:10px;color:var(--text-3);background:var(--bg-3);padding:1px 6px;border-radius:6px">max_tokens: ${parsed.params.max_tokens}</span>` : ''}
