@@ -301,6 +301,20 @@ function calculateUsageAndCost(r) {
   };
 }
 
+function safeGetStorage(key, fallback = '') {
+  try {
+    return typeof localStorage !== 'undefined' ? (localStorage.getItem(key) || fallback) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function safeSetStorage(key, val) {
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(key, val);
+  } catch {}
+}
+
 // ── State ──
 let ws = null;
 let isRecording = true;
@@ -309,6 +323,9 @@ let selectedRequest = null;
 let activeFilters = { host: 'all', method: '', status: '', search: '', limit: 'all' };
 let activeDetailTab = 'headers';
 let bodyViewModes = { request: 'human', response: 'human' };
+let studioLayout = safeGetStorage('pq-network-layout', 'side-by-side');
+let listMode = safeGetStorage('pq-network-list-mode', 'ai');
+let activeDrawer = null;
 let payloadSearchState = {
   request: { query: '', matchIndex: 0, matches: [] },
   response: { query: '', matchIndex: 0, matches: [] },
@@ -705,6 +722,88 @@ function bindMockAndDiffEvents() {
   });
 }
 
+function openDrawer(name) {
+  activeDrawer = name;
+  const backdrop = document.getElementById('network-drawer-backdrop');
+  if (backdrop) backdrop.classList.add('active');
+
+  ['setup', 'mocks', 'intercept'].forEach(d => {
+    const el = document.getElementById(`network-${d}-drawer`);
+    if (el) {
+      if (d === name) el.classList.add('open');
+      else el.classList.remove('open');
+    }
+  });
+
+  document.getElementById('network-setup-btn')?.classList.toggle('active', name === 'setup');
+  document.getElementById('network-mocks-btn')?.classList.toggle('active', name === 'mocks');
+  document.getElementById('network-intercept-btn')?.classList.toggle('active', name === 'intercept');
+}
+
+function closeDrawer() {
+  activeDrawer = null;
+  const backdrop = document.getElementById('network-drawer-backdrop');
+  if (backdrop) backdrop.classList.remove('active');
+
+  ['setup', 'mocks', 'intercept'].forEach(d => {
+    document.getElementById(`network-${d}-drawer`)?.classList.remove('open');
+  });
+
+  document.getElementById('network-setup-btn')?.classList.remove('active');
+  document.getElementById('network-mocks-btn')?.classList.remove('active');
+  document.getElementById('network-intercept-btn')?.classList.remove('active');
+}
+
+function renderDetailDeck(r) {
+  const usage = calculateUsageAndCost(r);
+  const model = usage?.model || r.tag || 'LLM';
+  const hasUsage = usage && (usage.totalTokens > 0 || usage.cost > 0);
+
+  return `
+    <div class="network-detail-deck">
+      <div class="network-detail-deck-top">
+        <div style="display:flex; align-items:center; gap:8px; min-width:0; flex:1">
+          <span class="badge ${methodClass(r.method)}" style="font-size:11px">${escHtml(r.method)}</span>
+          <span class="mono" style="font-size:11.5px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap" title="${escHtml(r.url)}">
+            ${escHtml(r.url)}
+          </span>
+          <button class="action-btn secondary network-copy-btn" data-copy-text="${escHtml(r.url)}" style="padding:2px 6px; font-size:10px" title="Copy URL">📋</button>
+        </div>
+        <div class="network-deck-actions">
+          <button class="action-btn secondary" id="deck-replay-btn" data-req-id="${r.id}" style="padding:3px 8px; font-size:11px" title="Replay request">🔄 Replay</button>
+          <button class="action-btn secondary" id="deck-curl-btn" data-req-id="${r.id}" style="padding:3px 8px; font-size:11px" title="Copy cURL">💻 cURL</button>
+          <button class="action-btn secondary" id="deck-diff-btn" data-req-id="${r.id}" style="padding:3px 8px; font-size:11px" title="Select for compare">⚔️ Diff</button>
+          <button id="network-detail-close" class="network-control-btn" title="Close" style="font-size:12px; margin-left:4px">✕</button>
+        </div>
+      </div>
+      <div class="network-detail-deck-metrics">
+        <span class="badge ${statusClass(r.statusCode)}">${r.statusCode || 'ERR'}</span>
+        <span class="network-deck-pill" style="color:#818cf8">
+          <span>🤖</span> <strong>${escHtml(model)}</strong>
+        </span>
+        <span class="network-deck-pill">
+          <span>⏱️</span> ${fmtDuration(r.duration)}
+        </span>
+        ${hasUsage ? `
+          <span class="network-deck-pill">
+            <span>📊</span> ${usage.totalTokens.toLocaleString()} tokens
+          </span>
+          <span class="network-deck-pill" style="color:var(--green); font-weight:600">
+            <span>💰</span> $${usage.cost < 0.01 ? usage.cost.toFixed(4) : usage.cost.toFixed(3)}
+          </span>
+        ` : `
+          <span class="network-deck-pill">
+            <span>📦</span> ${fmtBytes(r.size)}
+          </span>
+        `}
+        <span class="network-deck-pill" style="color:var(--text-3)">
+          <span>🕒</span> ${fmtTime(r.timestamp)}
+        </span>
+      </div>
+    </div>
+  `;
+}
+
 // ── Render ──
 export async function renderNetwork(container) {
   // Cleanup previous WebSocket
@@ -721,22 +820,173 @@ export async function renderNetwork(container) {
     // Proxy might not be running yet
   }
 
-  const setupDismissed = localStorage.getItem('pq-network-setup-dismissed') === 'true';
+  const setupDismissed = safeGetStorage('pq-network-setup-dismissed') === 'true';
 
   container.innerHTML = `
-    <div class="view-header">
-      <h1 class="view-title">Network Inspector</h1>
-      <p class="view-subtitle">Live HTTP/HTTPS traffic capture from PostQode via MITM proxy</p>
+    <!-- Studio Header -->
+    <div class="network-studio-header">
+      <div class="network-studio-title-group">
+        <h1 class="view-title" style="margin:0;font-size:18px;display:flex;align-items:center;gap:8px">
+          <span>🌐</span> Network Inspector Studio
+        </h1>
+        <div class="network-proxy-status-pill">
+          <span id="network-status-dot" class="network-status-dot disconnected"></span>
+          <span id="network-status-label">Port :${status.port || 3457}</span>
+        </div>
+        <span id="network-request-count" class="network-count-badge">0 requests</span>
+      </div>
+
+      <div class="network-header-actions">
+        <button id="network-record-btn" class="network-control-btn recording" title="Toggle Recording">
+          <span class="record-dot"></span>
+        </button>
+        <button id="network-clear-btn" class="network-control-btn" title="Clear Traffic">🗑</button>
+        <button id="network-export-btn" class="network-control-btn" title="Export HAR Archive">📥</button>
+        
+        <button id="network-mocks-btn" class="network-studio-action-btn" title="Open Mock Rules Manager">
+          <span>⚙️</span> Mock Rules <span id="mock-rules-badge" class="badge grey" style="font-size:9.5px;padding:1px 5px">0</span>
+        </button>
+
+        <button id="network-intercept-btn" class="network-studio-action-btn" title="Open Request Breakpoints Queue">
+          <span>🛑</span> Breakpoints <span id="intercept-pending-badge" class="badge grey" style="font-size:9.5px;padding:1px 5px">0</span>
+        </button>
+
+        <button id="network-setup-btn" class="network-studio-action-btn" title="Open Proxy Setup Guide">
+          <span>❓</span> Setup Guide
+        </button>
+
+        <div class="network-toolbar-divider"></div>
+
+        <div class="network-mode-segmented" title="Switch Workspace Layout">
+          <button class="network-mode-btn ${studioLayout === 'side-by-side' ? 'active' : ''}" id="layout-split-btn" title="Side-by-Side Split">◫</button>
+          <button class="network-mode-btn ${studioLayout === 'stacked' ? 'active' : ''}" id="layout-stacked-btn" title="Stacked Split">⬒</button>
+        </div>
+      </div>
     </div>
 
-    <!-- Setup Instructions -->
-    <div id="network-setup-card" class="panel network-setup ${setupDismissed ? 'dismissed' : ''}" style="${setupDismissed ? 'display:none' : ''}">
-      <div class="panel-title">
-        <span>📡 Setup Required — Configure VS Code to route traffic through the proxy</span>
-        <button id="dismiss-setup-btn" class="action-btn secondary" style="padding:2px 8px;min-height:auto;font-size:10px">Hide</button>
+    <!-- Studio Toolbar & Filters Deck -->
+    <div class="network-studio-toolbar">
+      <div class="network-studio-toolbar-row1">
+        <div style="flex:1;min-width:240px;position:relative">
+          <input id="network-search" type="text" class="filter-input network-search-input" placeholder="🔍 Filter traffic by URL, model, host, or method…" style="width:100%" />
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <select id="network-method-filter" class="filter-select">
+            <option value="">All Methods</option>
+            <option value="GET">GET</option>
+            <option value="POST">POST</option>
+            <option value="PUT">PUT</option>
+            <option value="PATCH">PATCH</option>
+            <option value="DELETE">DELETE</option>
+            <option value="OPTIONS">OPTIONS</option>
+          </select>
+          <select id="network-status-filter" class="filter-select">
+            <option value="">All Status</option>
+            <option value="2xx">2xx Success</option>
+            <option value="3xx">3xx Redirect</option>
+            <option value="4xx">4xx Client Error</option>
+            <option value="5xx">5xx Server Error</option>
+            <option value="0">Failed / Error</option>
+          </select>
+          <select id="network-limit-filter" class="filter-select">
+            <option value="all">All Requests</option>
+            <option value="5">Last 5</option>
+            <option value="10">Last 10</option>
+            <option value="15">Last 15</option>
+          </select>
+        </div>
       </div>
-      <div class="panel-body">
-        <div class="network-setup-steps">
+
+      <div class="network-studio-toolbar-row2">
+        <div class="network-mode-segmented">
+          <button class="network-mode-btn ${listMode === 'ai' ? 'active' : ''}" id="list-mode-ai-btn">
+            <span>🤖</span> AI / LLM Traces
+          </button>
+          <button class="network-mode-btn ${listMode === 'http' ? 'active' : ''}" id="list-mode-http-btn">
+            <span>🌐</span> HTTP Requests
+          </button>
+        </div>
+
+        <div class="network-domain-chips" id="network-domain-chips" style="margin-top:0">
+          <button class="network-chip active" data-tag="all">All</button>
+          <button class="network-chip" data-tag="postqode">PostQode</button>
+          <button class="network-chip" data-tag="openai">OpenAI</button>
+          <button class="network-chip" data-tag="anthropic">Anthropic</button>
+          <button class="network-chip" data-tag="google">Google</button>
+          <button class="network-chip" data-tag="copilot">Copilot</button>
+          <button class="network-chip" data-tag="github">GitHub</button>
+          <button class="network-chip" data-tag="other">Other</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Master-Detail Split Pane Layout -->
+    <div class="network-content layout-${studioLayout}" id="network-content-workspace">
+      <!-- Master Requests List Panel -->
+      <div class="panel network-table-panel">
+        <div id="network-compare-banner" class="network-compare-banner" style="display:none; align-items:center; justify-content:space-between; padding:8px 12px; background:var(--accent-glow); border-bottom:1px solid var(--accent); font-size:12px; color:var(--text);">
+          <span>📊 Comparing with Request <strong>#<span id="compare-base-id"></span></strong>: <span id="compare-base-url" class="mono" style="font-size:11px"></span></span>
+          <button id="clear-compare-btn" class="action-btn secondary" style="padding:2px 8px; min-height:auto; font-size:10px">Clear</button>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table network-table" id="network-request-table">
+            <thead id="network-table-thead"></thead>
+            <tbody id="network-request-tbody">
+              <tr><td colspan="8" class="network-empty-row">
+                <div class="empty-state" style="padding:40px 20px;min-height:auto">
+                  <div class="icon">📡</div>
+                  <p>Waiting for network traffic…</p>
+                  <p style="margin-top:6px;font-size:11px;color:var(--text-3)">
+                    Ensure VS Code proxy is pointing to port ${status.port || 3457}. Click Setup Guide above for step-by-step help.
+                  </p>
+                </div>
+              </td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Detail Inspector Panel -->
+      <div id="network-detail-panel" class="panel network-detail-panel">
+        <div id="network-detail-deck-container"></div>
+        <div class="network-detail-tabs" id="network-detail-tabs-bar" style="${selectedRequest ? '' : 'display:none'}">
+          <button class="network-detail-tab active" data-tab="headers">📋 Headers</button>
+          <button class="network-detail-tab" data-tab="request">💬 Request</button>
+          <button class="network-detail-tab" data-tab="response">⚡ Response</button>
+          <button class="network-detail-tab" data-tab="timing">⏱️ Timing</button>
+        </div>
+        <div id="network-detail-body" class="network-detail-body">
+          <div class="network-inspector-empty">
+            <div class="icon">📡</div>
+            <h3 style="margin:0 0 6px 0; font-size:14px; color:var(--text)">No Request Selected</h3>
+            <p style="margin:0; font-size:12px; color:var(--text-3); max-width:320px">
+              Select a request from the list on the left to inspect conversation turns, parameters, headers, and responses.
+            </p>
+            <div style="margin-top:14px; font-size:11px; color:var(--text-3)" class="mono">
+              💡 Tip: Use <kbd style="background:var(--bg-4);padding:2px 6px;border-radius:4px;border:1px solid var(--border)">↑</kbd> and <kbd style="background:var(--bg-4);padding:2px 6px;border-radius:4px;border:1px solid var(--border)">↓</kbd> keys to browse requests.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Drawer Backdrop -->
+    <div id="network-drawer-backdrop" class="network-drawer-backdrop"></div>
+
+    <!-- Setup Guide Slide-Over Drawer -->
+    <div id="network-setup-drawer" class="network-drawer">
+      <div class="network-drawer-header">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:18px">📡</span>
+          <h3 style="margin:0;font-size:15px;color:var(--text)">Proxy Setup Guide</h3>
+        </div>
+        <button class="network-control-btn network-drawer-close" title="Close">✕</button>
+      </div>
+      <div class="network-drawer-body">
+        <p style="font-size:12px;color:var(--text-2);margin-top:0;margin-bottom:14px">
+          Configure VS Code to route AI requests through the local MITM proxy on port <code>${status.port || 3457}</code>.
+        </p>
+        <div class="network-setup-steps" style="display:flex;flex-direction:column;gap:12px">
           <div class="setup-step">
             <div class="setup-step-num">1</div>
             <div class="setup-step-content">
@@ -769,35 +1019,27 @@ export async function renderNetwork(container) {
               <p>Search for <code>http.noProxy</code> and add: <code>localhost, 127.0.0.1</code> to prevent proxying local IPC</p>
             </div>
           </div>
-          <div class="setup-step" style="grid-column: span 2;">
+          <div class="setup-step">
             <div class="setup-step-num">5</div>
             <div class="setup-step-content" style="width: 100%;">
-              <strong>Handle Extension Auth & TLS Trust (Required)</strong>
-              <p>Many extensions (and VS Code login services) run in processes that ignore strict SSL configurations, causing handshake errors (alert 46) or logging you out. Use one of these solutions:</p>
+              <strong>Handle Extension Auth & TLS Trust</strong>
               <div style="margin-top: 8px; display: flex; flex-direction: column; gap: 10px;">
                 <div>
-                  <span style="font-size: 10px; color: var(--text-3); font-weight: bold; display: block;">Option A: Bypass Proxy for Authentication (Simplest, keeps login working)</span>
-                  <p style="margin: 4px 0; font-size: 11px;">Add <code>"api.postqode.ai"</code> (or other auth domain) to your <code>"http.noProxy"</code> setting in VS Code. It will bypass the proxy for account sync/auth while still capturing direct AI calls (OpenAI, Anthropic, etc.).</p>
-                </div>
-                <div>
-                  <span style="font-size: 10px; color: var(--text-3); font-weight: bold; display: block;">Option B: Trust CA Certificate in macOS System (Recommended, proxies everything)</span>
-                  <p style="margin: 4px 0 6px 0; font-size: 11px;">Add the proxy CA certificate to your macOS System Keychain to trust it globally for all processes (including Electron/VS Code main process):</p>
+                  <span style="font-size: 10.5px; color: var(--text-3); font-weight: bold; display: block;">Option A: Trust CA Certificate in macOS (Recommended)</span>
                   <div class="setup-code-block" style="margin-top: 4px;">
                     <code id="macos-trust-cmd-value" style="word-break: break-all;">sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "${status.ca_cert_path || ''}"</code>
                     <button id="copy-macos-trust-cmd" class="setup-copy-btn" title="Copy">📋</button>
                   </div>
-                  <p style="margin: 6px 0 0 0; font-size: 10px; color: var(--text-3);">Or double-click the certificate file at the path above, open it in macOS <strong>Keychain Access</strong>, double-click the certificate under Certificates, expand <strong>Trust</strong>, and set <strong>Always Trust</strong>.</p>
                 </div>
                 <div>
-                  <span style="font-size: 10px; color: var(--text-3); font-weight: bold; display: block;">Option C: Launch VS Code with Node Certificate Trust (Terminal option)</span>
-                  <p style="margin: 4px 0 6px 0; font-size: 11px;">If you don't want to install it globally, launch VS Code from your terminal instructing Node.js to trust the certificate:</p>
+                  <span style="font-size: 10.5px; color: var(--text-3); font-weight: bold; display: block;">Option B: Launch VS Code with Node Certificate Trust</span>
                   <div class="setup-code-block" style="margin-top: 4px;">
                     <code id="env-var-secure-value" style="word-break: break-all;">NODE_EXTRA_CA_CERTS="${status.ca_cert_path || ''}" code</code>
                     <button id="copy-env-var-secure" class="setup-copy-btn" title="Copy">📋</button>
                   </div>
                 </div>
                 <div>
-                  <span style="font-size: 10px; color: var(--text-3); font-weight: bold; display: block;">Option D: Ignore Validation (Quick local bypass)</span>
+                  <span style="font-size: 10.5px; color: var(--text-3); font-weight: bold; display: block;">Option C: Ignore Validation (Quick local bypass)</span>
                   <div class="setup-code-block" style="margin-top: 4px;">
                     <code id="env-var-easy-value" style="word-break: break-all;">NODE_TLS_REJECT_UNAUTHORIZED=0 code</code>
                     <button id="copy-env-var-easy" class="setup-copy-btn" title="Copy">📋</button>
@@ -806,15 +1048,8 @@ export async function renderNetwork(container) {
               </div>
             </div>
           </div>
-          <div class="setup-step">
-            <div class="setup-step-num">6</div>
-            <div class="setup-step-content">
-              <strong>Restart VS Code</strong>
-              <p>Close and launch VS Code using one of the Options above for interception to work.</p>
-            </div>
-          </div>
         </div>
-        <div class="setup-json-block">
+        <div class="setup-json-block" style="margin-top:16px">
           <p style="font-size:11px;color:var(--text-3);margin-bottom:6px">Or paste this into your <code>settings.json</code>:</p>
           <pre class="setup-json-pre"><code id="settings-json-value">{
   "http.proxy": "http://localhost:${status.port || 3457}",
@@ -829,76 +1064,22 @@ export async function renderNetwork(container) {
         </div>
       </div>
     </div>
-    ${setupDismissed ? `<button id="show-setup-btn" class="action-btn secondary" style="margin-bottom:14px;padding:4px 10px;min-height:auto;font-size:11px">📡 Show Setup Instructions</button>` : ''}
 
-    <!-- Toolbar -->
-    <div class="panel network-toolbar-panel">
-      <div class="panel-body" style="padding:10px 14px">
-        <div class="network-toolbar">
-          <div class="network-toolbar-controls">
-            <button id="network-record-btn" class="network-control-btn recording" title="Recording">
-              <span class="record-dot"></span>
-            </button>
-            <button id="network-clear-btn" class="network-control-btn" title="Clear">🗑</button>
-            <button id="network-export-btn" class="network-control-btn" title="Export HAR">📥</button>
-            <button id="network-mocks-btn" class="network-control-btn" title="Mock Rules" style="font-size: 13px;">⚙️</button>
-            <button id="network-intercept-btn" class="network-control-btn" title="Request Breakpoints" style="font-size: 13px;">🛑</button>
-            <div class="network-toolbar-divider"></div>
-            <div class="network-status-indicator">
-              <span id="network-status-dot" class="network-status-dot disconnected"></span>
-              <span id="network-status-label" class="network-status-text">Connecting…</span>
-            </div>
-            <span id="network-request-count" class="network-count-badge">0 requests</span>
-          </div>
-          <div class="network-toolbar-filters">
-            <input id="network-search" type="text" class="filter-input network-search-input" placeholder="Filter by URL, host, or method…" />
-            <select id="network-method-filter" class="filter-select">
-              <option value="">All Methods</option>
-              <option value="GET">GET</option>
-              <option value="POST">POST</option>
-              <option value="PUT">PUT</option>
-              <option value="PATCH">PATCH</option>
-              <option value="DELETE">DELETE</option>
-              <option value="OPTIONS">OPTIONS</option>
-            </select>
-            <select id="network-status-filter" class="filter-select">
-              <option value="">All Status</option>
-              <option value="2xx">2xx Success</option>
-              <option value="3xx">3xx Redirect</option>
-              <option value="4xx">4xx Client Error</option>
-              <option value="5xx">5xx Server Error</option>
-              <option value="0">Failed / Error</option>
-            </select>
-            <select id="network-limit-filter" class="filter-select">
-              <option value="all">All Requests</option>
-              <option value="5">Last 5</option>
-              <option value="10">Last 10</option>
-              <option value="15">Last 15</option>
-            </select>
-          </div>
+    <!-- Mock Rules Manager Slide-Over Drawer -->
+    <div id="network-mocks-drawer" class="network-drawer">
+      <div class="network-drawer-header">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:18px">⚙️</span>
+          <h3 style="margin:0;font-size:15px;color:var(--text)">Mock Rules Manager</h3>
         </div>
-        <div class="network-domain-chips" id="network-domain-chips">
-          <button class="network-chip active" data-tag="all">All</button>
-          <button class="network-chip" data-tag="postqode">PostQode</button>
-          <button class="network-chip" data-tag="openai">OpenAI</button>
-          <button class="network-chip" data-tag="anthropic">Anthropic</button>
-          <button class="network-chip" data-tag="google">Google</button>
-          <button class="network-chip" data-tag="copilot">Copilot</button>
-          <button class="network-chip" data-tag="github">GitHub</button>
-          <button class="network-chip" data-tag="other">Other</button>
+        <div style="display:flex;align-items:center;gap:6px">
+          <button id="add-mock-rule-btn" class="action-btn primary" style="padding: 3px 10px; font-size: 11px;">+ Add Rule</button>
+          <button class="network-control-btn network-drawer-close" title="Close">✕</button>
         </div>
       </div>
-    </div>
-
-    <!-- Mock Rules Manager Panel (hidden by default) -->
-    <div id="network-mocks-panel" class="panel network-mocks-panel" style="display: none; border-top: 2px solid var(--accent); margin-bottom: 14px;">
-      <div class="panel-title" style="padding: 8px 14px;">
-        <span>⚙️ Mock Rules Manager — Intercept and hijack proxy requests</span>
-        <button id="add-mock-rule-btn" class="action-btn primary" style="padding: 2px 8px; min-height: auto; font-size: 10px;">+ Add Rule</button>
-      </div>
-      <div class="panel-body" style="padding: 12px 14px;">
-        <div id="mock-rules-form-container" style="display: none; margin-bottom: 12px; padding: 12px; background: var(--bg-3); border-radius: var(--radius-sm); border: 1px solid var(--border);">
-          <h4 style="margin-bottom: 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-2);">Add / Edit Mock Rule</h4>
+      <div class="network-drawer-body">
+        <div id="mock-rules-form-container" style="display: none; margin-bottom: 14px; padding: 14px; background: var(--bg-3); border-radius: var(--radius-sm); border: 1px solid var(--border);">
+          <h4 style="margin:0 0 10px 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-2);">Add / Edit Mock Rule</h4>
           <input type="hidden" id="mock-form-id" />
           <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 10px;">
             <div>
@@ -912,7 +1093,7 @@ export async function renderNetwork(container) {
               </select>
             </div>
             <div style="grid-column: span 2;">
-              <label class="mono" style="font-size: 10px; color: var(--text-3); display: block; margin-bottom: 4px;">URL Pattern (Match Substring)</label>
+              <label class="mono" style="font-size: 10px; color: var(--text-3); display: block; margin-bottom: 4px;">URL Pattern (Substring)</label>
               <input type="text" id="mock-form-pattern" class="filter-input" placeholder="e.g. api.openai.com/v1" style="width: 100%;" />
             </div>
             <div>
@@ -929,95 +1110,48 @@ export async function renderNetwork(container) {
               </label>
             </div>
           </div>
-          <div style="margin-bottom: 10px;">
+          <div style="margin-bottom: 12px;">
             <label class="mono" style="font-size: 10px; color: var(--text-3); display: block; margin-bottom: 4px;">Mock Response Body (JSON / Text)</label>
-            <textarea id="mock-form-body" class="filter-input mono" placeholder='e.g. { "error": "rate limit exceeded" }' style="width: 100%; height: 80px; font-size: 11px; font-family: var(--font-mono); resize: vertical;"></textarea>
+            <textarea id="mock-form-body" class="filter-input mono" placeholder='e.g. { "error": "rate limit exceeded" }' style="width: 100%; height: 90px; font-size: 11px; font-family: var(--font-mono); resize: vertical;"></textarea>
           </div>
           <div style="display: flex; gap: 8px;">
-            <button id="save-mock-rule-btn" class="action-btn primary" style="padding: 4px 12px; min-height: auto; font-size: 11px;">Save Rule</button>
-            <button id="cancel-mock-rule-btn" class="action-btn secondary" style="padding: 4px 12px; min-height: auto; font-size: 11px;">Cancel</button>
+            <button id="save-mock-rule-btn" class="action-btn primary" style="padding: 4px 12px; font-size: 11px;">Save Rule</button>
+            <button id="cancel-mock-rule-btn" class="action-btn secondary" style="padding: 4px 12px; font-size: 11px;">Cancel</button>
           </div>
         </div>
-        <div id="mock-rules-list" class="network-kv-table" style="max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px;">
-          <!-- Mock rules render here -->
-        </div>
+        <div id="mock-rules-list" style="display: flex; flex-direction: column; gap: 8px;"></div>
       </div>
     </div>
 
-    <!-- Intercept / Breakpoint Panel (hidden by default) -->
-    <div id="network-intercept-panel" class="panel network-intercept-panel" style="display: none;">
-      <div class="panel-title" style="padding: 8px 14px;">
-        <div class="intercept-header-row">
-          <span>🛑 Request Breakpoints — Intercept, Edit & Forward Requests</span>
-          <label class="intercept-toggle" title="Enable/Disable Intercept Mode">
+    <!-- Request Breakpoints Slide-Over Drawer -->
+    <div id="network-intercept-drawer" class="network-drawer">
+      <div class="network-drawer-header">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:18px">🛑</span>
+          <h3 style="margin:0;font-size:15px;color:var(--text)">Request Breakpoints</h3>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <label class="intercept-toggle" title="Enable/Disable Intercept Mode" style="margin:0">
             <input type="checkbox" id="intercept-enabled-toggle" />
             <span class="intercept-toggle-slider"></span>
           </label>
           <span id="intercept-pending-count" class="intercept-pending-badge empty">0 Pending</span>
+          <button id="intercept-forward-all-btn" class="intercept-action-btn forward-all" style="display: none; padding:3px 8px; font-size:11px">✅ Forward All</button>
+          <button class="network-control-btn network-drawer-close" title="Close">✕</button>
         </div>
-        <button id="intercept-forward-all-btn" class="intercept-action-btn forward-all" style="display: none;">✅ Forward All</button>
       </div>
-      <div class="panel-body" style="padding: 12px 14px;">
-        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
-          <input type="text" id="intercept-filter-input" class="filter-input" placeholder="Add URL filter pattern (e.g. api.openai.com)…" style="flex: 1; min-width: 180px;" />
-          <button id="intercept-add-filter-btn" class="action-btn secondary" style="padding: 4px 10px; min-height: auto; font-size: 11px;">+ Add Filter</button>
+      <div class="network-drawer-body">
+        <p style="font-size:12px;color:var(--text-2);margin-top:0;margin-bottom:12px">
+          Pause matching requests before they are sent upstream. Inspect, modify headers/body, and forward or drop them.
+        </p>
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px;">
+          <input type="text" id="intercept-filter-input" class="filter-input" placeholder="Add URL filter pattern (e.g. api.postqode.ai)…" style="flex: 1;" />
+          <button id="intercept-add-filter-btn" class="action-btn secondary" style="padding: 5px 12px; font-size: 11px;">+ Add Filter</button>
         </div>
-        <div id="intercept-filter-chips" class="intercept-filters" style="display: none;"></div>
+        <div id="intercept-filter-chips" class="intercept-filters" style="display: none; margin-bottom:14px"></div>
         <div id="intercept-pending-queue" class="intercept-pending-queue">
-          <div class="intercept-empty-state">No intercepted requests. Enable intercept mode and send requests through the proxy.</div>
+          <div class="intercept-empty-state">No intercepted requests pending. Enable intercept mode above to capture outgoing traffic.</div>
         </div>
-      </div>
-    </div>
-
-    <!-- Request Table + Detail Split -->
-    <div class="network-content">
-      <div class="panel network-table-panel">
-        <div id="network-compare-banner" class="network-compare-banner" style="display:none; align-items:center; justify-content:space-between; padding:8px 12px; background:var(--accent-glow); border-bottom:1px solid var(--accent); font-size:12px; color:var(--text); border-radius: var(--radius-sm) var(--radius-sm) 0 0;">
-          <span>📊 Comparing with Request <strong>#<span id="compare-base-id"></span></strong>: <span id="compare-base-url" class="mono" style="font-size:11px"></span></span>
-          <button id="clear-compare-btn" class="action-btn secondary" style="padding:2px 8px; min-height:auto; font-size:10px">Clear</button>
-        </div>
-        <div class="table-wrap">
-          <table class="data-table network-table" id="network-request-table">
-            <thead>
-              <tr>
-                <th style="width:44px">#</th>
-                <th style="width:62px">Method</th>
-                <th>URL</th>
-                <th style="width:60px">Status</th>
-                <th style="width:50px">Tag</th>
-                <th style="width:68px">Size</th>
-                <th style="width:72px">Time</th>
-                <th style="width:64px">When</th>
-              </tr>
-            </thead>
-            <tbody id="network-request-tbody">
-              <tr><td colspan="8" class="network-empty-row">
-                <div class="empty-state" style="padding:40px 20px;min-height:auto">
-                  <div class="icon">📡</div>
-                  <p>Waiting for network requests…</p>
-                  <p style="margin-top:6px;font-size:11px;color:var(--text-3)">
-                    Make sure VS Code is configured to use the proxy and PostQode is active.
-                  </p>
-                </div>
-              </td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- Detail Panel (hidden until a request is selected) -->
-      <div id="network-detail-panel" class="panel network-detail-panel" style="display:none">
-        <div class="panel-title" style="padding:8px 14px">
-          <span id="network-detail-title">Request Detail</span>
-          <button id="network-detail-close" class="network-control-btn" title="Close" style="font-size:12px">✕</button>
-        </div>
-        <div class="network-detail-tabs">
-          <button class="network-detail-tab active" data-tab="headers">Headers</button>
-          <button class="network-detail-tab" data-tab="request">Request</button>
-          <button class="network-detail-tab" data-tab="response">Response</button>
-          <button class="network-detail-tab" data-tab="timing">Timing</button>
-        </div>
-        <div id="network-detail-body" class="network-detail-body"></div>
       </div>
     </div>
 
@@ -1184,19 +1318,96 @@ function bindToolbarEvents(status) {
     renderTable();
   });
 
-  // Setup dismiss
-  document.getElementById('dismiss-setup-btn')?.addEventListener('click', () => {
-    localStorage.setItem('pq-network-setup-dismissed', 'true');
-    const card = document.getElementById('network-setup-card');
-    if (card) card.style.display = 'none';
-    // Add show button
-    card?.insertAdjacentHTML('afterend', `<button id="show-setup-btn" class="action-btn secondary" style="margin-bottom:14px;padding:4px 10px;min-height:auto;font-size:11px">📡 Show Setup Instructions</button>`);
-    document.getElementById('show-setup-btn')?.addEventListener('click', showSetup);
+  // Drawers controls
+  document.getElementById('network-setup-btn')?.addEventListener('click', () => openDrawer('setup'));
+  document.getElementById('network-mocks-btn')?.addEventListener('click', () => openDrawer('mocks'));
+  document.getElementById('network-intercept-btn')?.addEventListener('click', () => openDrawer('intercept'));
+  document.getElementById('network-drawer-backdrop')?.addEventListener('click', closeDrawer);
+  document.querySelectorAll('.network-drawer-close').forEach(btn => btn.addEventListener('click', closeDrawer));
+
+  // Workspace Layout Switcher
+  document.getElementById('layout-split-btn')?.addEventListener('click', () => {
+    studioLayout = 'side-by-side';
+    safeSetStorage('pq-network-layout', 'side-by-side');
+    document.getElementById('layout-split-btn')?.classList.add('active');
+    document.getElementById('layout-stacked-btn')?.classList.remove('active');
+    const ws = document.getElementById('network-content-workspace');
+    if (ws) {
+      ws.className = 'network-content layout-side-by-side';
+    }
   });
 
-  document.getElementById('show-setup-btn')?.addEventListener('click', showSetup);
+  document.getElementById('layout-stacked-btn')?.addEventListener('click', () => {
+    studioLayout = 'stacked';
+    safeSetStorage('pq-network-layout', 'stacked');
+    document.getElementById('layout-stacked-btn')?.classList.add('active');
+    document.getElementById('layout-split-btn')?.classList.remove('active');
+    const ws = document.getElementById('network-content-workspace');
+    if (ws) {
+      ws.className = 'network-content layout-stacked';
+    }
+  });
 
-  // Copy buttons
+  // List Mode Switcher
+  document.getElementById('list-mode-ai-btn')?.addEventListener('click', () => {
+    listMode = 'ai';
+    safeSetStorage('pq-network-list-mode', 'ai');
+    document.getElementById('list-mode-ai-btn')?.classList.add('active');
+    document.getElementById('list-mode-http-btn')?.classList.remove('active');
+    renderTable();
+  });
+
+  document.getElementById('list-mode-http-btn')?.addEventListener('click', () => {
+    listMode = 'http';
+    safeSetStorage('pq-network-list-mode', 'http');
+    document.getElementById('list-mode-http-btn')?.classList.add('active');
+    document.getElementById('list-mode-ai-btn')?.classList.remove('active');
+    renderTable();
+  });
+
+  // Global Keyboard Navigation (Up/Down arrow through requests)
+  if (!window._networkKeyboardBound) {
+    window._networkKeyboardBound = true;
+    document.addEventListener('keydown', (e) => {
+      // Don't hijack if user is typing in an input or textarea
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) return;
+      if (!requests || !requests.length) return;
+
+      const filtered = requests.filter(passesFilters);
+      if (!filtered.length) return;
+      const sorted = [...filtered].reverse();
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        const curId = selectedRequest?.id;
+        const curIdx = sorted.findIndex(r => r.id === curId);
+        const nextIdx = (curIdx >= 0 && curIdx < sorted.length - 1) ? curIdx + 1 : 0;
+        const nextReq = sorted[nextIdx];
+        if (nextReq) {
+          selectedRequest = nextReq;
+          highlightSelectedRow(nextReq.id);
+          showDetail(nextReq);
+        }
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        const curId = selectedRequest?.id;
+        const curIdx = sorted.findIndex(r => r.id === curId);
+        const prevIdx = curIdx > 0 ? curIdx - 1 : sorted.length - 1;
+        const prevReq = sorted[prevIdx];
+        if (prevReq) {
+          selectedRequest = prevReq;
+          highlightSelectedRow(prevReq.id);
+          showDetail(prevReq);
+        }
+      } else if (e.key === 'Escape') {
+        if (activeDrawer) {
+          closeDrawer();
+        }
+      }
+    });
+  }
+
+  // Copy buttons in Setup Drawer
   document.getElementById('copy-proxy-url')?.addEventListener('click', () => {
     const val = document.getElementById('proxy-url-value')?.textContent || '';
     navigator.clipboard.writeText(val).then(() => {
@@ -1236,14 +1447,6 @@ function bindToolbarEvents(status) {
       if (btn) { btn.textContent = '✓'; setTimeout(() => { btn.textContent = '📋'; }, 1500); }
     });
   });
-}
-
-function showSetup() {
-  localStorage.removeItem('pq-network-setup-dismissed');
-  const card = document.getElementById('network-setup-card');
-  if (card) { card.style.display = ''; card.classList.remove('dismissed'); }
-  const showBtn = document.getElementById('show-setup-btn');
-  if (showBtn) showBtn.remove();
 }
 
 function renderChips() {
@@ -1479,8 +1682,46 @@ function bindTableEvents() {
     if (selectedRequest) renderDetailContent(selectedRequest);
   });
 
-  // Close detail
-  document.getElementById('network-detail-close')?.addEventListener('click', hideDetail);
+  // Detail panel actions (Close, Replay, cURL, Diff)
+  const detailPanel = document.getElementById('network-detail-panel');
+  detailPanel?.addEventListener('click', async (e) => {
+    if (e.target.closest('#network-detail-close')) {
+      hideDetail();
+      return;
+    }
+    const replayBtn = e.target.closest('#deck-replay-btn');
+    if (replayBtn && selectedRequest) {
+      const origText = replayBtn.innerHTML;
+      replayBtn.innerHTML = '⏳ Replaying…';
+      try {
+        await api.networkReplay(selectedRequest.id);
+        replayBtn.innerHTML = '✓ Replayed';
+        setTimeout(() => { replayBtn.innerHTML = origText; }, 1500);
+      } catch (err) {
+        console.error('Failed to replay request:', err);
+        replayBtn.innerHTML = '❌ Failed';
+        setTimeout(() => { replayBtn.innerHTML = origText; }, 1500);
+      }
+      return;
+    }
+    const curlBtn = e.target.closest('#deck-curl-btn');
+    if (curlBtn && selectedRequest) {
+      navigator.clipboard.writeText(generateCurl(selectedRequest));
+      const origText = curlBtn.innerHTML;
+      curlBtn.innerHTML = '✓ Copied';
+      setTimeout(() => { curlBtn.innerHTML = origText; }, 1500);
+      return;
+    }
+    const diffBtn = e.target.closest('#deck-diff-btn');
+    if (diffBtn && selectedRequest) {
+      compareBaseRequest = selectedRequest;
+      updateCompareBanner();
+      const origText = diffBtn.innerHTML;
+      diffBtn.innerHTML = '✓ Base Set';
+      setTimeout(() => { diffBtn.innerHTML = origText; }, 1500);
+      return;
+    }
+  });
 
   // Delegated events for View Mode Switcher and Copy Buttons inside detail body
   const detailBody = document.getElementById('network-detail-body');
@@ -1664,6 +1905,17 @@ function passesFilters(r) {
   return true;
 }
 
+// ── Highlight selected row helper ──
+function highlightSelectedRow(id) {
+  document.querySelectorAll('#network-request-tbody tr').forEach(tr => {
+    tr.classList.toggle('selected', parseInt(tr.dataset.reqId, 10) === id);
+  });
+  const selectedRow = document.querySelector(`#network-request-tbody tr[data-req-id="${id}"]`);
+  if (selectedRow) {
+    selectedRow.scrollIntoView({ block: 'nearest' });
+  }
+}
+
 // ── Render full table ──
 function renderTable() {
   const tbody = document.getElementById('network-request-tbody');
@@ -1672,11 +1924,33 @@ function renderTable() {
   const filtered = requests.filter(passesFilters);
   updateRequestCount();
 
+  // Update table header based on listMode
+  const thead = document.getElementById('network-table-thead');
+  if (thead) {
+    if (listMode === 'ai') {
+      thead.innerHTML = `<tr><th style="padding:7px 12px;font-size:11px;color:var(--text-2);text-align:left">Traffic & LLM Traces (${filtered.length})</th></tr>`;
+    } else {
+      thead.innerHTML = `
+        <tr>
+          <th style="width:44px">#</th>
+          <th style="width:62px">Method</th>
+          <th>URL</th>
+          <th style="width:60px">Status</th>
+          <th style="width:50px">Tag</th>
+          <th style="width:68px">Size</th>
+          <th style="width:72px">Time</th>
+          <th style="width:64px">When</th>
+        </tr>
+      `;
+    }
+  }
+
   if (filtered.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="8" class="network-empty-row">
+    const colspan = listMode === 'ai' ? 1 : 8;
+    tbody.innerHTML = `<tr><td colspan="${colspan}" class="network-empty-row">
       <div class="empty-state" style="padding:40px 20px;min-height:auto">
         <div class="icon">📡</div>
-        <p>${requests.length > 0 ? 'No requests match current filters' : 'Waiting for network requests…'}</p>
+        <p>${requests.length > 0 ? 'No requests match current filters' : 'Waiting for network traffic…'}</p>
       </div>
     </td></tr>`;
     return;
@@ -1685,18 +1959,17 @@ function renderTable() {
   // Newest first
   let sorted = [...filtered].reverse();
 
-  // Set dynamic max-height on the container wrapper based on selected limit
+  // Set dynamic max-height on the container wrapper based on selected limit if in stacked layout
   const tableWrap = document.querySelector('.network-table-panel .table-wrap');
-  if (tableWrap) {
+  if (tableWrap && studioLayout === 'stacked') {
     if (activeFilters.limit && activeFilters.limit !== 'all') {
       const lim = parseInt(activeFilters.limit, 10);
       if (!isNaN(lim)) {
-        // Header height is ~32px, each row is ~35px.
-        const calculatedHeight = 32 + (lim * 35);
+        const calculatedHeight = 32 + (lim * 45);
         tableWrap.style.maxHeight = `${calculatedHeight}px`;
       }
     } else {
-      tableWrap.style.maxHeight = '380px'; // default fallback max-height
+      tableWrap.style.maxHeight = '380px';
     }
   }
 
@@ -1715,17 +1988,47 @@ function renderRow(r) {
       interceptBadge = `<span class="badge intercepted" style="margin-left:4px" title="Forwarded via breakpoint">BP</span>`;
     }
   }
-  // Check if this request is currently held in the pending queue
-  const isHeld = pendingIntercepts.some(p => {
-    // Match by URL + timestamp proximity (intercepts don't have the same ID as store records)
-    return false; // Held requests haven't reached the store yet
-  });
 
+  if (listMode === 'ai') {
+    const usage = calculateUsageAndCost(r);
+    const model = usage?.model || r.tag || '';
+    const totalTokens = usage?.totalTokens || 0;
+    const cost = usage?.cost || 0;
+
+    return `
+      <td class="network-ai-row-cell">
+        <div class="network-ai-row-top">
+          <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap">
+            <span class="mono" style="color:var(--text-3); font-size:10px">#${r.id}</span>
+            <span class="badge ${methodClass(r.method)}" style="font-size:9.5px; padding:1px 5px">${escHtml(r.method)}</span>
+            <span class="badge ${statusClass(r.statusCode)}" style="font-size:9.5px; padding:1px 5px">${r.statusCode || 'ERR'}</span>
+            ${r.isReplay ? `<span class="badge grey" style="font-size:8px;padding:1px 3px">REPLAY</span>` : ''}
+            ${r.isMocked ? `<span class="badge purple" style="font-size:8px;padding:1px 3px">MOCK</span>` : ''}
+            ${interceptBadge}
+            ${model ? `<span class="mono" style="font-weight:bold; color:#818cf8; font-size:11px; display:inline-flex; align-items:center; gap:3px"><span>🤖</span>${escHtml(model)}</span>` : `<span class="badge ${tagColorClass(r.tag)}" style="font-size:9px">${escHtml(tagLabel(r.tag))}</span>`}
+          </div>
+          <span class="mono" style="font-size:10.5px; color:var(--text-2)">${fmtDuration(r.duration)}</span>
+        </div>
+        <div class="network-ai-row-bottom">
+          <span class="mono" style="color:var(--text-3); max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap" title="${escHtml(r.url)}">
+            ${escHtml(truncateUrl(r.url, 45))}
+          </span>
+          <div style="display:flex; align-items:center; gap:6px" class="mono">
+            ${totalTokens > 0 ? `<span style="color:var(--text-2)">${totalTokens > 1000 ? (totalTokens/1000).toFixed(1) + 'k' : totalTokens} tok</span>` : `<span style="color:var(--text-3)">${fmtBytes(r.size)}</span>`}
+            ${cost > 0 ? `<span style="color:var(--green); font-weight:600">$${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(3)}</span>` : ''}
+            <span style="color:var(--text-3); font-size:9.5px">${fmtTime(r.timestamp)}</span>
+          </div>
+        </div>
+      </td>
+    `;
+  }
+
+  // Classic HTTP Mode
   return `
     <td class="mono" style="color:var(--text-3);font-size:10px">${r.id}</td>
     <td>
       <span class="badge ${methodClass(r.method)}">${escHtml(r.method)}</span>
-      ${r.isReplay ? `<span class="badge grey" style="font-size:8px;padding:1px 3px;margin-left:4px" title="Replayed request (Replayed from #${r.replayedFromId})">REPLAY</span>` : ''}
+      ${r.isReplay ? `<span class="badge grey" style="font-size:8px;padding:1px 3px;margin-left:4px" title="Replayed request">REPLAY</span>` : ''}
       ${r.isMocked ? `<span class="badge purple" style="font-size:8px;padding:1px 3px;margin-left:4px" title="Mocked response">MOCK</span>` : ''}
       ${interceptBadge}
     </td>
@@ -1754,9 +2057,14 @@ async function showDetail(record) {
   if (!panel) return;
   panel.style.display = '';
 
-  const title = document.getElementById('network-detail-title');
-  if (title) {
-    title.innerHTML = `<span class="badge ${methodClass(record.method)}">${escHtml(record.method)}</span> <span class="mono" style="font-size:11px">${escHtml(truncateUrl(record.url, 60))}</span>`;
+  const deckContainer = document.getElementById('network-detail-deck-container');
+  if (deckContainer) {
+    deckContainer.innerHTML = renderDetailDeck(record);
+  }
+
+  const tabsBar = document.getElementById('network-detail-tabs-bar');
+  if (tabsBar) {
+    tabsBar.style.display = 'flex';
   }
 
   renderDetailContent(record);
@@ -1771,6 +2079,7 @@ async function showDetail(record) {
         record._hasFullPayload = true;
         record.isTruncatedSummary = false;
         if (selectedRequest && selectedRequest.id === record.id) {
+          if (deckContainer) deckContainer.innerHTML = renderDetailDeck(record);
           renderDetailContent(record);
         }
       }
@@ -1781,10 +2090,35 @@ async function showDetail(record) {
 }
 
 function hideDetail() {
-  const panel = document.getElementById('network-detail-panel');
-  if (panel) panel.style.display = 'none';
   selectedRequest = null;
   document.querySelectorAll('.network-table tbody tr').forEach(tr => tr.classList.remove('selected'));
+
+  const deckContainer = document.getElementById('network-detail-deck-container');
+  if (deckContainer) deckContainer.innerHTML = '';
+
+  const tabsBar = document.getElementById('network-detail-tabs-bar');
+  if (tabsBar) tabsBar.style.display = 'none';
+
+  const body = document.getElementById('network-detail-body');
+  if (body) {
+    body.innerHTML = `
+      <div class="network-inspector-empty">
+        <div class="icon">📡</div>
+        <h3 style="margin:0 0 6px 0; font-size:14px; color:var(--text)">No Request Selected</h3>
+        <p style="margin:0; font-size:12px; color:var(--text-3); max-width:320px">
+          Select a request from the list on the left to inspect conversation turns, parameters, headers, and responses.
+        </p>
+        <div style="margin-top:14px; font-size:11px; color:var(--text-3)" class="mono">
+          💡 Tip: Use <kbd style="background:var(--bg-4);padding:2px 6px;border-radius:4px;border:1px solid var(--border)">↑</kbd> and <kbd style="background:var(--bg-4);padding:2px 6px;border-radius:4px;border:1px solid var(--border)">↓</kbd> keys to browse requests.
+        </div>
+      </div>
+    `;
+  }
+
+  if (studioLayout === 'stacked') {
+    const panel = document.getElementById('network-detail-panel');
+    if (panel) panel.style.display = 'none';
+  }
 }
 
 function parseSseStream(text) {
