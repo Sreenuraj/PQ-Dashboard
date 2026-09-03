@@ -242,6 +242,58 @@ function extractSystemTextFromParsed(parsed) {
 }
 
 /**
+ * Extracts agent categorization or label from the system prompt.
+ * e.g. "You are PostQode, ..." -> "PostQode"
+ *      "You are PostQode Subagent, ..." -> "PostQode Subagent"
+ */
+function extractAgentLabel(systemText) {
+  if (!systemText || typeof systemText !== 'string') return null;
+
+  let cleanText = systemText.trim();
+  const identityMatch = cleanText.match(/<identity>([\s\S]*?)<\/identity>/i);
+  if (identityMatch) {
+    cleanText = identityMatch[1].trim();
+  }
+
+  const lines = cleanText.split('\n').map(l => l.trim()).filter(Boolean);
+  if (!lines.length) return null;
+  const firstLine = lines[0].replace(/^[#*_\s-]+/, '').replace(/[*_]+$/, '').trim();
+
+  // 1. High priority PostQode & Subagent checks
+  if (/postqode subagent/i.test(firstLine) || /subagent/i.test(firstLine)) {
+    const subMatch = firstLine.match(/([a-z0-9_-]+\s+subagent|subagent)/i);
+    return subMatch ? subMatch[1].trim().replace(/\b\w/g, c => c.toUpperCase()) : 'PostQode Subagent';
+  }
+  if (/you are postqode\b/i.test(firstLine) || /^postqode\b/i.test(firstLine)) {
+    return 'PostQode';
+  }
+
+  // 2. Explicit Role/Agent/Identity keywords
+  const roleMatch = firstLine.match(/^(?:role|agent|identity|system|persona|name):\s*([^,.\n]+)/i);
+  if (roleMatch) {
+    return roleMatch[1].trim();
+  }
+
+  // 3. 'You are [Name], a/an...' or 'You are a/an [Name]...'
+  const youAreMatch = firstLine.match(/^you are (?:an? )?([^,.]+)/i);
+  if (youAreMatch) {
+    const raw = youAreMatch[1].trim();
+    if (/^helpful (?:ai )?assistant/i.test(raw)) return 'Assistant';
+    if (/^autonomous specialized ai worker/i.test(raw)) return 'Subagent';
+    if (raw && !/^(?:ai|model|llm|large language model)\b/i.test(raw) && raw.length < 35) {
+      return raw.replace(/\b\w/g, c => c.toUpperCase());
+    }
+  }
+
+  // 4. Fallback: check if 'subagent' appears in the first 400 chars anywhere
+  if (systemText.slice(0, 400).toLowerCase().includes('subagent')) {
+    return 'Subagent';
+  }
+
+  return null;
+}
+
+/**
  * Correlates a captured chat/completions request with the nearest task in the
  * DB by timestamp, then persists the system prompt text if not already stored.
  * @param {string} requestBody - raw request body string
@@ -632,6 +684,25 @@ function startProxy(config = {}) {
 
       const responseSize = responseChunks.reduce((sum, c) => sum + c.length, 0);
 
+      // Extract agent label & model from chat/completions request
+      let agentLabel = null;
+      let modelFromBody = null;
+      if (method === 'POST' && CHAT_API_RE.test(url) && requestBody) {
+        try {
+          const parsedReq = JSON.parse(requestBody);
+          const systemText = extractSystemTextFromParsed(parsedReq);
+          if (systemText) {
+            agentLabel = extractAgentLabel(systemText);
+          }
+          if (parsedReq.model) {
+            modelFromBody = parsedReq.model;
+          }
+        } catch (e) {
+          if (/postqode subagent/i.test(requestBody) || /subagent/i.test(requestBody)) agentLabel = 'PostQode Subagent';
+          else if (/you are postqode/i.test(requestBody)) agentLabel = 'PostQode';
+        }
+      }
+
       const record = {
         timestamp: new Date().toISOString(),
         method,
@@ -649,6 +720,8 @@ function startProxy(config = {}) {
         size: responseSize,
         error: null,
         tag: tagForHost(host),
+        agentLabel,
+        model: modelFromBody,
       };
 
       store.add(record);

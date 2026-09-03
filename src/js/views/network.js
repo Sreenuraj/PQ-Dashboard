@@ -250,6 +250,78 @@ function diffLines(lines1, lines2) {
   return diff;
 }
 
+function extractAgentLabel(systemText) {
+  if (!systemText || typeof systemText !== 'string') return null;
+
+  let cleanText = systemText.trim();
+  const identityMatch = cleanText.match(/<identity>([\s\S]*?)<\/identity>/i);
+  if (identityMatch) {
+    cleanText = identityMatch[1].trim();
+  }
+
+  const lines = cleanText.split('\n').map(l => l.trim()).filter(Boolean);
+  if (!lines.length) return null;
+  const firstLine = lines[0].replace(/^[#*_\s-]+/, '').replace(/[*_]+$/, '').trim();
+
+  // 1. High priority PostQode & Subagent checks
+  if (/postqode subagent/i.test(firstLine) || /subagent/i.test(firstLine)) {
+    const subMatch = firstLine.match(/([a-z0-9_-]+\s+subagent|subagent)/i);
+    return subMatch ? subMatch[1].trim().replace(/\b\w/g, c => c.toUpperCase()) : 'PostQode Subagent';
+  }
+  if (/you are postqode\b/i.test(firstLine) || /^postqode\b/i.test(firstLine)) {
+    return 'PostQode';
+  }
+
+  // 2. Explicit Role/Agent/Identity keywords
+  const roleMatch = firstLine.match(/^(?:role|agent|identity|system|persona|name):\s*([^,.\n]+)/i);
+  if (roleMatch) {
+    return roleMatch[1].trim();
+  }
+
+  // 3. 'You are [Name], a/an...' or 'You are a/an [Name]...'
+  const youAreMatch = firstLine.match(/^you are (?:an? )?([^,.]+)/i);
+  if (youAreMatch) {
+    const raw = youAreMatch[1].trim();
+    if (/^helpful (?:ai )?assistant/i.test(raw)) return 'Assistant';
+    if (/^autonomous specialized ai worker/i.test(raw)) return 'Subagent';
+    if (raw && !/^(?:ai|model|llm|large language model)\b/i.test(raw) && raw.length < 35) {
+      return raw.replace(/\b\w/g, c => c.toUpperCase());
+    }
+  }
+
+  // 4. Fallback: check if 'subagent' appears in the first 400 chars anywhere
+  if (systemText.slice(0, 400).toLowerCase().includes('subagent')) {
+    return 'Subagent';
+  }
+
+  return null;
+}
+
+function getAgentLabel(r) {
+  if (!r) return null;
+  if (r.agentLabel) return r.agentLabel;
+  if (r._cachedAgentLabel !== undefined) return r._cachedAgentLabel;
+
+  let label = null;
+  if (r.requestBody) {
+    // Fast regex check on requestBody string (works even on truncated 1KB body)
+    if (/postqode subagent/i.test(r.requestBody) || /subagent/i.test(r.requestBody)) {
+      label = 'PostQode Subagent';
+    } else if (/you are postqode/i.test(r.requestBody)) {
+      label = 'PostQode';
+    } else {
+      try {
+        const parsed = parseLlmRequest(r.requestBody);
+        if (parsed?.systemPrompt) {
+          label = extractAgentLabel(parsed.systemPrompt);
+        }
+      } catch {}
+    }
+  }
+  r._cachedAgentLabel = label;
+  return label;
+}
+
 function calculateUsageAndCost(r) {
   if (!r.responseBody) return null;
 
@@ -1014,8 +1086,10 @@ function closeDrawer() {
 
 function renderDetailDeck(r) {
   const usage = calculateUsageAndCost(r);
-  const model = usage?.model || r.tag || 'LLM';
+  const model = usage?.model || r.model || r.tag || 'LLM';
   const hasUsage = usage && (usage.totalTokens > 0 || usage.cost > 0);
+  const agentLabel = getAgentLabel(r);
+  const isSubagent = agentLabel && /subagent/i.test(agentLabel);
 
   return `
     <div class="network-detail-deck">
@@ -1035,6 +1109,11 @@ function renderDetailDeck(r) {
       </div>
       <div class="network-detail-deck-metrics">
         <span class="badge ${statusClass(r.statusCode)}">${r.statusCode || 'ERR'}</span>
+        ${agentLabel ? `
+          <span class="badge ${isSubagent ? 'agent-subagent' : 'agent-main'}" style="font-size:11px;font-weight:700;padding:2px 8px;display:inline-flex;align-items:center;gap:4px" title="Agent identity detected from system prompt">
+            <span>${isSubagent ? '⚡' : '🎯'}</span> ${escHtml(agentLabel)}
+          </span>
+        ` : ''}
         <span class="network-deck-pill" style="color:#818cf8">
           <span>🤖</span> <strong>${escHtml(model)}</strong>
         </span>
@@ -1743,6 +1822,8 @@ function renderChips() {
 
   const defaultChips = [
     { tag: 'all', label: 'All' },
+    { tag: 'main-agent', label: '🎯 Main Agent' },
+    { tag: 'subagent', label: '⚡ Subagents' },
     { tag: 'postqode', label: 'PostQode' },
     { tag: 'openai', label: 'OpenAI' },
     { tag: 'anthropic', label: 'Anthropic' },
@@ -2275,7 +2356,13 @@ function addRequest(record) {
 
 function passesFilters(r) {
   if (activeFilters.host && activeFilters.host !== 'all') {
-    if ((r.tag || '').toLowerCase() !== activeFilters.host.toLowerCase() &&
+    if (activeFilters.host === 'subagent') {
+      const agent = getAgentLabel(r);
+      if (!agent || !/subagent/i.test(agent)) return false;
+    } else if (activeFilters.host === 'main-agent') {
+      const agent = getAgentLabel(r);
+      if (!agent || /subagent/i.test(agent)) return false;
+    } else if ((r.tag || '').toLowerCase() !== activeFilters.host.toLowerCase() &&
         !(r.host || '').toLowerCase().includes(activeFilters.host.toLowerCase())) {
       return false;
     }
@@ -2293,9 +2380,11 @@ function passesFilters(r) {
   }
   if (activeFilters.search) {
     const q = activeFilters.search.toLowerCase();
+    const agent = (getAgentLabel(r) || '').toLowerCase();
     if (!(r.url || '').toLowerCase().includes(q) &&
         !(r.host || '').toLowerCase().includes(q) &&
-        !(r.method || '').toLowerCase().includes(q)) {
+        !(r.method || '').toLowerCase().includes(q) &&
+        !agent.includes(q)) {
       return false;
     }
   }
@@ -2395,10 +2484,17 @@ function renderRow(r) {
   }
 
   const isChecked = selectedDiffIds.has(r.id);
+  const agentLabel = getAgentLabel(r);
+  const isSubagent = agentLabel && /subagent/i.test(agentLabel);
+  const agentBadge = agentLabel ? `
+    <span class="badge ${isSubagent ? 'agent-subagent' : 'agent-main'}" style="font-size:9.5px;padding:1px 5px;font-weight:700;display:inline-flex;align-items:center;gap:3px" title="Agent: ${escHtml(agentLabel)}">
+      <span>${isSubagent ? '⚡' : '🎯'}</span>${escHtml(agentLabel)}
+    </span>
+  ` : '';
 
   if (listMode === 'ai') {
     const usage = calculateUsageAndCost(r);
-    const model = usage?.model || r.tag || '';
+    const model = usage?.model || r.model || r.tag || '';
     const totalTokens = usage?.totalTokens || 0;
     const cost = usage?.cost || 0;
     const endpoint = getEndpointTail(r.url, 30);
@@ -2414,6 +2510,7 @@ function renderRow(r) {
             ${r.isReplay ? `<span class="badge grey" style="font-size:8px;padding:1px 3px">REPLAY</span>` : ''}
             ${r.isMocked ? `<span class="badge purple" style="font-size:8px;padding:1px 3px">MOCK</span>` : ''}
             ${interceptBadge}
+            ${agentBadge}
             ${model ? `<span class="mono" style="font-weight:bold; color:#818cf8; font-size:11px; display:inline-flex; align-items:center; gap:3px"><span>🤖</span>${escHtml(model)}</span>` : `<span class="badge ${tagColorClass(r.tag)}" style="font-size:9px">${escHtml(tagLabel(r.tag))}</span>`}
           </div>
           <span class="mono" style="font-size:10.5px; color:var(--text-2)">${fmtDuration(r.duration)}</span>
@@ -2446,7 +2543,10 @@ function renderRow(r) {
       ${interceptBadge}
     </td>
     <td class="network-url-cell" title="${escHtml(r.url)}">
-      <span class="mono" style="color:#a5b4fc;font-weight:600">${escHtml(getEndpointTail(r.url, 40))}</span>
+      <div style="display:flex;align-items:center;gap:6px">
+        <span class="mono" style="color:#a5b4fc;font-weight:600">${escHtml(getEndpointTail(r.url, 40))}</span>
+        ${agentBadge}
+      </div>
     </td>
     <td><span class="badge ${statusClass(r.statusCode)}">${r.statusCode || 'ERR'}</span></td>
     <td><span class="badge ${tagColorClass(r.tag)}" style="font-size:9px">${escHtml(tagLabel(r.tag))}</span></td>
@@ -3524,12 +3624,14 @@ function renderHumanReadableMessageContent(rawText) {
 }
 
 function renderHumanReadableRequest(parsed, record) {
-  const model = parsed.model || record.tag || 'LLM';
+  const model = parsed.model || record.model || record.tag || 'LLM';
   const msgCount = parsed.messages.length;
   const toolCount = parsed.tools.length;
   const hasSys = !!parsed.systemPrompt;
   const sysChars = parsed.systemPrompt ? parsed.systemPrompt.length : 0;
   const sysTokEst = Math.round(sysChars / 4);
+  const agentLabel = parsed.systemPrompt ? extractAgentLabel(parsed.systemPrompt) : getAgentLabel(record);
+  const isSubagent = agentLabel && /subagent/i.test(agentLabel);
 
   // Progressive rendering for conversation messages
   const isLargeThread = msgCount > 16;
@@ -3630,6 +3732,11 @@ function renderHumanReadableRequest(parsed, record) {
       <!-- Top LLM Parameter Chips Bar -->
       <div class="network-llm-meta-bar">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          ${agentLabel ? `
+            <span class="badge ${isSubagent ? 'agent-subagent' : 'agent-main'}" style="font-size:11px;font-weight:700;padding:2px 8px;display:inline-flex;align-items:center;gap:4px">
+              <span>${isSubagent ? '⚡' : '🎯'}</span> ${escHtml(agentLabel)}
+            </span>
+          ` : ''}
           <span style="font-weight:bold;color:#818cf8;font-size:12.5px;display:flex;align-items:center;gap:5px">
             <span>🤖</span> ${escHtml(model)}
           </span>
@@ -3647,9 +3754,11 @@ function renderHumanReadableRequest(parsed, record) {
       ${hasSys ? `
         <div class="network-system-card">
           <div class="network-system-header network-collapsible-header" data-target="net-system-prompt-body" style="cursor:pointer;user-select:none">
-            <div style="display:flex;align-items:center;gap:8px">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
               <span class="network-collapse-arrow" style="font-size:10px;color:#38bdf8">▶</span>
-              <span style="font-weight:bold;color:#38bdf8;font-size:11.5px">🛡️ System Prompt Instructions</span>
+              <span style="font-weight:bold;color:#38bdf8;font-size:11.5px">
+                🛡️ System Prompt Instructions ${agentLabel ? `— <span style="color:var(--text);font-weight:600">${escHtml(agentLabel)}</span>` : ''}
+              </span>
               <span class="mono" style="font-size:10px;color:var(--text-3)">(${sysChars.toLocaleString()} chars · ~${sysTokEst.toLocaleString()} tok)</span>
             </div>
             <button class="action-btn secondary network-copy-btn" data-target="net-system-prompt-text" style="padding:1px 6px;font-size:9.5px;color:#38bdf8">

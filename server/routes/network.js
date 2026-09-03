@@ -26,6 +26,7 @@ module.exports = (getStore, getStatus, getClientCount, getMockRules, addMockRule
       method: req.query.method,
       status: req.query.status,
       search: req.query.search,
+      agent: req.query.agent,
       limit: req.query.limit,
       offset: req.query.offset,
     };

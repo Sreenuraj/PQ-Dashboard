@@ -681,8 +681,10 @@ html, body {
 .badge.blue   { background: var(--blue-dim);   color: var(--blue); }
 .badge.purple { background: var(--purple-dim); color: var(--purple); }
 .badge.accent { background: var(--accent-glow); color: var(--accent-2); }
-.badge.cyan   { background: var(--cyan-dim);   color: var(--cyan); }
 .badge.grey   { background: var(--bg-4); color: var(--text-2); }
+.badge.agent-subagent { background: rgba(217, 70, 239, 0.15); color: #e879f9; border: 1px solid rgba(217, 70, 239, 0.35); }
+.badge.agent-main     { background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.35); }
+.badge.agent-custom   { background: rgba(129, 140, 248, 0.15); color: #818cf8; border: 1px solid rgba(129, 140, 248, 0.35); }
 
 /* ── Mono ── */
 .mono { font-family: var(--font-mono); font-size: 11.5px; }

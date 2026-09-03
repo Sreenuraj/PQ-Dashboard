@@ -38,6 +38,11 @@ class NetworkStore {
         || (r.host || '').toLowerCase().includes(filters.host.toLowerCase()));
     }
 
+    if (filters.agent && filters.agent !== 'all') {
+      const q = filters.agent.toLowerCase();
+      results = results.filter(r => (r.agentLabel || '').toLowerCase().includes(q));
+    }
+
     if (filters.method) {
       const methods = filters.method.split(',').map(m => m.trim().toUpperCase());
       results = results.filter(r => methods.includes((r.method || '').toUpperCase()));
@@ -56,7 +61,8 @@ class NetworkStore {
       results = results.filter(r =>
         (r.url || '').toLowerCase().includes(q) ||
         (r.host || '').toLowerCase().includes(q) ||
-        (r.method || '').toLowerCase().includes(q)
+        (r.method || '').toLowerCase().includes(q) ||
+        (r.agentLabel || '').toLowerCase().includes(q)
       );
     }
 
