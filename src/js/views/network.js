@@ -544,7 +544,7 @@ let ws = null;
 let isRecording = true;
 let requests = [];
 let selectedRequest = null;
-let activeFilters = { host: 'all', method: '', status: '', search: '', limit: 'all' };
+let activeFilters = { host: 'all', agent: 'all', method: '', status: '', search: '', limit: 'all' };
 let activeDetailTab = 'headers';
 let bodyViewModes = { request: 'human', response: 'human' };
 let studioLayout = safeGetStorage('pq-network-layout', 'side-by-side');
@@ -1394,7 +1394,6 @@ export async function renderNetwork(container) {
           <span>📊 Comparing with Request <strong>#<span id="compare-base-id"></span></strong>: <span id="compare-base-url" class="mono" style="font-size:11px"></span></span>
           <button id="clear-compare-btn" class="action-btn secondary" style="padding:2px 8px; min-height:auto; font-size:10px">Clear</button>
         </div>
-        <div id="network-subagent-bar-container"></div>
         <div class="table-wrap">
           <table class="data-table network-table" id="network-request-table">
             <thead id="network-table-thead"></thead>
@@ -1812,8 +1811,7 @@ function bindToolbarEvents(status) {
 
   // Agent filter
   document.getElementById('network-agent-filter')?.addEventListener('change', (e) => {
-    activeFilters.host = e.target.value;
-    renderChips();
+    activeFilters.agent = e.target.value;
     renderTable();
   });
 
@@ -1954,17 +1952,27 @@ function bindToolbarEvents(status) {
   });
 }
 
-function updateAgentFilterDropdown(sortedSubagentIndices, subagentCounts) {
+function updateAgentFilterDropdown(sortedSubagentIndices, subagentCounts, mainAgentCount, totalSubagentsCount) {
   const select = document.getElementById('network-agent-filter');
   if (!select) return;
 
-  const currentVal = activeFilters.host || 'all';
+  const currentVal = activeFilters.agent || 'all';
 
   let html = `
     <option value="all" ${currentVal === 'all' ? 'selected' : ''}>All Agents</option>
-    <option value="main-agent" ${currentVal === 'main-agent' ? 'selected' : ''}>🎯 Main Agent</option>
-    <option value="subagent" ${currentVal === 'subagent' ? 'selected' : ''}>⚡ All Subagents</option>
   `;
+
+  if (mainAgentCount > 0) {
+    html += `<option value="main-agent" ${currentVal === 'main-agent' ? 'selected' : ''}>🎯 Main Agent (${mainAgentCount})</option>`;
+  } else {
+    html += `<option value="main-agent" ${currentVal === 'main-agent' ? 'selected' : ''}>🎯 Main Agent</option>`;
+  }
+
+  if (totalSubagentsCount > 0) {
+    html += `<option value="subagent" ${currentVal === 'subagent' ? 'selected' : ''}>⚡ All Subagents (${totalSubagentsCount})</option>`;
+  } else {
+    html += `<option value="subagent" ${currentVal === 'subagent' ? 'selected' : ''}>⚡ All Subagents</option>`;
+  }
 
   for (const idx of sortedSubagentIndices) {
     const val = `subagent-${idx}`;
@@ -1975,62 +1983,11 @@ function updateAgentFilterDropdown(sortedSubagentIndices, subagentCounts) {
   select.innerHTML = html;
 }
 
-function renderSubagentBar(sortedSubagentIndices, subagentCounts, totalSubagentsCount) {
-  const barContainer = document.getElementById('network-subagent-bar-container');
-  if (!barContainer) return;
-
-  const isSubagentFilterActive = activeFilters.host === 'subagent' || (activeFilters.host && activeFilters.host.startsWith('subagent-'));
-
-  if (!isSubagentFilterActive || sortedSubagentIndices.length === 0) {
-    barContainer.innerHTML = '';
-    return;
-  }
-
-  let html = `
-    <div class="network-subagent-bar">
-      <span class="network-subagent-bar-title">⚡ Subagents:</span>
-      <button class="network-subagent-tab ${activeFilters.host === 'subagent' ? 'active' : ''}" data-subagent="subagent">
-        All (${totalSubagentsCount})
-      </button>
-  `;
-
-  for (const idx of sortedSubagentIndices) {
-    const tag = `subagent-${idx}`;
-    const count = subagentCounts.get(idx) || 0;
-    html += `
-      <button class="network-subagent-tab ${activeFilters.host === tag ? 'active' : ''}" data-subagent="${tag}">
-        Subagent ${idx} (${count})
-      </button>
-    `;
-  }
-
-  html += `
-      <button class="action-btn secondary" id="clear-subagent-filter-btn" style="margin-left:auto;padding:1px 6px;font-size:10px" title="Show all traffic">✕ All Traffic</button>
-    </div>
-  `;
-
-  barContainer.innerHTML = html;
-
-  barContainer.querySelectorAll('.network-subagent-tab').forEach(btn => {
-    btn.addEventListener('click', () => {
-      activeFilters.host = btn.dataset.subagent;
-      renderChips();
-      renderTable();
-    });
-  });
-
-  barContainer.querySelector('#clear-subagent-filter-btn')?.addEventListener('click', () => {
-    activeFilters.host = 'all';
-    renderChips();
-    renderTable();
-  });
-}
-
 function renderChips() {
   const container = document.getElementById('network-domain-chips');
   if (!container) return;
 
-  // Collect any detected subagent indices and counts dynamically from requests
+  // Collect any detected subagent indices and counts dynamically to populate agent dropdown
   const subagentCounts = new Map();
   let totalSubagentsCount = 0;
   let mainAgentCount = 0;
@@ -2051,24 +2008,12 @@ function renderChips() {
   }
   const sortedSubagentIndices = Array.from(subagentCounts.keys()).sort((a, b) => a - b);
 
-  updateAgentFilterDropdown(sortedSubagentIndices, subagentCounts);
-  renderSubagentBar(sortedSubagentIndices, subagentCounts, totalSubagentsCount);
+  // Keep dropdown options updated with dynamic subagent counts
+  updateAgentFilterDropdown(sortedSubagentIndices, subagentCounts, mainAgentCount, totalSubagentsCount);
 
-  const subagentChips = sortedSubagentIndices.length > 0
-    ? [
-        { tag: 'subagent', label: `⚡ All Subagents (${totalSubagentsCount})` },
-        ...sortedSubagentIndices.map(idx => ({ tag: `subagent-${idx}`, label: `⚡ Subagent ${idx} (${subagentCounts.get(idx)})` }))
-      ]
-    : (totalSubagentsCount > 0
-        ? [{ tag: 'subagent', label: `⚡ Subagents (${totalSubagentsCount})` }]
-        : [{ tag: 'subagent', label: '⚡ Subagents' }]);
-
-  const mainAgentLabel = mainAgentCount > 0 ? `🎯 Main Agent (${mainAgentCount})` : '🎯 Main Agent';
-
+  // Clean domain/provider chips only (no subagent tiles)
   const defaultChips = [
     { tag: 'all', label: 'All' },
-    { tag: 'main-agent', label: mainAgentLabel },
-    ...subagentChips,
     { tag: 'postqode', label: 'PostQode' },
     { tag: 'openai', label: 'OpenAI' },
     { tag: 'anthropic', label: 'Anthropic' },
@@ -2600,18 +2545,24 @@ function addRequest(record) {
 }
 
 function passesFilters(r) {
-  if (activeFilters.host && activeFilters.host !== 'all') {
-    if (activeFilters.host === 'subagent') {
-      const agent = getAgentLabel(r);
+  // Agent filter (controlled by top agent dropdown)
+  if (activeFilters.agent && activeFilters.agent !== 'all') {
+    const agent = getAgentLabel(r);
+    if (activeFilters.agent === 'subagent') {
       if (!agent || !/subagent/i.test(agent)) return false;
-    } else if (activeFilters.host.startsWith('subagent-')) {
-      const num = activeFilters.host.split('-')[1];
-      const agent = getAgentLabel(r);
+    } else if (activeFilters.agent.startsWith('subagent-')) {
+      const num = activeFilters.agent.split('-')[1];
       if (!agent || agent.toLowerCase() !== `subagent ${num}`) return false;
-    } else if (activeFilters.host === 'main-agent') {
-      const agent = getAgentLabel(r);
+    } else if (activeFilters.agent === 'main-agent') {
       if (!agent || /subagent/i.test(agent)) return false;
-    } else if ((r.tag || '').toLowerCase() !== activeFilters.host.toLowerCase() &&
+    } else if (!(agent || '').toLowerCase().includes(activeFilters.agent.toLowerCase())) {
+      return false;
+    }
+  }
+
+  // Host / Provider filter (controlled by domain chips)
+  if (activeFilters.host && activeFilters.host !== 'all') {
+    if ((r.tag || '').toLowerCase() !== activeFilters.host.toLowerCase() &&
         !(r.host || '').toLowerCase().includes(activeFilters.host.toLowerCase())) {
       return false;
     }
