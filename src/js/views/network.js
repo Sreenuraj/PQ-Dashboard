@@ -366,6 +366,10 @@ let payloadSearchState = {
 };
 let mockRulesState = [];
 let compareBaseRequest = null;
+let selectedDiffIds = new Set();
+let activeDiffTab = 'request';
+let currentDiffBase = null;
+let currentDiffCompare = null;
 
 // ── Intercept State ──
 let interceptEnabled = false;
@@ -503,29 +507,199 @@ function updateCompareBanner() {
   }
 }
 
-function openCompareModal(baseReq, compareReq) {
+function updateDiffFloatingBar() {
+  const bar = document.getElementById('network-diff-floating-bar');
+  const countEl = document.getElementById('diff-selected-count');
+  if (!bar || !countEl) return;
+  const count = selectedDiffIds.size;
+  countEl.textContent = count;
+  bar.style.display = count >= 2 ? 'flex' : 'none';
+}
+
+function updateRowDiffHighlight() {
+  document.querySelectorAll('#network-request-tbody tr').forEach(tr => {
+    const id = parseInt(tr.dataset.reqId, 10);
+    tr.classList.toggle('diff-selected', selectedDiffIds.has(id));
+    const cb = tr.querySelector('.network-diff-checkbox');
+    if (cb) cb.checked = selectedDiffIds.has(id);
+  });
+}
+
+function openCompareFromSelection() {
+  if (selectedDiffIds.size < 2) return;
+  const ids = Array.from(selectedDiffIds);
+  const baseReq = requests.find(r => r.id === ids[0]);
+  const compareReq = requests.find(r => r.id === ids[1]);
+  if (baseReq && compareReq) {
+    openCompareModal(baseReq, compareReq);
+  }
+}
+
+async function openCompareModal(baseReq, compareReq) {
   const diffModal = document.getElementById('network-diff-modal');
-  if (!diffModal) return;
+  if (!diffModal || !baseReq || !compareReq) return;
 
-  document.getElementById('diff-base-info').textContent = `#${baseReq.id} - ${baseReq.method} ${truncateUrl(baseReq.url, 40)}`;
-  document.getElementById('diff-compare-info').textContent = `#${compareReq.id} - ${compareReq.method} ${truncateUrl(compareReq.url, 40)}`;
+  currentDiffBase = baseReq;
+  currentDiffCompare = compareReq;
 
-  // Default to request body tab
-  document.querySelectorAll('.network-diff-tab').forEach(btn => {
-    if (btn.dataset.diffTab === 'request') {
-      btn.classList.add('active');
-    } else {
-      btn.classList.remove('active');
+  // Ensure full payloads are loaded if truncated summary
+  [baseReq, compareReq].forEach(async (r) => {
+    if (r && (r.isTruncatedSummary || !r._hasFullPayload) && r.id) {
+      try {
+        const res = await fetch(`/api/network/requests/${r.id}`);
+        if (res.ok) {
+          const full = await res.json();
+          Object.assign(r, full);
+          r._hasFullPayload = true;
+          r.isTruncatedSummary = false;
+          if ((currentDiffBase?.id === r.id || currentDiffCompare?.id === r.id) && diffModal.style.display !== 'none') {
+            renderDiffContent(currentDiffBase, currentDiffCompare, activeDiffTab);
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to load full payload for diff:', e);
+      }
     }
   });
 
+  populateDiffSelectors();
+
+  // Diff Tabs highlight
+  document.querySelectorAll('.network-diff-tab').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.diffTab === activeDiffTab);
+  });
+
   diffModal.style.display = 'flex';
-  renderDiffContent(baseReq, compareReq, 'request');
+  renderDiffContent(currentDiffBase, currentDiffCompare, activeDiffTab);
 }
 
-function renderDiffContent(baseReq, compareReq, tab) {
+function populateDiffSelectors() {
+  const baseSel = document.getElementById('diff-base-selector');
+  const compSel = document.getElementById('diff-compare-selector');
+  if (!baseSel || !compSel) return;
+
+  const sorted = [...requests].reverse();
+  const optionsHtml = sorted.map(r => {
+    const endp = getEndpointTail(r.url, 28);
+    return `<option value="${r.id}">#${r.id} ${r.method} ${escHtml(endp)} (${fmtDuration(r.duration)})</option>`;
+  }).join('');
+
+  baseSel.innerHTML = optionsHtml;
+  compSel.innerHTML = optionsHtml;
+
+  if (currentDiffBase) baseSel.value = String(currentDiffBase.id);
+  if (currentDiffCompare) compSel.value = String(currentDiffCompare.id);
+}
+
+function renderDiffOverview(baseReq, compareReq) {
+  const usageA = calculateUsageAndCost(baseReq);
+  const usageB = calculateUsageAndCost(compareReq);
+  const durDiff = (compareReq.duration || 0) - (baseReq.duration || 0);
+  const sizeDiff = (compareReq.size || 0) - (baseReq.size || 0);
+  const tokDiff = (usageB?.totalTokens || 0) - (usageA?.totalTokens || 0);
+  const costDiff = (usageB?.cost || 0) - (usageA?.cost || 0);
+
+  const fmtDiffNum = (diff, unit = '') => {
+    if (diff === 0) return `<span style="color:var(--text-3)">Identical</span>`;
+    const sign = diff > 0 ? '+' : '';
+    const color = diff > 0 ? '#f87171' : 'var(--green)';
+    return `<span style="color:${color};font-weight:600">${sign}${diff.toLocaleString()}${unit}</span>`;
+  };
+
+  return `
+    <div style="padding:16px;overflow-y:auto;height:100%;display:flex;flex-direction:column;gap:16px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <!-- Request A Card -->
+        <div class="network-human-card" style="padding:16px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+            <span class="badge grey">Base (A)</span>
+            <span class="mono" style="font-size:11px;color:var(--text-3)">#${baseReq.id}</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
+            <span class="badge ${methodClass(baseReq.method)}">${baseReq.method}</span>
+            <span class="badge ${statusClass(baseReq.statusCode)}">${baseReq.statusCode || 'ERR'}</span>
+            <span class="mono" style="font-size:11.5px;color:var(--text);font-weight:600">${getEndpointTail(baseReq.url, 35)}</span>
+          </div>
+          <div class="network-kv-table" style="margin-top:8px">
+            <div class="network-kv-row"><span class="network-kv-key">Full URL</span><span class="network-kv-val mono" style="font-size:10.5px">${escHtml(baseReq.url)}</span></div>
+            <div class="network-kv-row"><span class="network-kv-key">Duration</span><span class="network-kv-val mono">${fmtDuration(baseReq.duration)}</span></div>
+            <div class="network-kv-row"><span class="network-kv-key">Payload Size</span><span class="network-kv-val mono">${fmtBytes(baseReq.size)}</span></div>
+            <div class="network-kv-row"><span class="network-kv-key">Model</span><span class="network-kv-val mono">${usageA?.model || baseReq.tag || 'N/A'}</span></div>
+            <div class="network-kv-row"><span class="network-kv-key">Total Tokens</span><span class="network-kv-val mono">${usageA?.totalTokens?.toLocaleString() || 'N/A'}</span></div>
+            <div class="network-kv-row"><span class="network-kv-key">Cost</span><span class="network-kv-val mono" style="color:var(--green)">$${usageA?.cost ? usageA.cost.toFixed(5) : '0.00'}</span></div>
+            <div class="network-kv-row"><span class="network-kv-key">Timestamp</span><span class="network-kv-val mono">${fmtTime(baseReq.timestamp)}</span></div>
+          </div>
+        </div>
+
+        <!-- Request B Card -->
+        <div class="network-human-card" style="padding:16px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+            <span class="badge purple">Compare (B)</span>
+            <span class="mono" style="font-size:11px;color:var(--text-3)">#${compareReq.id}</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
+            <span class="badge ${methodClass(compareReq.method)}">${compareReq.method}</span>
+            <span class="badge ${statusClass(compareReq.statusCode)}">${compareReq.statusCode || 'ERR'}</span>
+            <span class="mono" style="font-size:11.5px;color:var(--text);font-weight:600">${getEndpointTail(compareReq.url, 35)}</span>
+          </div>
+          <div class="network-kv-table" style="margin-top:8px">
+            <div class="network-kv-row"><span class="network-kv-key">Full URL</span><span class="network-kv-val mono" style="font-size:10.5px">${escHtml(compareReq.url)}</span></div>
+            <div class="network-kv-row"><span class="network-kv-key">Duration</span><span class="network-kv-val mono">${fmtDuration(compareReq.duration)}</span></div>
+            <div class="network-kv-row"><span class="network-kv-key">Payload Size</span><span class="network-kv-val mono">${fmtBytes(compareReq.size)}</span></div>
+            <div class="network-kv-row"><span class="network-kv-key">Model</span><span class="network-kv-val mono">${usageB?.model || compareReq.tag || 'N/A'}</span></div>
+            <div class="network-kv-row"><span class="network-kv-key">Total Tokens</span><span class="network-kv-val mono">${usageB?.totalTokens?.toLocaleString() || 'N/A'}</span></div>
+            <div class="network-kv-row"><span class="network-kv-key">Cost</span><span class="network-kv-val mono" style="color:var(--green)">$${usageB?.cost ? usageB.cost.toFixed(5) : '0.00'}</span></div>
+            <div class="network-kv-row"><span class="network-kv-key">Timestamp</span><span class="network-kv-val mono">${fmtTime(compareReq.timestamp)}</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Variance / Delta Summary -->
+      <div style="background:var(--bg-3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px">
+        <h4 style="margin:0 0 10px 0;font-size:12px;color:var(--text);display:flex;align-items:center;gap:6px">
+          <span>📈</span> Delta & Variance Analysis (B vs A)
+        </h4>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:12px">
+          <div>
+            <div style="font-size:10.5px;color:var(--text-3)">Duration Diff</div>
+            <div class="mono" style="font-size:12px">${fmtDiffNum(durDiff, 'ms')}</div>
+          </div>
+          <div>
+            <div style="font-size:10.5px;color:var(--text-3)">Payload Size Diff</div>
+            <div class="mono" style="font-size:12px">${fmtDiffNum(sizeDiff, ' B')}</div>
+          </div>
+          <div>
+            <div style="font-size:10.5px;color:var(--text-3)">Token Count Diff</div>
+            <div class="mono" style="font-size:12px">${fmtDiffNum(tokDiff, ' tok')}</div>
+          </div>
+          <div>
+            <div style="font-size:10.5px;color:var(--text-3)">Cost Diff</div>
+            <div class="mono" style="font-size:12px">${costDiff === 0 ? '<span style="color:var(--text-3)">$0.00</span>' : `<span style="color:${costDiff > 0 ? '#f87171' : 'var(--green)'};font-weight:600">${costDiff > 0 ? '+' : ''}$${costDiff.toFixed(5)}</span>`}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderDiffContent(baseReq, compareReq, tab = 'request') {
+  activeDiffTab = tab;
   const leftPane = document.getElementById('diff-pane-left');
   const rightPane = document.getElementById('diff-pane-right');
+  const panesContainer = document.getElementById('diff-panes-container');
+  const overviewContainer = document.getElementById('diff-overview-container');
+
+  if (tab === 'overview') {
+    if (panesContainer) panesContainer.style.display = 'none';
+    if (overviewContainer) {
+      overviewContainer.style.display = 'block';
+      overviewContainer.innerHTML = renderDiffOverview(baseReq, compareReq);
+    }
+    return;
+  }
+
+  if (panesContainer) panesContainer.style.display = 'grid';
+  if (overviewContainer) overviewContainer.style.display = 'none';
   if (!leftPane || !rightPane) return;
 
   let baseStr = '';
@@ -739,18 +913,40 @@ function bindMockAndDiffEvents() {
     document.querySelectorAll('.network-diff-tab').forEach(btn => btn.classList.remove('active'));
     tabBtn.classList.add('active');
 
-    const activeDiffTab = tabBtn.dataset.diffTab;
-    const baseText = document.getElementById('diff-base-info').textContent;
-    const compareText = document.getElementById('diff-compare-info').textContent;
-    
-    const baseId = parseInt(baseText.match(/#(\d+)/)?.[1] || 0);
-    const compareId = parseInt(compareText.match(/#(\d+)/)?.[1] || 0);
+    activeDiffTab = tabBtn.dataset.diffTab || 'request';
+    if (currentDiffBase && currentDiffCompare) {
+      renderDiffContent(currentDiffBase, currentDiffCompare, activeDiffTab);
+    }
+  });
 
-    const baseReq = requests.find(r => r.id === baseId);
-    const compareReq = requests.find(r => r.id === compareId);
+  // Base Request Selector Change
+  document.getElementById('diff-base-selector')?.addEventListener('change', (e) => {
+    const id = parseInt(e.target.value, 10);
+    const found = requests.find(r => r.id === id);
+    if (found) {
+      currentDiffBase = found;
+      renderDiffContent(currentDiffBase, currentDiffCompare, activeDiffTab);
+    }
+  });
 
-    if (baseReq && compareReq) {
-      renderDiffContent(baseReq, compareReq, activeDiffTab);
+  // Compare Request Selector Change
+  document.getElementById('diff-compare-selector')?.addEventListener('change', (e) => {
+    const id = parseInt(e.target.value, 10);
+    const found = requests.find(r => r.id === id);
+    if (found) {
+      currentDiffCompare = found;
+      renderDiffContent(currentDiffBase, currentDiffCompare, activeDiffTab);
+    }
+  });
+
+  // Swap Base and Compare
+  document.getElementById('swap-diff-btn')?.addEventListener('click', () => {
+    if (currentDiffBase && currentDiffCompare) {
+      const temp = currentDiffBase;
+      currentDiffBase = currentDiffCompare;
+      currentDiffCompare = temp;
+      populateDiffSelectors();
+      renderDiffContent(currentDiffBase, currentDiffCompare, activeDiffTab);
     }
   });
 }
@@ -981,6 +1177,22 @@ export async function renderNetwork(container) {
           <span style="font-size:11px;color:#818cf8;font-weight:bold;white-space:nowrap">🔗 Full URI:</span>
           <span id="network-table-hover-url-text" class="mono network-table-hover-url-text"></span>
         </div>
+        <div id="network-diff-floating-bar" class="network-diff-floating-bar" style="display:none">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:14px">⚔️</span>
+            <span style="font-size:11.5px;font-weight:600;color:var(--text)">
+              <span id="diff-selected-count">0</span> Requests Selected
+            </span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <button id="open-diff-btn" class="action-btn primary" style="padding:4px 14px;font-size:11px;box-shadow:0 2px 10px rgba(99,102,241,0.5)">
+              ⚔️ Compare Diff
+            </button>
+            <button id="clear-diff-btn" class="action-btn secondary" style="padding:4px 8px;font-size:11px">
+              ✕ Clear
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- Detail Inspector Panel -->
@@ -1196,29 +1408,40 @@ export async function renderNetwork(container) {
     <div id="network-diff-modal" class="network-diff-modal" style="display:none;">
       <div class="network-diff-modal-content">
         <div class="network-diff-modal-header">
-          <div style="display: flex; align-items: center; gap: 12px;">
-            <h3 style="margin:0; font-size:15px; color:var(--text)">Compare Requests</h3>
+          <div style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap;">
+            <h3 style="margin:0; font-size:15px; color:var(--text); display:flex; align-items:center; gap:6px">
+              <span>⚔️</span> Compare Requests
+            </h3>
             <div class="network-diff-modal-tabs">
-              <button class="network-diff-tab active" data-diff-tab="request">Request Body</button>
-              <button class="network-diff-tab" data-diff-tab="response">Response Body</button>
-              <button class="network-diff-tab" data-diff-tab="headers">Headers</button>
+              <button class="network-diff-tab active" data-diff-tab="request">💬 Request Body</button>
+              <button class="network-diff-tab" data-diff-tab="response">⚡ Response Body</button>
+              <button class="network-diff-tab" data-diff-tab="headers">📋 Headers</button>
+              <button class="network-diff-tab" data-diff-tab="overview">📊 Overview & Metrics</button>
             </div>
           </div>
-          <button id="close-diff-modal-btn" class="network-control-btn" style="font-size:14px">✕</button>
+          <div style="display:flex;align-items:center;gap:8px">
+            <button id="swap-diff-btn" class="action-btn secondary" style="padding:3px 10px;font-size:11px" title="Swap Base (A) and Compare (B)">⇄ Swap</button>
+            <button id="close-diff-modal-btn" class="network-control-btn" style="font-size:14px">✕</button>
+          </div>
         </div>
         <div class="network-diff-modal-subheader">
           <div class="diff-header-left">
-            <strong>Base Request:</strong> <span id="diff-base-info" class="mono" style="font-size:11px"></span>
+            <strong style="color:var(--text-3);font-size:10px">BASE (A):</strong>
+            <select id="diff-base-selector" class="filter-select" style="max-width:340px;font-size:11px;padding:3px 8px;background:var(--bg-2)">
+            </select>
           </div>
           <div class="diff-header-right">
-            <strong>Compare Request:</strong> <span id="diff-compare-info" class="mono" style="font-size:11px"></span>
+            <strong style="color:var(--text-3);font-size:10px">COMPARE (B):</strong>
+            <select id="diff-compare-selector" class="filter-select" style="max-width:340px;font-size:11px;padding:3px 8px;background:var(--bg-2)">
+            </select>
           </div>
         </div>
         <div class="network-diff-modal-body">
-          <div class="network-diff-container">
+          <div class="network-diff-container" id="diff-panes-container">
             <div class="network-diff-pane" id="diff-pane-left"></div>
             <div class="network-diff-pane" id="diff-pane-right"></div>
           </div>
+          <div id="diff-overview-container" style="display:none;height:100%"></div>
         </div>
       </div>
     </div>
@@ -1550,6 +1773,21 @@ function removeContextMenu() {
 // ── Table Events ──
 function bindTableEvents() {
   document.getElementById('network-request-tbody')?.addEventListener('click', (e) => {
+    // If clicking checkbox, toggle diff selection without opening detail panel
+    const cb = e.target.closest('.network-diff-checkbox');
+    if (cb) {
+      e.stopPropagation();
+      const id = parseInt(cb.dataset.reqId, 10);
+      if (cb.checked) {
+        selectedDiffIds.add(id);
+      } else {
+        selectedDiffIds.delete(id);
+      }
+      updateDiffFloatingBar();
+      updateRowDiffHighlight();
+      return;
+    }
+
     const row = e.target.closest('tr[data-req-id]');
     if (!row) return;
     const id = parseInt(row.dataset.reqId);
@@ -1560,6 +1798,17 @@ function bindTableEvents() {
       document.querySelectorAll('.network-table tbody tr').forEach(tr => tr.classList.remove('selected'));
       row.classList.add('selected');
     }
+  });
+
+  // Floating Diff bar buttons
+  document.getElementById('open-diff-btn')?.addEventListener('click', () => {
+    openCompareFromSelection();
+  });
+
+  document.getElementById('clear-diff-btn')?.addEventListener('click', () => {
+    selectedDiffIds.clear();
+    updateDiffFloatingBar();
+    updateRowDiffHighlight();
   });
 
   // Hover preview bar for full URI
@@ -1774,11 +2023,16 @@ function bindTableEvents() {
     }
     const diffBtn = e.target.closest('#deck-diff-btn');
     if (diffBtn && selectedRequest) {
-      compareBaseRequest = selectedRequest;
-      updateCompareBanner();
-      const origText = diffBtn.innerHTML;
-      diffBtn.innerHTML = '✓ Base Set';
-      setTimeout(() => { diffBtn.innerHTML = origText; }, 1500);
+      let otherReq = null;
+      if (selectedDiffIds.size > 0) {
+        const otherId = Array.from(selectedDiffIds).find(id => id !== selectedRequest.id);
+        if (otherId) otherReq = requests.find(r => r.id === otherId);
+      }
+      if (!otherReq) {
+        const curIdx = requests.findIndex(r => r.id === selectedRequest.id);
+        otherReq = (curIdx > 0 ? requests[curIdx - 1] : requests[curIdx + 1]) || selectedRequest;
+      }
+      openCompareModal(selectedRequest, otherReq);
       return;
     }
   });
@@ -1992,6 +2246,7 @@ function renderTable() {
     } else {
       thead.innerHTML = `
         <tr>
+          <th style="width:28px"></th>
           <th style="width:44px">#</th>
           <th style="width:62px">Method</th>
           <th>URL</th>
@@ -2006,7 +2261,7 @@ function renderTable() {
   }
 
   if (filtered.length === 0) {
-    const colspan = listMode === 'ai' ? 1 : 8;
+    const colspan = listMode === 'ai' ? 1 : 9;
     tbody.innerHTML = `<tr><td colspan="${colspan}" class="network-empty-row">
       <div class="empty-state" style="padding:40px 20px;min-height:auto">
         <div class="icon">📡</div>
@@ -2033,7 +2288,14 @@ function renderTable() {
     }
   }
 
-  tbody.innerHTML = sorted.map(r => `<tr data-req-id="${r.id}" title="${escHtml(r.url)}"${selectedRequest?.id === r.id ? ' class="selected"' : ''}>${renderRow(r)}</tr>`).join('');
+  tbody.innerHTML = sorted.map(r => {
+    let rowClasses = [];
+    if (selectedRequest?.id === r.id) rowClasses.push('selected');
+    if (selectedDiffIds.has(r.id)) rowClasses.push('diff-selected');
+    const classAttr = rowClasses.length ? ` class="${rowClasses.join(' ')}"` : '';
+    return `<tr data-req-id="${r.id}" title="${escHtml(r.url)}"${classAttr}>${renderRow(r)}</tr>`;
+  }).join('');
+  updateDiffFloatingBar();
 }
 
 function renderRow(r) {
@@ -2049,6 +2311,8 @@ function renderRow(r) {
     }
   }
 
+  const isChecked = selectedDiffIds.has(r.id);
+
   if (listMode === 'ai') {
     const usage = calculateUsageAndCost(r);
     const model = usage?.model || r.tag || '';
@@ -2060,6 +2324,7 @@ function renderRow(r) {
       <td class="network-ai-row-cell" title="${escHtml(r.url)}">
         <div class="network-ai-row-top">
           <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap">
+            <input type="checkbox" class="network-diff-checkbox" data-req-id="${r.id}" ${isChecked ? 'checked' : ''} title="Select to compare diff" />
             <span class="mono" style="color:var(--text-3); font-size:10px">#${r.id}</span>
             <span class="badge ${methodClass(r.method)}" style="font-size:9.5px; padding:1px 5px">${escHtml(r.method)}</span>
             <span class="badge ${statusClass(r.statusCode)}" style="font-size:9.5px; padding:1px 5px">${r.statusCode || 'ERR'}</span>
@@ -2087,6 +2352,9 @@ function renderRow(r) {
 
   // Classic HTTP Mode
   return `
+    <td style="width:28px; text-align:center">
+      <input type="checkbox" class="network-diff-checkbox" data-req-id="${r.id}" ${isChecked ? 'checked' : ''} title="Select to compare diff" />
+    </td>
     <td class="mono" style="color:var(--text-3);font-size:10px">${r.id}</td>
     <td>
       <span class="badge ${methodClass(r.method)}">${escHtml(r.method)}</span>

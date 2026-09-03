@@ -3904,4 +3904,63 @@ mark.network-search-match.current {
   opacity: 0.8;
 }
 
+/* Floating Diff Action Bar */
+.network-diff-floating-bar {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid var(--accent);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6), 0 0 16px rgba(99, 102, 241, 0.4);
+  backdrop-filter: blur(12px);
+  border-radius: 9999px;
+  padding: 8px 18px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  z-index: 100;
+  animation: slideUp 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.network-diff-checkbox {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-3);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+  transition: all 0.15s ease;
+  position: relative;
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.network-diff-checkbox:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.network-diff-checkbox:checked::after {
+  content: '✓';
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: bold;
+}
+
+.network-diff-checkbox:hover {
+  border-color: var(--accent);
+}
+
+.network-table tbody tr.diff-selected {
+  background: rgba(99, 102, 241, 0.12) !important;
+  border-left: 2px solid var(--accent-2);
+}
+
 
