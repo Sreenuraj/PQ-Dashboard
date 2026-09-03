@@ -97,6 +97,39 @@ function truncateUrl(url, maxLen = 80) {
   return clean.slice(0, maxLen) + '…';
 }
 
+function getEndpointTail(url, maxLen = 32) {
+  if (!url) return '';
+  try {
+    const u = new URL(url);
+    const pathname = u.pathname;
+    const search = u.search ? (u.search.length > 10 ? '?...' : u.search) : '';
+    const fullTarget = pathname + search;
+
+    if (fullTarget.length <= maxLen) return fullTarget;
+
+    const segments = pathname.split('/').filter(Boolean);
+    if (!segments.length) return u.host;
+
+    if (segments.length <= 2) {
+      const short = '/' + segments.join('/') + search;
+      return short.length <= maxLen ? short : '…' + short.slice(-(maxLen - 1));
+    }
+
+    let accumulated = '';
+    for (let i = segments.length - 1; i >= 0; i--) {
+      const candidate = '/' + segments.slice(i).join('/') + (accumulated === '' ? search : '');
+      if (candidate.length > maxLen - 2) {
+        if (accumulated) return '…' + accumulated;
+        return '…' + candidate.slice(-(maxLen - 2));
+      }
+      accumulated = candidate;
+    }
+    return '…' + accumulated;
+  } catch {
+    return url.length > maxLen ? '…' + url.slice(-(maxLen - 1)) : url;
+  }
+}
+
 function getParsedOrRawBody(bodyStr) {
   if (!bodyStr) return null;
   try {
@@ -944,6 +977,10 @@ export async function renderNetwork(container) {
             </tbody>
           </table>
         </div>
+        <div id="network-table-hover-url" class="network-table-hover-url" style="display:none">
+          <span style="font-size:11px;color:#818cf8;font-weight:bold;white-space:nowrap">🔗 Full URI:</span>
+          <span id="network-table-hover-url-text" class="mono network-table-hover-url-text"></span>
+        </div>
       </div>
 
       <!-- Detail Inspector Panel -->
@@ -1525,6 +1562,29 @@ function bindTableEvents() {
     }
   });
 
+  // Hover preview bar for full URI
+  const hoverBar = document.getElementById('network-table-hover-url');
+  const hoverText = document.getElementById('network-table-hover-url-text');
+  const tbody = document.getElementById('network-request-tbody');
+
+  tbody?.addEventListener('mouseover', (e) => {
+    const row = e.target.closest('tr[data-req-id]');
+    if (!row) {
+      if (hoverBar) hoverBar.style.display = 'none';
+      return;
+    }
+    const id = parseInt(row.dataset.reqId, 10);
+    const record = requests.find(r => r.id === id);
+    if (record && hoverBar && hoverText) {
+      hoverText.textContent = record.url;
+      hoverBar.style.display = 'flex';
+    }
+  });
+
+  tbody?.addEventListener('mouseleave', () => {
+    if (hoverBar) hoverBar.style.display = 'none';
+  });
+
   document.getElementById('network-request-tbody')?.addEventListener('contextmenu', (e) => {
     const row = e.target.closest('tr[data-req-id]');
     if (!row) return;
@@ -1973,7 +2033,7 @@ function renderTable() {
     }
   }
 
-  tbody.innerHTML = sorted.map(r => `<tr data-req-id="${r.id}"${selectedRequest?.id === r.id ? ' class="selected"' : ''}>${renderRow(r)}</tr>`).join('');
+  tbody.innerHTML = sorted.map(r => `<tr data-req-id="${r.id}" title="${escHtml(r.url)}"${selectedRequest?.id === r.id ? ' class="selected"' : ''}>${renderRow(r)}</tr>`).join('');
 }
 
 function renderRow(r) {
@@ -1994,9 +2054,10 @@ function renderRow(r) {
     const model = usage?.model || r.tag || '';
     const totalTokens = usage?.totalTokens || 0;
     const cost = usage?.cost || 0;
+    const endpoint = getEndpointTail(r.url, 30);
 
     return `
-      <td class="network-ai-row-cell">
+      <td class="network-ai-row-cell" title="${escHtml(r.url)}">
         <div class="network-ai-row-top">
           <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap">
             <span class="mono" style="color:var(--text-3); font-size:10px">#${r.id}</span>
@@ -2010,9 +2071,10 @@ function renderRow(r) {
           <span class="mono" style="font-size:10.5px; color:var(--text-2)">${fmtDuration(r.duration)}</span>
         </div>
         <div class="network-ai-row-bottom">
-          <span class="mono" style="color:var(--text-3); max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap" title="${escHtml(r.url)}">
-            ${escHtml(truncateUrl(r.url, 45))}
-          </span>
+          <div class="network-endpoint-badge" title="${escHtml(r.url)}">
+            <span class="network-endpoint-icon">⚡</span>
+            <span class="network-endpoint-path mono">${escHtml(endpoint)}</span>
+          </div>
           <div style="display:flex; align-items:center; gap:6px" class="mono">
             ${totalTokens > 0 ? `<span style="color:var(--text-2)">${totalTokens > 1000 ? (totalTokens/1000).toFixed(1) + 'k' : totalTokens} tok</span>` : `<span style="color:var(--text-3)">${fmtBytes(r.size)}</span>`}
             ${cost > 0 ? `<span style="color:var(--green); font-weight:600">$${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(3)}</span>` : ''}
@@ -2033,7 +2095,7 @@ function renderRow(r) {
       ${interceptBadge}
     </td>
     <td class="network-url-cell" title="${escHtml(r.url)}">
-      <span class="mono">${escHtml(truncateUrl(r.url))}</span>
+      <span class="mono" style="color:#a5b4fc;font-weight:600">${escHtml(getEndpointTail(r.url, 40))}</span>
     </td>
     <td><span class="badge ${statusClass(r.statusCode)}">${r.statusCode || 'ERR'}</span></td>
     <td><span class="badge ${tagColorClass(r.tag)}" style="font-size:9px">${escHtml(tagLabel(r.tag))}</span></td>
