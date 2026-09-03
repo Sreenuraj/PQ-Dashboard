@@ -1349,6 +1349,11 @@ export async function renderNetwork(container) {
             <option value="5xx">5xx Server Error</option>
             <option value="0">Failed / Error</option>
           </select>
+          <select id="network-agent-filter" class="filter-select">
+            <option value="all">All Agents</option>
+            <option value="main-agent">🎯 Main Agent</option>
+            <option value="subagent">⚡ All Subagents</option>
+          </select>
           <select id="network-limit-filter" class="filter-select">
             <option value="all">All Requests</option>
             <option value="5">Last 5</option>
@@ -1389,6 +1394,7 @@ export async function renderNetwork(container) {
           <span>📊 Comparing with Request <strong>#<span id="compare-base-id"></span></strong>: <span id="compare-base-url" class="mono" style="font-size:11px"></span></span>
           <button id="clear-compare-btn" class="action-btn secondary" style="padding:2px 8px; min-height:auto; font-size:10px">Clear</button>
         </div>
+        <div id="network-subagent-bar-container"></div>
         <div class="table-wrap">
           <table class="data-table network-table" id="network-request-table">
             <thead id="network-table-thead"></thead>
@@ -1804,6 +1810,13 @@ function bindToolbarEvents(status) {
     renderTable();
   });
 
+  // Agent filter
+  document.getElementById('network-agent-filter')?.addEventListener('change', (e) => {
+    activeFilters.host = e.target.value;
+    renderChips();
+    renderTable();
+  });
+
   // Limit filter
   document.getElementById('network-limit-filter')?.addEventListener('change', (e) => {
     activeFilters.limit = e.target.value;
@@ -1941,29 +1954,120 @@ function bindToolbarEvents(status) {
   });
 }
 
+function updateAgentFilterDropdown(sortedSubagentIndices, subagentCounts) {
+  const select = document.getElementById('network-agent-filter');
+  if (!select) return;
+
+  const currentVal = activeFilters.host || 'all';
+
+  let html = `
+    <option value="all" ${currentVal === 'all' ? 'selected' : ''}>All Agents</option>
+    <option value="main-agent" ${currentVal === 'main-agent' ? 'selected' : ''}>🎯 Main Agent</option>
+    <option value="subagent" ${currentVal === 'subagent' ? 'selected' : ''}>⚡ All Subagents</option>
+  `;
+
+  for (const idx of sortedSubagentIndices) {
+    const val = `subagent-${idx}`;
+    const count = subagentCounts.get(idx) || 0;
+    html += `<option value="${val}" ${currentVal === val ? 'selected' : ''}>⚡ Subagent ${idx} (${count})</option>`;
+  }
+
+  select.innerHTML = html;
+}
+
+function renderSubagentBar(sortedSubagentIndices, subagentCounts, totalSubagentsCount) {
+  const barContainer = document.getElementById('network-subagent-bar-container');
+  if (!barContainer) return;
+
+  const isSubagentFilterActive = activeFilters.host === 'subagent' || (activeFilters.host && activeFilters.host.startsWith('subagent-'));
+
+  if (!isSubagentFilterActive || sortedSubagentIndices.length === 0) {
+    barContainer.innerHTML = '';
+    return;
+  }
+
+  let html = `
+    <div class="network-subagent-bar">
+      <span class="network-subagent-bar-title">⚡ Subagents:</span>
+      <button class="network-subagent-tab ${activeFilters.host === 'subagent' ? 'active' : ''}" data-subagent="subagent">
+        All (${totalSubagentsCount})
+      </button>
+  `;
+
+  for (const idx of sortedSubagentIndices) {
+    const tag = `subagent-${idx}`;
+    const count = subagentCounts.get(idx) || 0;
+    html += `
+      <button class="network-subagent-tab ${activeFilters.host === tag ? 'active' : ''}" data-subagent="${tag}">
+        Subagent ${idx} (${count})
+      </button>
+    `;
+  }
+
+  html += `
+      <button class="action-btn secondary" id="clear-subagent-filter-btn" style="margin-left:auto;padding:1px 6px;font-size:10px" title="Show all traffic">✕ All Traffic</button>
+    </div>
+  `;
+
+  barContainer.innerHTML = html;
+
+  barContainer.querySelectorAll('.network-subagent-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      activeFilters.host = btn.dataset.subagent;
+      renderChips();
+      renderTable();
+    });
+  });
+
+  barContainer.querySelector('#clear-subagent-filter-btn')?.addEventListener('click', () => {
+    activeFilters.host = 'all';
+    renderChips();
+    renderTable();
+  });
+}
+
 function renderChips() {
   const container = document.getElementById('network-domain-chips');
   if (!container) return;
 
-  // Collect any detected subagent indices dynamically from requests
-  const detectedSubagentIndices = new Set();
+  // Collect any detected subagent indices and counts dynamically from requests
+  const subagentCounts = new Map();
+  let totalSubagentsCount = 0;
+  let mainAgentCount = 0;
+
   for (const req of requests) {
     const label = getAgentLabel(req);
+    if (label === 'PostQode') {
+      mainAgentCount++;
+    }
     const m = label?.match(/^Subagent (\d+)$/i);
-    if (m) detectedSubagentIndices.add(parseInt(m[1], 10));
+    if (m) {
+      const idx = parseInt(m[1], 10);
+      subagentCounts.set(idx, (subagentCounts.get(idx) || 0) + 1);
+      totalSubagentsCount++;
+    } else if (label && /subagent/i.test(label)) {
+      totalSubagentsCount++;
+    }
   }
-  const sortedSubagentIndices = Array.from(detectedSubagentIndices).sort((a, b) => a - b);
+  const sortedSubagentIndices = Array.from(subagentCounts.keys()).sort((a, b) => a - b);
+
+  updateAgentFilterDropdown(sortedSubagentIndices, subagentCounts);
+  renderSubagentBar(sortedSubagentIndices, subagentCounts, totalSubagentsCount);
 
   const subagentChips = sortedSubagentIndices.length > 0
     ? [
-        { tag: 'subagent', label: '⚡ All Subagents' },
-        ...sortedSubagentIndices.map(idx => ({ tag: `subagent-${idx}`, label: `⚡ Subagent ${idx}` }))
+        { tag: 'subagent', label: `⚡ All Subagents (${totalSubagentsCount})` },
+        ...sortedSubagentIndices.map(idx => ({ tag: `subagent-${idx}`, label: `⚡ Subagent ${idx} (${subagentCounts.get(idx)})` }))
       ]
-    : [{ tag: 'subagent', label: '⚡ Subagents' }];
+    : (totalSubagentsCount > 0
+        ? [{ tag: 'subagent', label: `⚡ Subagents (${totalSubagentsCount})` }]
+        : [{ tag: 'subagent', label: '⚡ Subagents' }]);
+
+  const mainAgentLabel = mainAgentCount > 0 ? `🎯 Main Agent (${mainAgentCount})` : '🎯 Main Agent';
 
   const defaultChips = [
     { tag: 'all', label: 'All' },
-    { tag: 'main-agent', label: '🎯 Main Agent' },
+    { tag: 'main-agent', label: mainAgentLabel },
     ...subagentChips,
     { tag: 'postqode', label: 'PostQode' },
     { tag: 'openai', label: 'OpenAI' },
