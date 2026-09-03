@@ -2193,6 +2193,21 @@ function bindTableEvents() {
         container?.querySelectorAll('.network-collapse-arrow').forEach(a => a.textContent = '▶');
         return;
       }
+
+      // 9. Toggle KV vs JSON view in Tool Calls
+      const toggleJsonBtn = e.target.closest('.network-toggle-json-btn');
+      if (toggleJsonBtn) {
+        e.stopPropagation();
+        const kvEl = document.getElementById(toggleJsonBtn.dataset.targetKv);
+        const jsonEl = document.getElementById(toggleJsonBtn.dataset.targetJson);
+        if (kvEl && jsonEl) {
+          const isJson = jsonEl.style.display !== 'none';
+          jsonEl.style.display = isJson ? 'none' : 'block';
+          kvEl.style.display = isJson ? 'block' : 'none';
+          toggleJsonBtn.textContent = isJson ? '{ } View JSON' : '📋 View KV';
+        }
+        return;
+      }
     });
 
     detailBody.addEventListener('input', (e) => {
@@ -3405,6 +3420,109 @@ function renderRequestTab(record) {
   `;
 }
 
+function cleanHumanReadableText(text) {
+  if (!text) return '';
+  if (typeof text !== 'string') text = String(text);
+  return text
+    .replace(/\r\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function renderHumanReadableMessageContent(rawText) {
+  if (!rawText) return '';
+  if (typeof rawText !== 'string') rawText = String(rawText);
+
+  let remaining = rawText;
+  let task = null;
+  let envDetails = null;
+  let scaffold = null;
+
+  // Extract <task>...</task>
+  const taskMatch = remaining.match(/<task>([\s\S]*?)<\/task>/i);
+  if (taskMatch) {
+    task = taskMatch[1].trim();
+    remaining = remaining.replace(taskMatch[0], '').trim();
+  }
+
+  // Extract <environment_details>...</environment_details>
+  const envMatch = remaining.match(/<environment_details>([\s\S]*?)<\/environment_details>/i);
+  if (envMatch) {
+    envDetails = envMatch[1].trim();
+    remaining = remaining.replace(envMatch[0], '').trim();
+  }
+
+  // Extract # TODO LIST RECOMMENDED scaffolding block
+  const todoMatch = remaining.match(/(# TODO LIST RECOMMENDED[\s\S]*?)(?=(<|$))/i);
+  if (todoMatch) {
+    scaffold = todoMatch[1].trim();
+    remaining = remaining.replace(todoMatch[0], '').trim();
+  }
+
+  remaining = cleanHumanReadableText(remaining);
+
+  let html = '';
+
+  // 1. Prominent User Task Box
+  if (task) {
+    html += `
+      <div class="network-task-box">
+        <div style="font-size:10px;font-weight:bold;color:#38bdf8;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px;display:flex;align-items:center;gap:5px">
+          <span>🎯</span> User Prompt / Task
+        </div>
+        <div style="font-size:12.5px;font-weight:500;color:var(--text);line-height:1.45;white-space:pre-wrap">${escHtml(task)}</div>
+      </div>
+    `;
+  }
+
+  // 2. Main / Remaining Content
+  if (remaining) {
+    let isJson = false;
+    let jsonObj = null;
+    if ((remaining.startsWith('{') && remaining.endsWith('}')) || (remaining.startsWith('[') && remaining.endsWith(']'))) {
+      try {
+        jsonObj = JSON.parse(remaining);
+        isJson = true;
+      } catch {}
+    }
+
+    if (isJson && jsonObj) {
+      html += `
+        <div style="margin-top:6px">
+          <div style="font-size:10px;font-weight:bold;color:var(--text-3);text-transform:uppercase;margin-bottom:4px">Structured JSON Payload</div>
+          <div style="background:var(--bg-3);border:1px solid var(--border);border-radius:4px;padding:6px 10px">
+            ${renderKvGrid(jsonObj)}
+          </div>
+        </div>
+      `;
+    } else {
+      html += `<div style="white-space:pre-wrap;line-height:1.45;margin-bottom:6px">${escHtml(remaining)}</div>`;
+    }
+  }
+
+  // 3. Task Guidelines / Scaffolding Accordion
+  if (scaffold) {
+    html += `
+      <details class="network-scaffold-details">
+        <summary>📋 Task Scaffolding & Guidelines (${scaffold.length.toLocaleString()} chars)</summary>
+        <div class="network-scaffold-body">${escHtml(cleanHumanReadableText(scaffold))}</div>
+      </details>
+    `;
+  }
+
+  // 4. Environment & Workspace Context Accordion
+  if (envDetails) {
+    html += `
+      <details class="network-scaffold-details">
+        <summary>⚙️ Workspace Environment & Context (${envDetails.length.toLocaleString()} chars)</summary>
+        <div class="network-scaffold-body">${escHtml(cleanHumanReadableText(envDetails))}</div>
+      </details>
+    `;
+  }
+
+  return html;
+}
+
 function renderHumanReadableRequest(parsed, record) {
   const model = parsed.model || record.tag || 'LLM';
   const msgCount = parsed.messages.length;
@@ -3424,8 +3542,6 @@ function renderHumanReadableRequest(parsed, record) {
     const roleIcon = m.role === 'user' ? '👤' : (m.role === 'assistant' ? '🤖' : '🔧');
     const roleTitle = m.role.toUpperCase();
     const textLen = m.text ? m.text.length : 0;
-    const isVeryLong = textLen > 2500;
-    const previewText = isVeryLong ? m.text.slice(0, 1000) + '...' : m.text;
 
     return `
       <div class="network-chat-msg ${roleClass}">
@@ -3437,44 +3553,52 @@ function renderHumanReadableRequest(parsed, record) {
             <span class="mono" style="font-size:10px;color:var(--text-3)">#${idx + 1}</span>
             ${textLen > 0 ? `<span class="mono" style="font-size:9.5px;color:var(--text-3)">(${textLen.toLocaleString()} chars)</span>` : ''}
           </div>
-          <button class="action-btn secondary network-copy-btn" data-target="net-msg-full-${idx}" style="padding:1px 6px;font-size:9.5px">
+          <button class="action-btn secondary network-copy-btn" data-target="net-msg-body-${idx}" style="padding:1px 6px;font-size:9.5px">
             📋 Copy
           </button>
         </div>
         <div id="net-msg-body-${idx}" class="network-msg-body" style="display:none">
-          <div id="net-msg-full-${idx}" style="${isVeryLong ? 'display:none;' : ''}">
-            ${m.text ? `<div>${escHtml(m.text)}</div>` : ''}
-          </div>
-          ${isVeryLong ? `
-            <div id="net-msg-preview-${idx}">
-              <div>${escHtml(previewText)}</div>
-              <button class="action-btn secondary network-collapsible-header" data-target="net-msg-full-${idx}" data-hide-target="net-msg-preview-${idx}" style="margin-top:6px;padding:3px 8px;font-size:10px;border:1px solid rgba(129,140,248,0.3)">
-                📄 Show full message (${textLen.toLocaleString()} chars)
-              </button>
-            </div>
-          ` : ''}
+          ${m.text ? renderHumanReadableMessageContent(m.text) : ''}
           
           ${m.toolCalls && m.toolCalls.length > 0 ? `
             <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">
               ${m.toolCalls.map(tc => `
                 <div class="network-tool-call-card">
-                  <div style="font-weight:bold;color:#f59e0b;font-size:10.5px;margin-bottom:3px" class="mono">
+                  <div style="font-weight:bold;color:#f59e0b;font-size:10.5px;margin-bottom:6px" class="mono">
                     ⚡ Tool Invocation: <code>${escHtml(tc.name)}</code>
                   </div>
-                  <pre class="network-body-pre" style="max-height:160px;padding:6px;font-size:10.5px;background:var(--bg-3)">${syntaxHighlight(typeof tc.args === 'object' ? JSON.stringify(tc.args, null, 2) : tc.rawArgs)}</pre>
+                  ${typeof tc.args === 'object' && tc.args !== null && Object.keys(tc.args).length > 0 ? `
+                    <div style="background:var(--bg-3);border:1px solid var(--border);border-radius:4px;padding:6px 10px">
+                      ${renderKvGrid(tc.args)}
+                    </div>
+                  ` : `
+                    <pre class="network-body-pre" style="max-height:160px;padding:6px;font-size:10.5px;background:var(--bg-3)">${syntaxHighlight(typeof tc.args === 'object' ? JSON.stringify(tc.args, null, 2) : tc.rawArgs)}</pre>
+                  `}
                 </div>
               `).join('')}
             </div>
           ` : ''}
 
-          ${m.toolResult ? `
-            <div style="margin-top:6px;background:rgba(0,0,0,0.25);border:1px solid var(--border);border-radius:4px;padding:8px">
-              <div style="font-weight:bold;color:var(--text-2);font-size:10.5px;margin-bottom:3px">
-                📥 Tool Result Output ${m.toolResult.isError ? `<span style="color:var(--red)">(Error)</span>` : ''}
+          ${m.toolResult ? (() => {
+            let resJson = null;
+            if (typeof m.toolResult.content === 'string' && (m.toolResult.content.startsWith('{') || m.toolResult.content.startsWith('['))) {
+              try { resJson = JSON.parse(m.toolResult.content); } catch {}
+            }
+            return `
+              <div style="margin-top:6px;background:rgba(0,0,0,0.25);border:1px solid var(--border);border-radius:4px;padding:8px">
+                <div style="font-weight:bold;color:var(--text-2);font-size:10.5px;margin-bottom:4px">
+                  📥 Tool Result Output ${m.toolResult.isError ? `<span style="color:var(--red)">(Error)</span>` : ''}
+                </div>
+                ${resJson && typeof resJson === 'object' ? `
+                  <div style="background:var(--bg-3);border:1px solid var(--border);border-radius:4px;padding:6px 10px">
+                    ${renderKvGrid(resJson)}
+                  </div>
+                ` : `
+                  <pre class="network-body-pre" style="max-height:200px;padding:6px;font-size:10.5px">${escHtml(cleanHumanReadableText(m.toolResult.content))}</pre>
+                `}
               </div>
-              <pre class="network-body-pre" style="max-height:200px;padding:6px;font-size:10.5px">${escHtml(m.toolResult.content)}</pre>
-            </div>
-          ` : ''}
+            `;
+          })() : ''}
         </div>
       </div>
     `;
@@ -3740,7 +3864,7 @@ function renderHumanReadableResponse(parsed, record) {
             </button>
           </div>
           <div id="net-res-assistant-body" class="network-msg-body" style="display:none;max-height:420px">
-            <div id="net-res-assistant-text">${escHtml(parsed.text)}</div>
+            <div id="net-res-assistant-text">${renderHumanReadableMessageContent(parsed.text)}</div>
           </div>
         </div>
       ` : ''}
@@ -3758,7 +3882,9 @@ function renderHumanReadableResponse(parsed, record) {
             </div>
           </div>
           <div class="network-tools-list" style="display:flex;flex-direction:column;gap:8px">
-            ${parsed.toolCalls.map((tc, idx) => `
+            ${parsed.toolCalls.map((tc, idx) => {
+              const isObj = typeof tc.args === 'object' && tc.args !== null;
+              return `
               <div style="background:var(--bg-2);border:1px solid rgba(245,158,11,0.35);border-radius:var(--radius-sm);overflow:hidden">
                 <div class="network-collapsible-header" data-target="net-tc-args-${idx}" style="background:rgba(245,158,11,0.1);padding:7px 12px;display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none">
                   <div style="display:flex;align-items:center;gap:6px">
@@ -3767,15 +3893,29 @@ function renderHumanReadableResponse(parsed, record) {
                       🔧 #${idx + 1} <code>${escHtml(tc.name)}</code>
                     </span>
                   </div>
-                  <button class="action-btn secondary network-copy-btn" data-target="net-tc-pre-${idx}" style="padding:1px 6px;font-size:9.5px">
-                    📋 Copy Args
-                  </button>
+                  <div style="display:flex;align-items:center;gap:6px">
+                    ${isObj ? `
+                      <button class="action-btn secondary network-toggle-json-btn" data-target-kv="net-tc-kv-${idx}" data-target-json="net-tc-pre-${idx}" style="padding:1px 6px;font-size:9.5px">
+                        { } View JSON
+                      </button>
+                    ` : ''}
+                    <button class="action-btn secondary network-copy-btn" data-target="net-tc-pre-${idx}" style="padding:1px 6px;font-size:9.5px">
+                      📋 Copy Args
+                    </button>
+                  </div>
                 </div>
                 <div id="net-tc-args-${idx}" style="display:none;padding:8px 12px;border-top:1px solid rgba(245,158,11,0.2)">
-                  <pre id="net-tc-pre-${idx}" class="network-body-pre" style="max-height:180px;padding:8px;font-size:10.5px;background:var(--bg-3)">${syntaxHighlight(typeof tc.args === 'object' ? JSON.stringify(tc.args, null, 2) : tc.rawArgs)}</pre>
+                  ${isObj ? `
+                    <div id="net-tc-kv-${idx}" style="background:var(--bg-3);border:1px solid var(--border);border-radius:4px;padding:6px 10px">
+                      ${renderKvGrid(tc.args)}
+                    </div>
+                    <pre id="net-tc-pre-${idx}" class="network-body-pre" style="display:none;max-height:180px;padding:8px;font-size:10.5px;background:var(--bg-3)">${syntaxHighlight(JSON.stringify(tc.args, null, 2))}</pre>
+                  ` : `
+                    <pre id="net-tc-pre-${idx}" class="network-body-pre" style="max-height:180px;padding:8px;font-size:10.5px;background:var(--bg-3)">${syntaxHighlight(tc.rawArgs)}</pre>
+                  `}
                 </div>
               </div>
-            `).join('')}
+            `}).join('')}
           </div>
         </div>
       ` : ''}
