@@ -2656,6 +2656,88 @@ mark.network-search-match.current {
   margin-top: 6px;
 }
 
+/* ── Network Pagination Bar ── */
+.network-pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: var(--bg-2);
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-2);
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.network-pagination-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.network-pagination-center {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.network-pagination-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.network-page-btn {
+  padding: 2px 7px;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-2);
+  font-size: 11px;
+  cursor: pointer;
+  font-weight: 500;
+  transition: all 0.15s ease;
+}
+
+.network-page-btn:hover:not(:disabled) {
+  border-color: var(--border-2);
+  color: var(--text);
+  background: var(--bg-4);
+}
+
+.network-page-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.network-load-older-btn {
+  background: rgba(99, 102, 241, 0.08);
+  border: 1px dashed rgba(99, 102, 241, 0.4);
+  color: #818cf8;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.15s ease;
+}
+
+.network-load-older-btn:hover:not(:disabled) {
+  background: rgba(99, 102, 241, 0.2);
+  border-color: #818cf8;
+  color: #c7d2fe;
+}
+
+.network-load-older-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* ── Timing Bars ── */
 .network-timing-bar-group {
   display: flex;

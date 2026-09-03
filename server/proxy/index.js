@@ -453,7 +453,7 @@ function extractAndPersistSystemPrompt(requestBody, capturedTs, modelId) {
  */
 function startProxy(config = {}) {
   proxyPort = config.port || 3457;
-  const bufferSize = config.buffer_size || 500;
+  const bufferSize = config.buffer_size || 2000;
   certsDir = path.resolve(config.certs_dir || './data/proxy-certs');
   if (config.db) proxyDb = config.db; // wire in DB for system-prompt persistence
 

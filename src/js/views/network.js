@@ -544,7 +544,10 @@ let ws = null;
 let isRecording = true;
 let requests = [];
 let selectedRequest = null;
-let activeFilters = { host: 'all', agent: 'all', method: '', status: '', search: '', limit: 'all' };
+let activeFilters = { host: 'all', agent: 'all', method: '', status: '', search: '', limit: '50' };
+let currentPage = 1;
+let serverTotalRequests = 0;
+let isLoadingOlder = false;
 let activeDetailTab = 'headers';
 let bodyViewModes = { request: 'human', response: 'human' };
 let studioLayout = safeGetStorage('pq-network-layout', 'side-by-side');
@@ -1354,11 +1357,12 @@ export async function renderNetwork(container) {
             <option value="main-agent">🎯 Main Agent</option>
             <option value="subagent">⚡ All Subagents</option>
           </select>
-          <select id="network-limit-filter" class="filter-select">
-            <option value="all">All Requests</option>
-            <option value="5">Last 5</option>
-            <option value="10">Last 10</option>
-            <option value="15">Last 15</option>
+          <select id="network-limit-filter" class="filter-select" title="Page Size">
+            <option value="25">25 / page</option>
+            <option value="50" selected>50 / page</option>
+            <option value="100">100 / page</option>
+            <option value="250">250 / page</option>
+            <option value="all">All (No Limit)</option>
           </select>
         </div>
       </div>
@@ -1410,6 +1414,7 @@ export async function renderNetwork(container) {
             </tbody>
           </table>
         </div>
+        <div id="network-pagination-container"></div>
         <div id="network-table-hover-url" class="network-table-hover-url" style="display:none">
           <span style="font-size:11px;color:#818cf8;font-weight:bold;white-space:nowrap">🔗 Full URI:</span>
           <span id="network-table-hover-url-text" class="mono network-table-hover-url-text"></span>
@@ -1748,9 +1753,15 @@ export async function renderNetwork(container) {
 
   // Load initial batch of requests progressively
   try {
-    const { requests: buffered } = await api.networkRequests({ limit: 50 });
+    const { requests: buffered, total, serverTotal } = await api.networkRequests({ limit: 100 });
+    if (serverTotal !== undefined) serverTotalRequests = serverTotal;
+    else if (total !== undefined) serverTotalRequests = total;
     if (buffered && buffered.length) {
       requests = buffered.reverse(); // oldest first
+      for (const req of requests) {
+        if (req.responseBody) registerClientParentPrompts(req.responseBody);
+      }
+      renderChips();
       renderTable();
     }
   } catch (e) {
@@ -1818,6 +1829,9 @@ function bindToolbarEvents(status) {
   // Limit filter
   document.getElementById('network-limit-filter')?.addEventListener('change', (e) => {
     activeFilters.limit = e.target.value;
+    const footerSelect = document.getElementById('network-footer-page-size');
+    if (footerSelect) footerSelect.value = e.target.value;
+    currentPage = 1;
     renderTable();
   });
 
@@ -2538,7 +2552,8 @@ function bindTableEvents() {
 // ── Add a request ──
 function addRequest(record) {
   requests.push(record);
-  if (requests.length > 500) {
+  serverTotalRequests = Math.max(serverTotalRequests + 1, requests.length);
+  if (requests.length > 2000) {
     requests.shift();
   }
   renderTable();
@@ -2602,6 +2617,136 @@ function highlightSelectedRow(id) {
   }
 }
 
+// ── Render Pagination UI ──
+function renderPaginationUI(totalFiltered, effectivePageSize, totalPages, startIndex, endIndex) {
+  const container = document.getElementById('network-pagination-container');
+  if (!container) return;
+
+  if (totalFiltered === 0) {
+    container.innerHTML = '';
+    return;
+  }
+
+  const hasOlderOnServer = serverTotalRequests > requests.length;
+  const remainingOnServer = Math.max(0, serverTotalRequests - requests.length);
+
+  let olderBtnHtml = '';
+  if (hasOlderOnServer) {
+    olderBtnHtml = `
+      <button class="network-load-older-btn" id="load-older-requests-btn" ${isLoadingOlder ? 'disabled' : ''} title="Fetch older requests from proxy buffer">
+        ${isLoadingOlder ? '⏳ Loading...' : `📥 Load Older (${remainingOnServer} on server)`}
+      </button>
+      <button class="network-load-older-btn" id="load-all-requests-btn" ${isLoadingOlder ? 'disabled' : ''} title="Load all historical requests stored in proxy buffer">
+        ⚡ Load All (${serverTotalRequests})
+      </button>
+    `;
+  } else if (requests.length > 0) {
+    olderBtnHtml = `<span style="font-size:10.5px;color:var(--text-3);display:inline-flex;align-items:center;gap:3px">✓ All history loaded (${requests.length})</span>`;
+  }
+
+  const isAll = activeFilters.limit === 'all';
+
+  container.innerHTML = `
+    <div class="network-pagination-bar">
+      <div class="network-pagination-left">
+        <span>Showing <strong>${startIndex + 1}–${endIndex}</strong> of <strong>${totalFiltered}</strong></span>
+        ${olderBtnHtml}
+      </div>
+
+      ${!isAll && totalPages > 1 ? `
+        <div class="network-pagination-center">
+          <button class="network-page-btn" id="pg-first-btn" ${currentPage === 1 ? 'disabled' : ''} title="First page">⏮</button>
+          <button class="network-page-btn" id="pg-prev-btn" ${currentPage === 1 ? 'disabled' : ''} title="Previous page">◀ Prev</button>
+          <span style="padding:0 6px;font-size:11px;color:var(--text-2)">
+            Page <strong style="color:var(--text)">${currentPage}</strong> of <strong>${totalPages}</strong>
+          </span>
+          <button class="network-page-btn" id="pg-next-btn" ${currentPage === totalPages ? 'disabled' : ''} title="Next page">Next ▶</button>
+          <button class="network-page-btn" id="pg-last-btn" ${currentPage === totalPages ? 'disabled' : ''} title="Last page">⏭</button>
+        </div>
+      ` : ''}
+
+      <div class="network-pagination-right">
+        <label for="network-footer-page-size" style="font-size:11px;color:var(--text-3)">Per page:</label>
+        <select id="network-footer-page-size" class="filter-select" style="padding:2px 6px;font-size:11px;min-height:auto">
+          <option value="25" ${activeFilters.limit === '25' ? 'selected' : ''}>25</option>
+          <option value="50" ${activeFilters.limit === '50' ? 'selected' : ''}>50</option>
+          <option value="100" ${activeFilters.limit === '100' ? 'selected' : ''}>100</option>
+          <option value="250" ${activeFilters.limit === '250' ? 'selected' : ''}>250</option>
+          <option value="all" ${activeFilters.limit === 'all' ? 'selected' : ''}>All</option>
+        </select>
+      </div>
+    </div>
+  `;
+
+  // Bind pagination button events
+  document.getElementById('pg-first-btn')?.addEventListener('click', () => {
+    currentPage = 1;
+    renderTable();
+  });
+  document.getElementById('pg-prev-btn')?.addEventListener('click', () => {
+    if (currentPage > 1) {
+      currentPage--;
+      renderTable();
+    }
+  });
+  document.getElementById('pg-next-btn')?.addEventListener('click', () => {
+    if (currentPage < totalPages) {
+      currentPage++;
+      renderTable();
+    }
+  });
+  document.getElementById('pg-last-btn')?.addEventListener('click', () => {
+    currentPage = totalPages;
+    renderTable();
+  });
+
+  document.getElementById('network-footer-page-size')?.addEventListener('change', (e) => {
+    activeFilters.limit = e.target.value;
+    const topLimitSelect = document.getElementById('network-limit-filter');
+    if (topLimitSelect) topLimitSelect.value = e.target.value;
+    currentPage = 1;
+    renderTable();
+  });
+
+  document.getElementById('load-older-requests-btn')?.addEventListener('click', () => {
+    loadOlderRequests(false);
+  });
+  document.getElementById('load-all-requests-btn')?.addEventListener('click', () => {
+    loadOlderRequests(true);
+  });
+}
+
+// ── Load Older Requests from Server ──
+async function loadOlderRequests(loadAll = false) {
+  if (isLoadingOlder) return;
+  isLoadingOlder = true;
+  renderTable(); // Update button to loading state
+  try {
+    const limitToFetch = loadAll ? 2000 : 100;
+    const { requests: older, total, serverTotal } = await api.networkRequests({
+      limit: limitToFetch,
+      offset: requests.length
+    });
+    if (serverTotal !== undefined) serverTotalRequests = serverTotal;
+    else if (total !== undefined) serverTotalRequests = total;
+
+    if (older && older.length) {
+      const existingIds = new Set(requests.map(r => r.id));
+      const toAdd = older.filter(r => !existingIds.has(r.id)).reverse();
+      requests = [...toAdd, ...requests];
+      for (const req of requests) {
+        if (req.responseBody) registerClientParentPrompts(req.responseBody);
+      }
+      renderChips();
+    }
+  } catch (e) {
+    console.error('Failed to load older requests:', e);
+  } finally {
+    isLoadingOlder = false;
+    renderTable();
+  }
+}
+
 // ── Render full table ──
 function renderTable() {
   const tbody = document.getElementById('network-request-tbody');
@@ -2640,27 +2785,39 @@ function renderTable() {
         <p>${requests.length > 0 ? 'No requests match current filters' : 'Waiting for network traffic…'}</p>
       </div>
     </td></tr>`;
+    renderPaginationUI(0, 50, 1, 0, 0);
     return;
   }
 
   // Newest first
   let sorted = [...filtered].reverse();
 
+  // Pagination calculation
+  const totalFiltered = sorted.length;
+  const isAll = activeFilters.limit === 'all';
+  const effectivePageSize = isAll ? totalFiltered : (parseInt(activeFilters.limit, 10) || 50);
+  const totalPages = Math.max(1, Math.ceil(totalFiltered / (effectivePageSize || 1)));
+
+  if (currentPage > totalPages) currentPage = totalPages;
+  if (currentPage < 1) currentPage = 1;
+
+  const startIndex = isAll ? 0 : (currentPage - 1) * effectivePageSize;
+  const endIndex = isAll ? totalFiltered : Math.min(startIndex + effectivePageSize, totalFiltered);
+  const pageItems = sorted.slice(startIndex, endIndex);
+
   // Set dynamic max-height on the container wrapper based on selected limit if in stacked layout
   const tableWrap = document.querySelector('.network-table-panel .table-wrap');
   if (tableWrap && studioLayout === 'stacked') {
-    if (activeFilters.limit && activeFilters.limit !== 'all') {
-      const lim = parseInt(activeFilters.limit, 10);
-      if (!isNaN(lim)) {
-        const calculatedHeight = 32 + (lim * 45);
-        tableWrap.style.maxHeight = `${calculatedHeight}px`;
-      }
+    if (!isAll) {
+      const lim = Math.min(pageItems.length, 15);
+      const calculatedHeight = 32 + (lim * 45);
+      tableWrap.style.maxHeight = `${calculatedHeight}px`;
     } else {
       tableWrap.style.maxHeight = '380px';
     }
   }
 
-  tbody.innerHTML = sorted.map(r => {
+  tbody.innerHTML = pageItems.map(r => {
     let rowClasses = [];
     if (selectedRequest?.id === r.id) rowClasses.push('selected');
     if (selectedDiffIds.has(r.id)) rowClasses.push('diff-selected');
@@ -2668,6 +2825,7 @@ function renderTable() {
     return `<tr data-req-id="${r.id}" title="${escHtml(r.url)}"${classAttr}>${renderRow(r)}</tr>`;
   }).join('');
   updateDiffFloatingBar();
+  renderPaginationUI(totalFiltered, effectivePageSize, totalPages, startIndex, endIndex);
 }
 
 function renderRow(r) {

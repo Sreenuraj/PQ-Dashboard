@@ -4,7 +4,7 @@
  */
 
 class NetworkStore {
-  constructor(maxSize = 500) {
+  constructor(maxSize = 2000) {
     this.maxSize = maxSize;
     this.requests = [];
     this.idCounter = 0;
@@ -99,7 +99,7 @@ class NetworkStore {
       };
     });
 
-    return { requests: lightweight, total, offset, limit };
+    return { requests: lightweight, total, offset, limit, serverTotal: this.requests.length };
   }
 
   /**
