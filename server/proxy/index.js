@@ -322,6 +322,75 @@ function extractAgentLabel(systemText) {
   return null;
 }
 
+// ── Dynamic Subagent Tracker & Registry ──────────────────────────────────
+// Keeps track of parent tool calls (like use_subagents) and assigns stable
+// dynamic numbers ("Subagent 1", "Subagent 2", etc.) to worker subagents.
+const subagentPromptsRegistry = []; // { index: number, snippet: string, fullPrompt: string }
+const dynamicSubagentMap = new Map(); // promptKey -> index
+let nextDynamicSubagentIndex = 1;
+
+function registerParentSubagentPrompts(responseBody) {
+  if (!responseBody || typeof responseBody !== 'string') return;
+  let fullArgs = '';
+  if (responseBody.includes('data: ')) {
+    const lines = responseBody.split('\n');
+    for (const line of lines) {
+      if (line.startsWith('data: ') && !line.includes('[DONE]')) {
+        try {
+          const data = JSON.parse(line.slice(6));
+          const delta = data.choices?.[0]?.delta;
+          if (delta?.tool_calls) {
+            for (const tc of delta.tool_calls) {
+              if (tc.function?.arguments) fullArgs += tc.function.arguments;
+            }
+          }
+        } catch {}
+      }
+    }
+  }
+  if (!fullArgs) {
+    try {
+      const resJson = JSON.parse(responseBody);
+      const tc = resJson.choices?.[0]?.message?.tool_calls?.find(t => t.function?.name === 'use_subagents' || /subagent/i.test(t.function?.name || ''));
+      if (tc?.function?.arguments) fullArgs = tc.function.arguments;
+    } catch {}
+  }
+  if (fullArgs) {
+    try {
+      const parsed = typeof fullArgs === 'object' ? fullArgs : JSON.parse(fullArgs);
+      for (const [k, v] of Object.entries(parsed)) {
+        if (typeof v === 'string' && v.trim().length > 10) {
+          const numMatch = k.match(/\d+/);
+          const idx = numMatch ? parseInt(numMatch[0], 10) : subagentPromptsRegistry.length + 1;
+          const snippet = v.trim().slice(0, 100);
+          if (!subagentPromptsRegistry.some(p => p.index === idx && p.snippet === snippet)) {
+            subagentPromptsRegistry.push({ index: idx, snippet, fullPrompt: v.trim() });
+          }
+        }
+      }
+    } catch {}
+  }
+}
+
+function resolveSubagentIndex(userPromptText) {
+  if (!userPromptText || typeof userPromptText !== 'string') return null;
+  const cleanPrompt = userPromptText.trim();
+  
+  // 1. Try matching against registered parent tool call prompts
+  for (const p of subagentPromptsRegistry) {
+    if (cleanPrompt.includes(p.snippet) || p.snippet.includes(cleanPrompt.slice(0, 80))) {
+      return p.index;
+    }
+  }
+
+  // 2. Dynamic sequential assignment by unique initial task prompt
+  const taskKey = cleanPrompt.slice(0, 150).replace(/\s+/g, ' ');
+  if (!dynamicSubagentMap.has(taskKey)) {
+    dynamicSubagentMap.set(taskKey, nextDynamicSubagentIndex++);
+  }
+  return dynamicSubagentMap.get(taskKey);
+}
+
 /**
  * Correlates a captured chat/completions request with the nearest task in the
  * DB by timestamp, then persists the system prompt text if not already stored.
@@ -713,8 +782,14 @@ function startProxy(config = {}) {
 
       const responseSize = responseChunks.reduce((sum, c) => sum + c.length, 0);
 
+      // Check for parent tool call spawning subagents (e.g. use_subagents)
+      if (responseBody && (responseBody.includes('use_subagents') || responseBody.includes('subagent'))) {
+        registerParentSubagentPrompts(responseBody);
+      }
+
       // Extract agent label & model from chat/completions request
       let agentLabel = null;
+      let subagentIndex = null;
       let modelFromBody = null;
       if (method === 'POST' && CHAT_API_RE.test(url) && requestBody) {
         const sysText = extractSystemPromptStart(requestBody);
@@ -725,6 +800,17 @@ function startProxy(config = {}) {
           const parsedReq = typeof requestBody === 'object' ? requestBody : JSON.parse(requestBody);
           if (parsedReq.model) {
             modelFromBody = parsedReq.model;
+          }
+          if (agentLabel && /subagent/i.test(agentLabel)) {
+            const uMsg = parsedReq.messages?.find(m => m.role === 'user');
+            let uText = '';
+            if (uMsg) {
+              uText = typeof uMsg.content === 'string' ? uMsg.content : (Array.isArray(uMsg.content) ? uMsg.content.map(c => c.text || '').join(' ') : '');
+            }
+            subagentIndex = resolveSubagentIndex(uText);
+            if (subagentIndex) {
+              agentLabel = `Subagent ${subagentIndex}`;
+            }
           }
         } catch (e) {}
       }
@@ -747,6 +833,7 @@ function startProxy(config = {}) {
         error: null,
         tag: tagForHost(host),
         agentLabel,
+        subagentIndex,
         model: modelFromBody,
       };
 

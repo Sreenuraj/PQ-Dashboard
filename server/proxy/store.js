@@ -40,7 +40,14 @@ class NetworkStore {
 
     if (filters.agent && filters.agent !== 'all') {
       const q = filters.agent.toLowerCase();
-      results = results.filter(r => (r.agentLabel || '').toLowerCase().includes(q));
+      if (q === 'subagent' || q === 'subagents') {
+        results = results.filter(r => (r.agentLabel || '').toLowerCase().includes('subagent'));
+      } else if (q.startsWith('subagent-')) {
+        const num = q.split('-')[1];
+        results = results.filter(r => (r.agentLabel || '').toLowerCase() === `subagent ${num}` || r.subagentIndex === parseInt(num, 10));
+      } else {
+        results = results.filter(r => (r.agentLabel || '').toLowerCase().includes(q));
+      }
     }
 
     if (filters.method) {
@@ -100,6 +107,18 @@ class NetworkStore {
    */
   getById(id) {
     return this.requests.find(r => r.id === parseInt(id)) || null;
+  }
+
+  /**
+   * Update properties on a stored request record by ID.
+   */
+  update(id, partial) {
+    const r = this.requests.find(req => req.id === parseInt(id));
+    if (r) {
+      Object.assign(r, partial);
+      return r;
+    }
+    return null;
   }
 
   /**

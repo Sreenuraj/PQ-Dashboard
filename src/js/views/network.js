@@ -332,9 +332,83 @@ function extractAgentLabel(systemText) {
   return null;
 }
 
+// ── Client-Side Dynamic Subagent Registry ────────────────────────────────
+const clientSubagentRegistry = []; // { index: number, snippet: string }
+const clientDynamicSubagentMap = new Map();
+let clientNextSubagentIndex = 1;
+
+function registerClientParentPrompts(responseBody) {
+  if (!responseBody || typeof responseBody !== 'string' || !responseBody.includes('subagent')) return;
+  let fullArgs = '';
+  if (responseBody.includes('data: ')) {
+    const lines = responseBody.split('\n');
+    for (const line of lines) {
+      if (line.startsWith('data: ') && !line.includes('[DONE]')) {
+        try {
+          const data = JSON.parse(line.slice(6));
+          const delta = data.choices?.[0]?.delta;
+          if (delta?.tool_calls) {
+            for (const tc of delta.tool_calls) {
+              if (tc.function?.arguments) fullArgs += tc.function.arguments;
+            }
+          }
+        } catch {}
+      }
+    }
+  }
+  if (!fullArgs) {
+    try {
+      const resJson = JSON.parse(responseBody);
+      const tc = resJson.choices?.[0]?.message?.tool_calls?.find(t => /subagent/i.test(t.function?.name || ''));
+      if (tc?.function?.arguments) fullArgs = tc.function.arguments;
+    } catch {}
+  }
+  if (fullArgs) {
+    try {
+      const parsed = typeof fullArgs === 'object' ? fullArgs : JSON.parse(fullArgs);
+      for (const [k, v] of Object.entries(parsed)) {
+        if (typeof v === 'string' && v.trim().length > 10) {
+          const numMatch = k.match(/\d+/);
+          const idx = numMatch ? parseInt(numMatch[0], 10) : clientSubagentRegistry.length + 1;
+          const snippet = v.trim().slice(0, 100);
+          if (!clientSubagentRegistry.some(p => p.index === idx && p.snippet === snippet)) {
+            clientSubagentRegistry.push({ index: idx, snippet });
+          }
+        }
+      }
+    } catch {}
+  }
+}
+
+function resolveClientSubagentIndex(userPromptText) {
+  if (!userPromptText || typeof userPromptText !== 'string') return null;
+  const cleanPrompt = userPromptText.trim();
+  for (const p of clientSubagentRegistry) {
+    if (cleanPrompt.includes(p.snippet) || p.snippet.includes(cleanPrompt.slice(0, 80))) {
+      return p.index;
+    }
+  }
+  const taskKey = cleanPrompt.slice(0, 150).replace(/\s+/g, ' ');
+  if (!clientDynamicSubagentMap.has(taskKey)) {
+    clientDynamicSubagentMap.set(taskKey, clientNextSubagentIndex++);
+  }
+  return clientDynamicSubagentMap.get(taskKey);
+}
+
 function getAgentLabel(r) {
   if (!r) return null;
   if (r._cachedAgentLabel !== undefined) return r._cachedAgentLabel;
+
+  // 1. If server or record already assigned 'Subagent 1', 'Subagent 2', etc.
+  if (r.agentLabel && /^Subagent \d+$/i.test(r.agentLabel)) {
+    r._cachedAgentLabel = r.agentLabel;
+    return r.agentLabel;
+  }
+  if (r.subagentIndex) {
+    const label = `Subagent ${r.subagentIndex}`;
+    r._cachedAgentLabel = label;
+    return label;
+  }
 
   let label = null;
   if (r.requestBody) {
@@ -346,6 +420,23 @@ function getAgentLabel(r) {
   if (!label && r.agentLabel) {
     label = r.agentLabel;
   }
+
+  // 2. If identified as subagent, resolve to dynamic Subagent 1, Subagent 2, etc.
+  if (label && /subagent/i.test(label)) {
+    let uText = '';
+    try {
+      const parsed = typeof r.requestBody === 'object' ? r.requestBody : JSON.parse(r.requestBody);
+      const uMsg = parsed.messages?.find(m => m.role === 'user');
+      if (uMsg) {
+        uText = typeof uMsg.content === 'string' ? uMsg.content : (Array.isArray(uMsg.content) ? uMsg.content.map(c => c.text || '').join(' ') : '');
+      }
+    } catch {}
+    const subIdx = resolveClientSubagentIndex(uText);
+    if (subIdx) {
+      label = `Subagent ${subIdx}`;
+    }
+  }
+
   r._cachedAgentLabel = label;
   return label;
 }
@@ -1854,10 +1945,26 @@ function renderChips() {
   const container = document.getElementById('network-domain-chips');
   if (!container) return;
 
+  // Collect any detected subagent indices dynamically from requests
+  const detectedSubagentIndices = new Set();
+  for (const req of requests) {
+    const label = getAgentLabel(req);
+    const m = label?.match(/^Subagent (\d+)$/i);
+    if (m) detectedSubagentIndices.add(parseInt(m[1], 10));
+  }
+  const sortedSubagentIndices = Array.from(detectedSubagentIndices).sort((a, b) => a - b);
+
+  const subagentChips = sortedSubagentIndices.length > 0
+    ? [
+        { tag: 'subagent', label: '⚡ All Subagents' },
+        ...sortedSubagentIndices.map(idx => ({ tag: `subagent-${idx}`, label: `⚡ Subagent ${idx}` }))
+      ]
+    : [{ tag: 'subagent', label: '⚡ Subagents' }];
+
   const defaultChips = [
     { tag: 'all', label: 'All' },
     { tag: 'main-agent', label: '🎯 Main Agent' },
-    { tag: 'subagent', label: '⚡ Subagents' },
+    ...subagentChips,
     { tag: 'postqode', label: 'PostQode' },
     { tag: 'openai', label: 'OpenAI' },
     { tag: 'anthropic', label: 'Anthropic' },
@@ -2393,6 +2500,10 @@ function passesFilters(r) {
     if (activeFilters.host === 'subagent') {
       const agent = getAgentLabel(r);
       if (!agent || !/subagent/i.test(agent)) return false;
+    } else if (activeFilters.host.startsWith('subagent-')) {
+      const num = activeFilters.host.split('-')[1];
+      const agent = getAgentLabel(r);
+      if (!agent || agent.toLowerCase() !== `subagent ${num}`) return false;
     } else if (activeFilters.host === 'main-agent') {
       const agent = getAgentLabel(r);
       if (!agent || /subagent/i.test(agent)) return false;
