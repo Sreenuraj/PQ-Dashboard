@@ -2093,6 +2093,7 @@ function bindTableEvents() {
       // 3. Collapsible Card Headers
       const collapseHeader = e.target.closest('.network-collapsible-header');
       if (collapseHeader) {
+        if (e.target.closest('.network-copy-btn')) return;
         e.stopPropagation();
         const targetBodyId = collapseHeader.dataset.target;
         const hideTargetId = collapseHeader.dataset.hideTarget;
@@ -2101,7 +2102,8 @@ function bindTableEvents() {
           const arrowEl = collapseHeader.querySelector('.network-collapse-arrow');
           if (targetBody) {
             const isHidden = targetBody.style.display === 'none' || getComputedStyle(targetBody).display === 'none';
-            targetBody.style.display = isHidden ? 'flex' : 'none';
+            const displayType = targetBody.dataset.displayType || 'block';
+            targetBody.style.display = isHidden ? displayType : 'none';
             if (arrowEl) arrowEl.textContent = isHidden ? '▼' : '▶';
           }
         }
@@ -2153,6 +2155,42 @@ function bindTableEvents() {
         e.stopPropagation();
         const container = collapseAllBtn.closest('.network-detail-section');
         container?.querySelectorAll('details.network-human-card').forEach(d => d.open = false);
+        return;
+      }
+
+      // 7. Expand/Collapse All Messages
+      const expandMsgsBtn = e.target.closest('.network-msgs-expand-all');
+      if (expandMsgsBtn) {
+        e.stopPropagation();
+        const container = expandMsgsBtn.closest('.network-chat-thread');
+        container?.querySelectorAll('.network-msg-body').forEach(b => b.style.display = 'block');
+        container?.querySelectorAll('.network-collapse-arrow').forEach(a => a.textContent = '▼');
+        return;
+      }
+      const collapseMsgsBtn = e.target.closest('.network-msgs-collapse-all');
+      if (collapseMsgsBtn) {
+        e.stopPropagation();
+        const container = collapseMsgsBtn.closest('.network-chat-thread');
+        container?.querySelectorAll('.network-msg-body').forEach(b => b.style.display = 'none');
+        container?.querySelectorAll('.network-collapse-arrow').forEach(a => a.textContent = '▶');
+        return;
+      }
+
+      // 8. Expand/Collapse All Tool Calls
+      const expandToolsBtn = e.target.closest('.network-tools-expand-all');
+      if (expandToolsBtn) {
+        e.stopPropagation();
+        const container = expandToolsBtn.closest('.network-detail-section');
+        container?.querySelectorAll('[id^="net-tc-args-"]').forEach(b => b.style.display = 'block');
+        container?.querySelectorAll('.network-collapse-arrow').forEach(a => a.textContent = '▼');
+        return;
+      }
+      const collapseToolsBtn = e.target.closest('.network-tools-collapse-all');
+      if (collapseToolsBtn) {
+        e.stopPropagation();
+        const container = collapseToolsBtn.closest('.network-detail-section');
+        container?.querySelectorAll('[id^="net-tc-args-"]').forEach(b => b.style.display = 'none');
+        container?.querySelectorAll('.network-collapse-arrow').forEach(a => a.textContent = '▶');
         return;
       }
     });
@@ -2977,6 +3015,30 @@ function applyActivePayloadSearch(tabType, options = { keepIndex: false, jumpToM
     if (cardDetails) {
       cardDetails.open = true;
     }
+
+    // 7. Conversation message body
+    const msgBody = mark.closest('[id^="net-msg-body-"]');
+    if (msgBody && (msgBody.style.display === 'none' || getComputedStyle(msgBody).display === 'none')) {
+      msgBody.style.display = 'block';
+      const msgHeader = msgBody.parentElement?.querySelector('.network-msg-header .network-collapse-arrow');
+      if (msgHeader) msgHeader.textContent = '▼';
+    }
+
+    // 8. Assistant generated output body
+    const resAssistantBody = mark.closest('#net-res-assistant-body');
+    if (resAssistantBody && (resAssistantBody.style.display === 'none' || getComputedStyle(resAssistantBody).display === 'none')) {
+      resAssistantBody.style.display = 'block';
+      const arrow = document.querySelector('[data-target="net-res-assistant-body"] .network-collapse-arrow');
+      if (arrow) arrow.textContent = '▼';
+    }
+
+    // 9. Tool call arguments body
+    const tcArgsBody = mark.closest('[id^="net-tc-args-"]');
+    if (tcArgsBody && (tcArgsBody.style.display === 'none' || getComputedStyle(tcArgsBody).display === 'none')) {
+      tcArgsBody.style.display = 'block';
+      const arrow = tcArgsBody.parentElement?.querySelector('.network-collapsible-header .network-collapse-arrow');
+      if (arrow) arrow.textContent = '▼';
+    }
   });
 
   if (matches.length > 0) {
@@ -3367,8 +3429,9 @@ function renderHumanReadableRequest(parsed, record) {
 
     return `
       <div class="network-chat-msg ${roleClass}">
-        <div class="network-msg-header">
+        <div class="network-msg-header network-collapsible-header" data-target="net-msg-body-${idx}" style="cursor:pointer;user-select:none">
           <div style="display:flex;align-items:center;gap:6px">
+            <span class="network-collapse-arrow" style="font-size:10px">▶</span>
             <span>${roleIcon}</span>
             <strong style="font-size:11px">${roleTitle}</strong>
             <span class="mono" style="font-size:10px;color:var(--text-3)">#${idx + 1}</span>
@@ -3378,7 +3441,7 @@ function renderHumanReadableRequest(parsed, record) {
             📋 Copy
           </button>
         </div>
-        <div id="net-msg-body-${idx}" class="network-msg-body">
+        <div id="net-msg-body-${idx}" class="network-msg-body" style="display:none">
           <div id="net-msg-full-${idx}" style="${isVeryLong ? 'display:none;' : ''}">
             ${m.text ? `<div>${escHtml(m.text)}</div>` : ''}
           </div>
@@ -3459,9 +3522,9 @@ function renderHumanReadableRequest(parsed, record) {
       <!-- System Prompt Card (if present) -->
       ${hasSys ? `
         <div class="network-system-card">
-          <div class="network-system-header network-collapsible-header" data-target="net-system-prompt-body">
+          <div class="network-system-header network-collapsible-header" data-target="net-system-prompt-body" style="cursor:pointer;user-select:none">
             <div style="display:flex;align-items:center;gap:8px">
-              <span class="network-collapse-arrow" style="font-size:10px;color:#38bdf8">▼</span>
+              <span class="network-collapse-arrow" style="font-size:10px;color:#38bdf8">▶</span>
               <span style="font-weight:bold;color:#38bdf8;font-size:11.5px">🛡️ System Prompt Instructions</span>
               <span class="mono" style="font-size:10px;color:var(--text-3)">(${sysChars.toLocaleString()} chars · ~${sysTokEst.toLocaleString()} tok)</span>
             </div>
@@ -3469,7 +3532,7 @@ function renderHumanReadableRequest(parsed, record) {
               📋 Copy Prompt
             </button>
           </div>
-          <div id="net-system-prompt-body" class="network-system-body">
+          <div id="net-system-prompt-body" class="network-system-body" style="display:none">
             <div id="net-system-prompt-text">${escHtml(parsed.systemPrompt)}</div>
           </div>
         </div>
@@ -3478,7 +3541,7 @@ function renderHumanReadableRequest(parsed, record) {
       <!-- Available Tools Card (if present) -->
       ${toolCount > 0 ? `
         <div class="network-tools-card">
-          <div class="network-tools-header network-collapsible-header" data-target="net-tools-palette-body">
+          <div class="network-tools-header network-collapsible-header" data-target="net-tools-palette-body" style="cursor:pointer;user-select:none">
             <div style="display:flex;align-items:center;gap:8px">
               <span class="network-collapse-arrow" style="font-size:10px;color:#f59e0b">▶</span>
               <span style="font-weight:bold;color:#f59e0b;font-size:11.5px">🔧 Tools & Function Declarations (${toolCount})</span>
@@ -3501,8 +3564,14 @@ function renderHumanReadableRequest(parsed, record) {
 
       <!-- Conversation Messages Flow -->
       <div class="network-chat-thread">
-        <div style="font-size:10.5px;font-weight:bold;color:var(--text-3);text-transform:uppercase;letter-spacing:0.06em;margin:4px 0">
-          💬 Conversation History (${msgCount} turns)
+        <div style="display:flex;align-items:center;justify-content:space-between;margin:4px 0;gap:8px;flex-wrap:wrap">
+          <div style="font-size:10.5px;font-weight:bold;color:var(--text-3);text-transform:uppercase;letter-spacing:0.06em">
+            💬 Conversation History (${msgCount} turns)
+          </div>
+          <div style="display:flex;align-items:center;gap:6px">
+            <button class="action-btn secondary network-msgs-expand-all" style="padding:2px 8px;font-size:10.5px" title="Expand all messages">▾ Expand All</button>
+            <button class="action-btn secondary network-msgs-collapse-all" style="padding:2px 8px;font-size:10.5px" title="Collapse all messages">▸ Collapse All</button>
+          </div>
         </div>
         ${messagesHtml}
       </div>
@@ -3640,19 +3709,28 @@ function renderHumanReadableResponse(parsed, record) {
       <!-- Reasoning / Extended Thinking Box (if present) -->
       ${hasReasoning ? `
         <div class="network-thinking-box">
-          <div style="font-weight:bold;color:#f59e0b;font-size:11px;margin-bottom:4px;display:flex;align-items:center;gap:5px">
-            <span>🧠 Model Thinking / Extended Reasoning</span>
-            <span class="mono" style="font-size:9.5px;color:var(--text-3)">(${parsed.reasoning.length.toLocaleString()} chars)</span>
+          <div class="network-collapsible-header" data-target="net-thinking-body" style="font-weight:bold;color:#f59e0b;font-size:11px;cursor:pointer;user-select:none;display:flex;align-items:center;justify-content:space-between">
+            <div style="display:flex;align-items:center;gap:6px">
+              <span class="network-collapse-arrow" style="font-size:10px;color:#f59e0b">▶</span>
+              <span>🧠 Model Thinking / Extended Reasoning</span>
+              <span class="mono" style="font-size:9.5px;color:var(--text-3)">(${parsed.reasoning.length.toLocaleString()} chars)</span>
+            </div>
+            <button class="action-btn secondary network-copy-btn" data-target="net-thinking-text" style="padding:1px 6px;font-size:9.5px;color:#f59e0b">
+              📋 Copy Thinking
+            </button>
           </div>
-          <div style="white-space:pre-wrap;max-height:220px;overflow-y:auto;line-height:1.45">${escHtml(parsed.reasoning)}</div>
+          <div id="net-thinking-body" style="display:none;margin-top:8px">
+            <div id="net-thinking-text" style="white-space:pre-wrap;max-height:260px;overflow-y:auto;line-height:1.45">${escHtml(parsed.reasoning)}</div>
+          </div>
         </div>
       ` : ''}
 
       <!-- Assistant Generated Output Text -->
       ${hasText ? `
         <div class="network-chat-msg msg-assistant">
-          <div class="network-msg-header">
+          <div class="network-msg-header network-collapsible-header" data-target="net-res-assistant-body" style="cursor:pointer;user-select:none">
             <div style="display:flex;align-items:center;gap:6px">
+              <span class="network-collapse-arrow" style="font-size:10px">▶</span>
               <span>🤖</span>
               <strong style="font-size:11px">Assistant Generated Output</strong>
               <span class="mono" style="font-size:10px;color:var(--text-3)">(${parsed.text.length.toLocaleString()} chars)</span>
@@ -3661,8 +3739,8 @@ function renderHumanReadableResponse(parsed, record) {
               📋 Copy Text
             </button>
           </div>
-          <div id="net-res-assistant-text" class="network-msg-body" style="max-height:420px">
-            ${escHtml(parsed.text)}
+          <div id="net-res-assistant-body" class="network-msg-body" style="display:none;max-height:420px">
+            <div id="net-res-assistant-text">${escHtml(parsed.text)}</div>
           </div>
         </div>
       ` : ''}
@@ -3670,22 +3748,31 @@ function renderHumanReadableResponse(parsed, record) {
       <!-- Tool Invocations by Assistant (if any) -->
       ${hasTools ? `
         <div class="network-detail-section">
-          <div style="font-weight:bold;color:#f59e0b;font-size:11.5px;margin-bottom:8px;display:flex;align-items:center;gap:6px">
-            <span>⚡ Tool Calls Requested by Model (${parsed.toolCalls.length})</span>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;flex-wrap:wrap">
+            <div style="font-weight:bold;color:#f59e0b;font-size:11.5px;display:flex;align-items:center;gap:6px">
+              <span>⚡ Tool Calls Requested by Model (${parsed.toolCalls.length})</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <button class="action-btn secondary network-tools-expand-all" style="padding:2px 8px;font-size:10.5px" title="Expand all tool calls">▾ Expand All</button>
+              <button class="action-btn secondary network-tools-collapse-all" style="padding:2px 8px;font-size:10.5px" title="Collapse all tool calls">▸ Collapse All</button>
+            </div>
           </div>
-          <div style="display:flex;flex-direction:column;gap:8px">
+          <div class="network-tools-list" style="display:flex;flex-direction:column;gap:8px">
             ${parsed.toolCalls.map((tc, idx) => `
               <div style="background:var(--bg-2);border:1px solid rgba(245,158,11,0.35);border-radius:var(--radius-sm);overflow:hidden">
-                <div style="background:rgba(245,158,11,0.1);padding:6px 12px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(245,158,11,0.2)">
-                  <span class="mono" style="font-weight:bold;color:#f59e0b;font-size:11px">
-                    🔧 #${idx + 1} <code>${escHtml(tc.name)}</code>
-                  </span>
-                  <button class="action-btn secondary network-copy-btn" data-target="net-tc-args-${idx}" style="padding:1px 6px;font-size:9.5px">
+                <div class="network-collapsible-header" data-target="net-tc-args-${idx}" style="background:rgba(245,158,11,0.1);padding:7px 12px;display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none">
+                  <div style="display:flex;align-items:center;gap:6px">
+                    <span class="network-collapse-arrow" style="font-size:10px;color:#f59e0b">▶</span>
+                    <span class="mono" style="font-weight:bold;color:#f59e0b;font-size:11px">
+                      🔧 #${idx + 1} <code>${escHtml(tc.name)}</code>
+                    </span>
+                  </div>
+                  <button class="action-btn secondary network-copy-btn" data-target="net-tc-pre-${idx}" style="padding:1px 6px;font-size:9.5px">
                     📋 Copy Args
                   </button>
                 </div>
-                <div id="net-tc-args-${idx}" style="padding:8px 12px">
-                  <pre class="network-body-pre" style="max-height:180px;padding:8px;font-size:10.5px;background:var(--bg-3)">${syntaxHighlight(typeof tc.args === 'object' ? JSON.stringify(tc.args, null, 2) : tc.rawArgs)}</pre>
+                <div id="net-tc-args-${idx}" style="display:none;padding:8px 12px;border-top:1px solid rgba(245,158,11,0.2)">
+                  <pre id="net-tc-pre-${idx}" class="network-body-pre" style="max-height:180px;padding:8px;font-size:10.5px;background:var(--bg-3)">${syntaxHighlight(typeof tc.args === 'object' ? JSON.stringify(tc.args, null, 2) : tc.rawArgs)}</pre>
                 </div>
               </div>
             `).join('')}
