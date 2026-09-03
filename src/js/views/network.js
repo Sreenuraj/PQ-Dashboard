@@ -783,6 +783,35 @@ function renderDiffContent(baseReq, compareReq, tab = 'request') {
   rightPane.innerHTML = rightHtml;
   leftPane.scrollTop = 0;
   rightPane.scrollTop = 0;
+  attachSyncScroll();
+}
+
+function attachSyncScroll() {
+  const leftPane = document.getElementById('diff-pane-left');
+  const rightPane = document.getElementById('diff-pane-right');
+  if (!leftPane || !rightPane || leftPane._hasSyncScroll) return;
+
+  leftPane._hasSyncScroll = true;
+  rightPane._hasSyncScroll = true;
+
+  let isSyncingLeft = false;
+  let isSyncingRight = false;
+
+  leftPane.addEventListener('scroll', () => {
+    if (isSyncingLeft) return;
+    isSyncingRight = true;
+    rightPane.scrollTop = leftPane.scrollTop;
+    rightPane.scrollLeft = leftPane.scrollLeft;
+    requestAnimationFrame(() => { isSyncingRight = false; });
+  }, { passive: true });
+
+  rightPane.addEventListener('scroll', () => {
+    if (isSyncingRight) return;
+    isSyncingLeft = true;
+    leftPane.scrollTop = rightPane.scrollTop;
+    leftPane.scrollLeft = rightPane.scrollLeft;
+    requestAnimationFrame(() => { isSyncingLeft = false; });
+  }, { passive: true });
 }
 
 function bindMockAndDiffEvents() {
@@ -1001,7 +1030,6 @@ function renderDetailDeck(r) {
         <div class="network-deck-actions">
           <button class="action-btn secondary" id="deck-replay-btn" data-req-id="${r.id}" style="padding:3px 8px; font-size:11px" title="Replay request">🔄 Replay</button>
           <button class="action-btn secondary" id="deck-curl-btn" data-req-id="${r.id}" style="padding:3px 8px; font-size:11px" title="Copy cURL">💻 cURL</button>
-          <button class="action-btn secondary" id="deck-diff-btn" data-req-id="${r.id}" style="padding:3px 8px; font-size:11px" title="Select for compare">⚔️ Diff</button>
           <button id="network-detail-close" class="network-control-btn" title="Close" style="font-size:12px; margin-left:4px">✕</button>
         </div>
       </div>
@@ -2021,20 +2049,6 @@ function bindTableEvents() {
       setTimeout(() => { curlBtn.innerHTML = origText; }, 1500);
       return;
     }
-    const diffBtn = e.target.closest('#deck-diff-btn');
-    if (diffBtn && selectedRequest) {
-      let otherReq = null;
-      if (selectedDiffIds.size > 0) {
-        const otherId = Array.from(selectedDiffIds).find(id => id !== selectedRequest.id);
-        if (otherId) otherReq = requests.find(r => r.id === otherId);
-      }
-      if (!otherReq) {
-        const curIdx = requests.findIndex(r => r.id === selectedRequest.id);
-        otherReq = (curIdx > 0 ? requests[curIdx - 1] : requests[curIdx + 1]) || selectedRequest;
-      }
-      openCompareModal(selectedRequest, otherReq);
-      return;
-    }
   });
 
   // Delegated events for View Mode Switcher and Copy Buttons inside detail body
@@ -2123,6 +2137,22 @@ function bindTableEvents() {
           applyActivePayloadSearch(tabType);
           searchClearBtn.remove();
         }
+        return;
+      }
+
+      // 6. Expand/Collapse All Structured Cards
+      const expandAllBtn = e.target.closest('.network-cards-expand-all');
+      if (expandAllBtn) {
+        e.stopPropagation();
+        const container = expandAllBtn.closest('.network-detail-section');
+        container?.querySelectorAll('details.network-human-card').forEach(d => d.open = true);
+        return;
+      }
+      const collapseAllBtn = e.target.closest('.network-cards-collapse-all');
+      if (collapseAllBtn) {
+        e.stopPropagation();
+        const container = collapseAllBtn.closest('.network-detail-section');
+        container?.querySelectorAll('details.network-human-card').forEach(d => d.open = false);
         return;
       }
     });
@@ -2941,6 +2971,12 @@ function applyActivePayloadSearch(tabType, options = { keepIndex: false, jumpToM
       const arrow = document.querySelector('[data-target="net-thinking-body"] .network-collapse-arrow');
       if (arrow) arrow.textContent = '▼';
     }
+
+    // 6. Structured human-readable cards
+    const cardDetails = mark.closest('details.network-human-card');
+    if (cardDetails) {
+      cardDetails.open = true;
+    }
   });
 
   if (matches.length > 0) {
@@ -3124,12 +3160,16 @@ function renderHumanReadableStructuredData(data, paneId = 'net-res-content-pane'
     return `
       <div id="${paneId}" class="network-human-container">
         <div class="network-detail-section">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:8px;flex-wrap:wrap">
             <div style="font-size:12px;font-weight:bold;color:var(--text);display:flex;align-items:center;gap:6px">
               <span>📦</span> ${escHtml(title)} <span class="badge purple" style="font-size:10px;font-weight:600">${data.length} items</span>
             </div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <button class="action-btn secondary network-cards-expand-all" style="padding:2px 8px;font-size:10.5px" title="Expand all cards">▾ Expand All</button>
+              <button class="action-btn secondary network-cards-collapse-all" style="padding:2px 8px;font-size:10.5px" title="Collapse all cards">▸ Collapse All</button>
+            </div>
           </div>
-          <div style="display:flex;flex-direction:column;gap:10px">
+          <div class="network-human-cards-list" style="display:flex;flex-direction:column;gap:8px">
             ${data.map((item, idx) => renderObjectCard(item, idx)).join('')}
           </div>
         </div>
@@ -3168,28 +3208,31 @@ function renderObjectCard(item, idx) {
   const otherKeys = Object.keys(item).filter(k => !skipKeys.has(k));
 
   return `
-    <div class="network-human-card">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
-        <div style="display:flex;align-items:center;gap:8px">
+    <details class="network-human-card">
+      <summary class="network-human-card-summary">
+        <div style="display:flex;align-items:center;gap:6px;min-width:0;flex:1;overflow:hidden">
+          <span class="network-card-chevron">▸</span>
           <span class="network-human-card-title">${escHtml(title)}</span>
           ${author ? `<span class="badge grey" style="font-size:9.5px">by ${escHtml(author)}</span>` : ''}
           ${category ? `<span class="badge purple" style="font-size:9.5px">${escHtml(category)}</span>` : ''}
         </div>
-        ${item.id && item.id !== title ? `<span class="mono" style="font-size:10px;color:var(--text-3)">${escHtml(item.id)}</span>` : ''}
+        ${item.id && item.id !== title ? `<span class="mono" style="font-size:10px;color:var(--text-3);margin-left:auto">${escHtml(item.id)}</span>` : ''}
+      </summary>
+      <div class="network-human-card-expanded-content">
+        ${desc ? `<div class="network-human-card-desc">${escHtml(desc)}</div>` : ''}
+        ${tags.length ? `
+          <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">
+            ${tags.map(t => `<span class="network-human-tag">#${escHtml(t)}</span>`).join('')}
+          </div>
+        ` : ''}
+        ${otherKeys.length ? `
+          <div style="margin-top:4px">
+            <div style="font-size:10px;font-weight:bold;color:var(--text-3);text-transform:uppercase;margin-bottom:6px">Properties</div>
+            ${renderKvGrid(item, otherKeys)}
+          </div>
+        ` : ''}
       </div>
-      ${desc ? `<div class="network-human-card-desc">${escHtml(desc)}</div>` : ''}
-      ${tags.length ? `
-        <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">
-          ${tags.map(t => `<span class="network-human-tag">#${escHtml(t)}</span>`).join('')}
-        </div>
-      ` : ''}
-      ${otherKeys.length ? `
-        <details style="font-size:11px;color:var(--text-3);margin-top:4px">
-          <summary style="cursor:pointer;font-size:10.5px;color:var(--accent-2);user-select:none">Show ${otherKeys.length} properties…</summary>
-          <div style="margin-top:8px">${renderKvGrid(item, otherKeys)}</div>
-        </details>
-      ` : ''}
-    </div>
+    </details>
   `;
 }
 

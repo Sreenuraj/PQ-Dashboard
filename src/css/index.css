@@ -2213,9 +2213,62 @@ html[data-theme="light"] .oneshot-bar-bg {
   transition: all var(--transition);
 }
 
-.network-human-card:hover {
+details.network-human-card {
+  padding: 0;
+  overflow: hidden;
+  display: block;
+}
+
+details.network-human-card:hover {
   border-color: rgba(99, 102, 241, 0.4);
-  background: rgba(30, 41, 59, 0.6);
+}
+
+details.network-human-card summary.network-human-card-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 9px 12px;
+  cursor: pointer;
+  user-select: none;
+  background: var(--bg-3);
+  list-style: none;
+  transition: background var(--transition);
+}
+
+details.network-human-card summary.network-human-card-summary::-webkit-details-marker {
+  display: none;
+}
+
+details.network-human-card summary.network-human-card-summary:hover {
+  background: var(--bg-4);
+}
+
+details.network-human-card[open] summary.network-human-card-summary {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-4);
+}
+
+.network-card-chevron {
+  display: inline-block;
+  font-size: 10px;
+  color: var(--text-3);
+  transition: transform 0.15s ease;
+  margin-right: 2px;
+}
+
+details.network-human-card[open] .network-card-chevron {
+  transform: rotate(90deg);
+  color: var(--accent-2);
+}
+
+.network-human-card-expanded-content {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--bg-2);
 }
 
 .network-human-card-title {
