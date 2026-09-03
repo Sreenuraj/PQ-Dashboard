@@ -2810,7 +2810,142 @@ function renderHeadersTab(r) {
             `).join('') || '<div class="network-kv-row" style="color:var(--text-3)">No response headers</div>'}
           </div>
         </div>
+    </div>
+  `;
+}
+
+function getContextualDataTitle(url, defaultTitle = 'Structured Data') {
+  if (!url) return defaultTitle;
+  const lower = url.toLowerCase();
+  if (lower.includes('marketplace')) return 'Marketplace MCP Extensions';
+  if (lower.includes('models')) return 'Available Models';
+  if (lower.includes('teams')) return 'Teams & Organizations';
+  if (lower.includes('users') || lower.includes('profile')) return 'User Profile';
+  if (lower.includes('governance')) return 'Governance & Policies';
+  if (lower.includes('extensionquery')) return 'VS Code Extensions';
+  return defaultTitle;
+}
+
+function renderHumanReadableStructuredData(data, paneId = 'net-res-content-pane', title = 'Structured Data') {
+  if (Array.isArray(data)) {
+    if (data.length === 0) {
+      return `
+        <div id="${paneId}" class="network-human-container">
+          <div class="empty-state" style="padding:20px;min-height:auto">
+            <p>Empty collection (0 items)</p>
+          </div>
+        </div>
+      `;
+    }
+    const isArrayOfObjects = data.some(item => typeof item === 'object' && item !== null);
+    if (!isArrayOfObjects) {
+      return `
+        <div id="${paneId}" class="network-human-container">
+          <div class="network-detail-section">
+            <div style="font-size:12px;font-weight:bold;color:var(--text);margin-bottom:8px;display:flex;align-items:center;gap:6px">
+              <span>📋</span> ${escHtml(title)} <span class="badge grey" style="font-size:10px">${data.length} items</span>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;background:var(--bg-3);padding:10px;border-radius:var(--radius-sm);border:1px solid var(--border)">
+              ${data.map(val => `<span class="badge" style="font-size:11px;padding:3px 8px;background:var(--bg-4);color:var(--text)">${escHtml(String(val))}</span>`).join('')}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    return `
+      <div id="${paneId}" class="network-human-container">
+        <div class="network-detail-section">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+            <div style="font-size:12px;font-weight:bold;color:var(--text);display:flex;align-items:center;gap:6px">
+              <span>📦</span> ${escHtml(title)} <span class="badge purple" style="font-size:10px;font-weight:600">${data.length} items</span>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            ${data.map((item, idx) => renderObjectCard(item, idx)).join('')}
+          </div>
+        </div>
       </div>
+    `;
+  } else if (typeof data === 'object' && data !== null) {
+    return `
+      <div id="${paneId}" class="network-human-container">
+        <div class="network-detail-section">
+          <div style="font-size:12px;font-weight:bold;color:var(--text);margin-bottom:10px;display:flex;align-items:center;gap:6px">
+            <span>🗂️</span> ${escHtml(title)} <span class="badge grey" style="font-size:10px">${Object.keys(data).length} fields</span>
+          </div>
+          ${renderKvGrid(data)}
+        </div>
+      </div>
+    `;
+  }
+  return `
+    <div id="${paneId}" class="network-human-container">
+      <pre class="network-body-pre">${escHtml(String(data))}</pre>
+    </div>
+  `;
+}
+
+function renderObjectCard(item, idx) {
+  if (typeof item !== 'object' || !item) {
+    return `<div class="network-human-card" style="padding:8px 12px"><span>#${idx + 1}</span> <code>${escHtml(String(item))}</code></div>`;
+  }
+  const title = item.name || item.title || item.label || item.id || item.model || `Item #${idx + 1}`;
+  const desc = item.description || item.summary || item.details || '';
+  const author = item.author || item.vendor || item.owner || '';
+  const category = item.category || item.type || '';
+  const tags = Array.isArray(item.tags) ? item.tags : [];
+
+  const skipKeys = new Set(['name', 'title', 'label', 'description', 'summary', 'details', 'author', 'vendor', 'owner', 'category', 'type', 'tags', 'logoUrl', 'codiconIcon']);
+  const otherKeys = Object.keys(item).filter(k => !skipKeys.has(k));
+
+  return `
+    <div class="network-human-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="network-human-card-title">${escHtml(title)}</span>
+          ${author ? `<span class="badge grey" style="font-size:9.5px">by ${escHtml(author)}</span>` : ''}
+          ${category ? `<span class="badge purple" style="font-size:9.5px">${escHtml(category)}</span>` : ''}
+        </div>
+        ${item.id && item.id !== title ? `<span class="mono" style="font-size:10px;color:var(--text-3)">${escHtml(item.id)}</span>` : ''}
+      </div>
+      ${desc ? `<div class="network-human-card-desc">${escHtml(desc)}</div>` : ''}
+      ${tags.length ? `
+        <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">
+          ${tags.map(t => `<span class="network-human-tag">#${escHtml(t)}</span>`).join('')}
+        </div>
+      ` : ''}
+      ${otherKeys.length ? `
+        <details style="font-size:11px;color:var(--text-3);margin-top:4px">
+          <summary style="cursor:pointer;font-size:10.5px;color:var(--accent-2);user-select:none">Show ${otherKeys.length} properties…</summary>
+          <div style="margin-top:8px">${renderKvGrid(item, otherKeys)}</div>
+        </details>
+      ` : ''}
+    </div>
+  `;
+}
+
+function renderKvGrid(obj, keys = null) {
+  const targetKeys = keys || Object.keys(obj);
+  return `
+    <div class="network-kv-table">
+      ${targetKeys.map(k => {
+        const val = obj[k];
+        let valHtml = '';
+        if (val === null) valHtml = '<span style="color:var(--text-3);font-style:italic">null</span>';
+        else if (typeof val === 'boolean') valHtml = `<span class="badge ${val ? 'green' : 'grey'}" style="font-size:9.5px">${val}</span>`;
+        else if (typeof val === 'number') valHtml = `<span class="mono" style="color:#fbbf24;font-weight:600">${val.toLocaleString()}</span>`;
+        else if (typeof val === 'string' && val.startsWith('http')) valHtml = `<a href="${escHtml(val)}" target="_blank" rel="noopener" style="color:var(--accent-2);text-decoration:underline">${escHtml(val)}</a>`;
+        else if (typeof val === 'object') valHtml = `<code>${escHtml(JSON.stringify(val))}</code>`;
+        else valHtml = escHtml(String(val));
+
+        return `
+          <div class="network-kv-row">
+            <span class="network-kv-key">${escHtml(k)}</span>
+            <span class="network-kv-val mono">${valHtml}</span>
+          </div>
+        `;
+      }).join('')}
     </div>
   `;
 }
@@ -2872,17 +3007,13 @@ function renderRequestTab(record) {
   } else if (currentMode === 'human' && !parsedReq?.isLlm) {
     try {
       const obj = JSON.parse(bodyStr);
-      contentHtml = `
-        <div class="network-detail-section">
-          <h4 class="network-detail-section-title">Structured JSON Payload</h4>
-          <pre id="net-req-content-pane" class="network-body-pre">${syntaxHighlight(JSON.stringify(obj, null, 2))}</pre>
-        </div>
-      `;
+      const title = getContextualDataTitle(record.url, 'Request Payload');
+      contentHtml = renderHumanReadableStructuredData(obj, 'net-req-content-pane', title);
     } catch {
       contentHtml = `
-        <div class="network-detail-section">
+        <div id="net-req-content-pane" class="network-detail-section">
           <h4 class="network-detail-section-title">Text Payload</h4>
-          <pre id="net-req-content-pane" class="network-body-pre">${escHtml(bodyStr)}</pre>
+          <pre class="network-body-pre">${escHtml(bodyStr)}</pre>
         </div>
       `;
     }
@@ -3130,17 +3261,13 @@ function renderResponseTab(record) {
   } else if (currentMode === 'human' && !parsedRes?.isLlm) {
     try {
       const obj = JSON.parse(bodyStr);
-      contentHtml = `
-        <div class="network-detail-section">
-          <h4 class="network-detail-section-title">Structured JSON Response</h4>
-          <pre id="net-res-content-pane" class="network-body-pre">${syntaxHighlight(JSON.stringify(obj, null, 2))}</pre>
-        </div>
-      `;
+      const title = getContextualDataTitle(record.url, 'Response Data');
+      contentHtml = renderHumanReadableStructuredData(obj, 'net-res-content-pane', title);
     } catch {
       contentHtml = `
-        <div class="network-detail-section">
+        <div id="net-res-content-pane" class="network-detail-section">
           <h4 class="network-detail-section-title">Response Content</h4>
-          <pre id="net-res-content-pane" class="network-body-pre">${escHtml(bodyStr)}</pre>
+          <pre class="network-body-pre">${escHtml(bodyStr)}</pre>
         </div>
       `;
     }

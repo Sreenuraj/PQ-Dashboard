@@ -2096,8 +2096,18 @@ html[data-theme="light"] .oneshot-bar-bg {
 .network-detail-body {
   overflow-y: auto;
   flex: 1;
-  padding: 16px;
+  padding: 0 16px 16px 16px;
   max-height: calc(80vh - 90px);
+  position: relative;
+}
+
+.network-tab-pane {
+  display: flex;
+  flex-direction: column;
+}
+
+.network-tab-pane > *:not(.network-view-toolbar) {
+  margin-top: 14px;
 }
 
 .network-detail-section {
@@ -2173,16 +2183,63 @@ html[data-theme="light"] .oneshot-bar-bg {
 .json-bool   { color: #c084fc; font-weight: 600; }
 .json-null   { color: var(--text-3); font-style: italic; }
 
-/* ── Human-Readable Network Inspector Styles ── */
+/* ── Human-Readable Network Inspector Styles (Frozen Selector Pane) ── */
 .network-view-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: var(--bg-2);
+  margin-left: -16px;
+  margin-right: -16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
   gap: 8px;
+}
+
+/* Human-Readable Structured Data Cards & Elements */
+.network-human-card {
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: all var(--transition);
+}
+
+.network-human-card:hover {
+  border-color: rgba(99, 102, 241, 0.4);
+  background: rgba(30, 41, 59, 0.6);
+}
+
+.network-human-card-title {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.network-human-card-desc {
+  font-size: 11.5px;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+
+.network-human-tag {
+  background: var(--bg-4);
+  color: var(--text-2);
+  font-size: 9.5px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
 }
 
 .network-view-modes {
