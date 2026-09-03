@@ -250,6 +250,39 @@ function diffLines(lines1, lines2) {
   return diff;
 }
 
+function extractSystemPromptStart(bodyStr) {
+  if (!bodyStr || typeof bodyStr !== 'string') return null;
+  try {
+    const parsed = JSON.parse(bodyStr);
+    if (Array.isArray(parsed.messages) && parsed.messages[0]?.role === 'system') {
+      const c = parsed.messages[0].content;
+      if (typeof c === 'string') return c;
+      if (Array.isArray(c)) {
+        return c.map(b => (typeof b === 'string' ? b : (b?.text || ''))).join('\n');
+      }
+    }
+    if (typeof parsed.system === 'string') return parsed.system;
+    if (Array.isArray(parsed.system)) {
+      return parsed.system.map(b => (typeof b === 'string' ? b : (b?.text || ''))).join('\n');
+    }
+  } catch (e) {
+    const m = bodyStr.match(/"role"\s*:\s*"system"[\s\S]*?"content"\s*:\s*(?:"([^"\\]*(?:\\.[^"\\]*)*)"|\[\s*\{\s*"(?:type"\s*:\s*"text"\s*,\s*"text|"text)"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)")/i);
+    if (m) {
+      const raw = m[1] || m[2];
+      try { return JSON.parse('"' + raw + '"'); } catch { return raw; }
+    }
+    const mSys = bodyStr.match(/"system"\s*:\s*(?:"([^"\\]*(?:\\.[^"\\]*)*)")/i);
+    if (mSys) {
+      try { return JSON.parse('"' + mSys[1] + '"'); } catch { return mSys[1]; }
+    }
+    const mYouAre = bodyStr.match(/"(You are [^"\r\n\\]+)/i);
+    if (mYouAre) {
+      return mYouAre[1];
+    }
+  }
+  return null;
+}
+
 function extractAgentLabel(systemText) {
   if (!systemText || typeof systemText !== 'string') return null;
 
@@ -263,22 +296,29 @@ function extractAgentLabel(systemText) {
   if (!lines.length) return null;
   const firstLine = lines[0].replace(/^[#*_\s-]+/, '').replace(/[*_]+$/, '').trim();
 
-  // 1. High priority PostQode & Subagent checks
-  if (/postqode subagent/i.test(firstLine) || /subagent/i.test(firstLine)) {
-    const subMatch = firstLine.match(/([a-z0-9_-]+\s+subagent|subagent)/i);
-    return subMatch ? subMatch[1].trim().replace(/\b\w/g, c => c.toUpperCase()) : 'PostQode Subagent';
+  // 1. PostQode Subagent check (MUST be on the first line / identity)
+  if (/^you are (?:the )?postqode subagent\b/i.test(firstLine) || /^postqode subagent\b/i.test(firstLine)) {
+    return 'PostQode Subagent';
   }
-  if (/you are postqode\b/i.test(firstLine) || /^postqode\b/i.test(firstLine)) {
+
+  // 2. Generic Subagent declared on the first line
+  if (/^you are (?:an? )?(?:autonomous )?(?:specialized )?([a-z0-9_-]+\s+subagent|subagent)\b/i.test(firstLine)) {
+    const m = firstLine.match(/^you are (?:an? )?(?:autonomous )?(?:specialized )?([a-z0-9_-]+\s+subagent|subagent)\b/i);
+    return m ? m[1].replace(/\b\w/g, c => c.toUpperCase()) : 'Subagent';
+  }
+
+  // 3. PostQode Main Agent check (MUST be at the start of the first line)
+  if (/^you are postqode\b/i.test(firstLine) || /^postqode\b/i.test(firstLine)) {
     return 'PostQode';
   }
 
-  // 2. Explicit Role/Agent/Identity keywords
+  // 4. Explicit Role/Agent/Identity keywords on line 1
   const roleMatch = firstLine.match(/^(?:role|agent|identity|system|persona|name):\s*([^,.\n]+)/i);
   if (roleMatch) {
     return roleMatch[1].trim();
   }
 
-  // 3. 'You are [Name], a/an...' or 'You are a/an [Name]...'
+  // 5. 'You are [Name], a/an...' on line 1
   const youAreMatch = firstLine.match(/^you are (?:an? )?([^,.]+)/i);
   if (youAreMatch) {
     const raw = youAreMatch[1].trim();
@@ -289,34 +329,22 @@ function extractAgentLabel(systemText) {
     }
   }
 
-  // 4. Fallback: check if 'subagent' appears in the first 400 chars anywhere
-  if (systemText.slice(0, 400).toLowerCase().includes('subagent')) {
-    return 'Subagent';
-  }
-
   return null;
 }
 
 function getAgentLabel(r) {
   if (!r) return null;
-  if (r.agentLabel) return r.agentLabel;
   if (r._cachedAgentLabel !== undefined) return r._cachedAgentLabel;
 
   let label = null;
   if (r.requestBody) {
-    // Fast regex check on requestBody string (works even on truncated 1KB body)
-    if (/postqode subagent/i.test(r.requestBody) || /subagent/i.test(r.requestBody)) {
-      label = 'PostQode Subagent';
-    } else if (/you are postqode/i.test(r.requestBody)) {
-      label = 'PostQode';
-    } else {
-      try {
-        const parsed = parseLlmRequest(r.requestBody);
-        if (parsed?.systemPrompt) {
-          label = extractAgentLabel(parsed.systemPrompt);
-        }
-      } catch {}
+    const sysText = extractSystemPromptStart(r.requestBody);
+    if (sysText) {
+      label = extractAgentLabel(sysText);
     }
+  }
+  if (!label && r.agentLabel) {
+    label = r.agentLabel;
   }
   r._cachedAgentLabel = label;
   return label;
