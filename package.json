@@ -82,6 +82,41 @@
         "title": "Configure Sources & Setup",
         "category": "PostQode",
         "icon": "$(gear)"
+      },
+      {
+        "command": "pq.openSessions",
+        "title": "Open Sessions in Dashboard",
+        "category": "PostQode",
+        "icon": "$(history)"
+      },
+      {
+        "command": "pq.openCosts",
+        "title": "Open Costs & Tokens in Dashboard",
+        "category": "PostQode",
+        "icon": "$(credit-card)"
+      },
+      {
+        "command": "pq.openErrors",
+        "title": "Open Error Breakdown in Dashboard",
+        "category": "PostQode",
+        "icon": "$(warning)"
+      },
+      {
+        "command": "pq.openModels",
+        "title": "Open Model Analytics in Dashboard",
+        "category": "PostQode",
+        "icon": "$(symbol-structure)"
+      },
+      {
+        "command": "pq.openNetwork",
+        "title": "Open Network Inspector in Dashboard",
+        "category": "PostQode",
+        "icon": "$(radio-tower)"
+      },
+      {
+        "command": "pq.openRoute",
+        "title": "Open Page in Dashboard",
+        "category": "PostQode"
       }
     ],
     "menus": {

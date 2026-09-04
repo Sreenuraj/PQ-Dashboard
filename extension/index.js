@@ -288,6 +288,30 @@ async function activate(context) {
     webviewProvider.showOrFocus('#/sources');
   });
 
+  const openSessionsCmd = vscode.commands.registerCommand('pq.openSessions', () => {
+    webviewProvider.showOrFocus('#/sessions');
+  });
+
+  const openCostsCmd = vscode.commands.registerCommand('pq.openCosts', () => {
+    webviewProvider.showOrFocus('#/costs');
+  });
+
+  const openErrorsCmd = vscode.commands.registerCommand('pq.openErrors', () => {
+    webviewProvider.showOrFocus('#/errors');
+  });
+
+  const openModelsCmd = vscode.commands.registerCommand('pq.openModels', () => {
+    webviewProvider.showOrFocus('#/models');
+  });
+
+  const openNetworkCmd = vscode.commands.registerCommand('pq.openNetwork', () => {
+    webviewProvider.showOrFocus('#/network');
+  });
+
+  const openRouteCmd = vscode.commands.registerCommand('pq.openRoute', (route) => {
+    webviewProvider.showOrFocus(route || '#/overview');
+  });
+
   context.subscriptions.push(
     openDashboardCmd,
     openInBrowserCmd,
@@ -297,7 +321,13 @@ async function activate(context) {
     stopProxyCmd,
     trustCertCmd,
     addSourceCmd,
-    openSourcesCmd
+    openSourcesCmd,
+    openSessionsCmd,
+    openCostsCmd,
+    openErrorsCmd,
+    openModelsCmd,
+    openNetworkCmd,
+    openRouteCmd
   );
 
   console.log('[PQ Dashboard] Extension activated successfully!');

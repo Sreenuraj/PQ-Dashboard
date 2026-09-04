@@ -121,11 +121,11 @@ windsurf --install-extension pq-dashboard-1.0.0.vsix
    - Or click the **🌐 icon** in the top toolbar of the PostQode Activity Bar sidebar.
    - Or run `Cmd+Shift+P` → `PostQode: Open in External Browser`.
    - Access directly anytime at: `http://localhost:3456`.
-3. **Activity Bar Sidebar**: Click the **PostQode Dashboard** icon in the left Activity Bar (distinguished from the main PostQode agent by three telemetry analytics bars in the upper right) to view:
-   - 🖥️ **IDE Sources**: Live task counts across VS Code, Insiders, Cursor, and Windsurf.
-   - 📡 **Network Proxy**: Port 3457 status, connected clients, and 1-click routing toggle.
-   - 📊 **Quick Stats**: Real-time sessions, total cost, and error rate.
-   - ⚡ **Quick Actions**: Open dashboard, open in browser, scan new tasks, run behavioral tests.
+3. **Activity Bar Sidebar**: Click the **PostQode Dashboard** icon in the left Activity Bar (distinguished from the main PostQode agent by three telemetry analytics bars in the upper right):
+   - 🖥️ **IDE Sources**: Live task counts across VS Code, Insiders, Cursor, and Windsurf (click any source to view **Sources & Configuration**).
+   - 📡 **Network Proxy**: Port 3457 status, connected clients, and 1-click routing toggle (click status to open **Network Inspector Studio**).
+   - 📊 **Quick Stats**: Real-time metrics — **Total Sessions**, **Total Cost**, **Total Errors**, and **Top Model** (click any stat to jump directly to **Sessions**, **Costs**, **Errors**, or **Model Analytics**).
+   - ⚡ **Quick Actions**: Open full dashboard, open external browser, scan new tasks, and run behavioral test suites.
 
 ### 1-Click Proxy Auto-Configuration & Controls
 

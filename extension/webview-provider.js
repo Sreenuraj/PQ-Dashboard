@@ -20,10 +20,14 @@ class DashboardWebviewProvider {
       }
     }
 
+    const route = initialRoute
+      ? (initialRoute.startsWith('#') ? initialRoute : `#/${initialRoute.replace(/^\/?#?\/?/, '')}`)
+      : '';
+
     if (this.currentPanel) {
       this.currentPanel.reveal(column);
-      if (initialRoute) {
-        this.currentPanel.webview.postMessage({ type: 'navigate', route: initialRoute });
+      if (route) {
+        this.currentPanel.webview.postMessage({ type: 'navigate', route });
       }
       return;
     }
@@ -143,8 +147,14 @@ class DashboardWebviewProvider {
   }
 
   getHtmlForWebview(webview, initialRoute = '') {
-    const serverUrl = this.serverManager.serverUrl;
-    const targetUrl = initialRoute ? `${serverUrl}/${initialRoute.replace(/^\/?/, '')}` : serverUrl;
+    const serverUrl = (this.serverManager.serverUrl || 'http://127.0.0.1:3456').replace(/\/$/, '');
+    let targetUrl = serverUrl;
+    if (initialRoute) {
+      const hash = initialRoute.startsWith('#')
+        ? initialRoute
+        : `#/${initialRoute.replace(/^\/?#?\/?/, '')}`;
+      targetUrl = `${serverUrl}/${hash}`;
+    }
 
     return `<!DOCTYPE html>
 <html lang="en">
