@@ -257,8 +257,11 @@
   max-width: 58px; text-align: center;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+.timeline-node.parallel-node .timeline-node-label { max-width: 90px; color: #38bdf8; font-weight: 600; }
 .timeline-connector { flex: 1; height: 1.5px; background: var(--bg-4); min-width: 16px; max-width: 50px; }
 .timeline-connector.error-gap { background: var(--red); opacity: 0.35; }
+.timeline-connector.parallel-connector { background: #0284c7; opacity: 0.55; height: 2px; }
+.timeline-sibling-tool:hover { background: var(--bg-3) !important; border-color: #38bdf8 !important; }
 
 .node-text      { background: var(--bg-4); border-color: var(--border-2); color: var(--text-3); }
 .node-reasoning { background: var(--purple-dim); border-color: var(--purple); color: var(--purple); }

@@ -664,6 +664,30 @@ function renderAnalytics(contentEl) {
           </div>
         </div>
         ` : ''}
+
+        <!-- Parallel Tool Execution Card -->
+        ${(data.parallelStats && data.parallelStats.parallelBatches > 0) ? `
+        <div class="panel" style="background:var(--bg-2);border:1px solid var(--border);border-left:4px solid #38bdf8;padding:12px;border-radius:var(--radius-sm)">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <span style="font-weight:bold;font-size:11.5px;color:#38bdf8">⚡ Parallel Tool Execution</span>
+            <span class="mono" style="font-size:11px;font-weight:bold;color:#38bdf8">${data.parallelStats.concurrencyPct}% Concurrency</span>
+          </div>
+          <div style="font-size:10.5px;color:var(--text-3);margin-bottom:8px">
+            <strong style="color:#38bdf8">${data.parallelStats.parallelToolCalls}</strong> of ${data.parallelStats.totalToolCalls} tools parallel · <strong style="color:var(--green)">~${data.parallelStats.roundtripsSaved} roundtrips saved</strong>
+          </div>
+          <div style="font-size:10px;color:var(--text-2);background:var(--bg-3);padding:6px 8px;border-radius:4px;margin-bottom:6px">
+            ⚡ ${data.parallelStats.parallelBatches} parallel turns · Peak: <strong style="color:#38bdf8">${data.parallelStats.maxParallel} tools/turn</strong>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:4px;max-height:120px;overflow-y:auto">
+            ${calls.filter(c => c.isParallel).map(c => `
+              <div class="pa-summary-row" title="Turn #${c.turn}: ${c.toolCount} tools executed concurrently in this turn" data-call-index="${c.index}" style="display:flex;justify-content:space-between;font-size:10px;background:rgba(56,189,248,0.1);border:1px solid rgba(56,189,248,0.25);padding:4px 8px;border-radius:3px;cursor:pointer;transition:background 0.15s">
+                <span style="color:#38bdf8;font-weight:bold">Turn #${c.turn} (⚡ ${c.toolCount} tools)</span>
+                <span style="color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px;font-family:monospace">${escHtml((c.tools || []).map(t => t.tool).slice(0, 3).join(', '))}${(c.tools || []).length > 3 ? '…' : ''}</span>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+        ` : ''}
       </div>
     </div>
 
@@ -1525,7 +1549,7 @@ function renderCacheObservabilityPanel(body, calls) {
     <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden">
       <div style="background:var(--bg-3);padding:10px 14px;font-weight:bold;font-size:11.5px;color:var(--text);border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
         <span>📊 Per-Request Cache Usage & Breakpoints Breakdown (${calls.length} total calls)</span>
-        <span style="font-size:10.5px;color:var(--text-3);font-weight:normal">👉 Click any row to expand exact prompt and before/after comparison</span>
+        <span style="font-size:10.5px;color:var(--text-3);font-weight:normal">👉 Click any row to expand exact prompt, parallel tools, and before/after comparison</span>
       </div>
       <div style="max-height:450px;overflow-y:auto">
         <table style="width:100%;border-collapse:collapse;font-size:11px;text-align:left">
@@ -1534,6 +1558,7 @@ function renderCacheObservabilityPanel(body, calls) {
               <th style="padding:8px 12px;width:30px"></th>
               <th style="padding:8px 12px">Call #</th>
               <th style="padding:8px 12px">Timestamp</th>
+              <th style="padding:8px 12px">Tools / Concurrency</th>
               <th style="padding:8px 12px">Cache Reads</th>
               <th style="padding:8px 12px">Cache Writes</th>
               <th style="padding:8px 12px">Uncached Input</th>
@@ -1554,11 +1579,22 @@ function renderCacheObservabilityPanel(body, calls) {
                 badge = '<span style="background:rgba(245,158,11,0.15);color:#f59e0b;padding:2px 8px;border-radius:10px;font-weight:bold;font-size:10px" title="The provider wrote prompt-prefix tokens into its prompt cache so later requests can reuse them if the prefix matches.">✍️ Cache Write</span>';
               }
 
+              const isParallel = c.isParallel || (c.toolCount > 1);
+              let toolsCell = '<span style="color:var(--text-3)">—</span>';
+              if (isParallel) {
+                const previewList = (c.tools || []).map(t => `${t.tool}${t.detail ? ' (' + t.detail + ')' : ''}`).join('\n');
+                toolsCell = `<span class="badge blue mono" style="font-size:10px;padding:2px 7px;cursor:pointer" title="${escHtml(previewList)}">⚡ ${c.toolCount} parallel</span>`;
+              } else if (c.toolCount === 1) {
+                const t0 = c.tools[0];
+                toolsCell = `<span class="badge grey mono" style="font-size:10px;padding:2px 7px" title="${escHtml(t0.tool + (t0.detail ? ' → ' + t0.detail : ''))}">🔧 ${escHtml(t0.tool)}</span>`;
+              }
+
               return `
                 <tr class="pa-cache-row" data-call-idx="${c.index}" style="border-bottom:1px solid var(--border);background:var(--bg-2);cursor:pointer">
                   <td style="padding:8px 12px;color:var(--text-3);font-size:10px">▶</td>
                   <td style="padding:8px 12px;font-weight:bold">Call #${c.index + 1}</td>
                   <td style="padding:8px 12px;color:var(--text-3)">${fmtTime(c.ts)}</td>
+                  <td style="padding:8px 12px">${toolsCell}</td>
                   <td class="mono" style="padding:8px 12px;color:${isHit ? 'var(--green)' : 'var(--text-3)'};font-weight:${isHit ? 'bold' : 'normal'}">${fmtTokens(c.cacheReads)}</td>
                   <td class="mono" style="padding:8px 12px;color:${isWrite ? '#f59e0b' : 'var(--text-3)'}">${fmtTokens(c.cacheWrites)}</td>
                   <td class="mono" style="padding:8px 12px;color:var(--text-2)">${fmtTokens(c.tokensIn)}</td>
@@ -1566,7 +1602,7 @@ function renderCacheObservabilityPanel(body, calls) {
                   <td style="padding:8px 12px">${badge}</td>
                 </tr>
                 <tr id="pa-cache-expand-${c.index}" style="display:none;background:var(--bg-1)">
-                  <td colspan="8" style="padding:12px;border-bottom:1px solid var(--border)">
+                  <td colspan="9" style="padding:12px;border-bottom:1px solid var(--border)">
                     <div class="pa-cache-expand-content" data-loaded="false">
                       <div class="loading-state" style="padding:10px"><div class="spinner"></div><p>Loading prompt diff comparison for Call #${c.index + 1}...</p></div>
                     </div>
@@ -1581,6 +1617,30 @@ function renderCacheObservabilityPanel(body, calls) {
   `;
 
   bindCacheTableEvents(calls);
+}
+
+function renderTurnToolsBanner(call) {
+  if (!call || !call.tools || call.tools.length === 0) return '';
+  const isP = call.isParallel || call.tools.length > 1;
+  return `
+    <div style="background:${isP ? 'rgba(56,189,248,0.08)' : 'var(--bg-3)'};border:1px solid ${isP ? 'rgba(56,189,248,0.3)' : 'var(--border)'};border-radius:var(--radius-sm);padding:10px 14px;margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <span style="font-weight:bold;font-size:11.5px;color:${isP ? '#38bdf8' : 'var(--text)'};display:flex;align-items:center;gap:6px">
+          ${isP ? `⚡ ${call.tools.length} Tools Executed in Parallel (Concurrent Batch)` : `🔧 1 Tool Executed in this Turn`}
+        </span>
+        <span style="font-size:10px;color:var(--text-3)">${call.tools.length} tool call${call.tools.length > 1 ? 's' : ''}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(280px, 1fr));gap:6px">
+        ${call.tools.map((t, i) => `
+          <div style="background:var(--bg-2);border:1px solid var(--border);padding:6px 10px;border-radius:4px;font-size:11px;display:flex;align-items:center;gap:8px">
+            <span class="mono" style="color:${isP ? '#38bdf8' : 'var(--accent)'};font-weight:bold">[${i + 1}/${call.tools.length}]</span>
+            <span class="mono" style="font-weight:600;color:var(--text)">${escHtml(t.tool)}</span>
+            ${t.detail ? `<span class="mono" style="color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px" title="${escHtml(t.detail)}">→ ${escHtml(t.detail)}</span>` : ''}
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
 }
 
 function bindCacheTableEvents(calls) {
@@ -1602,15 +1662,18 @@ function bindCacheTableEvents(calls) {
           const prevIdx = idx - 1;
 
           try {
+            const toolsBanner = renderTurnToolsBanner(call);
             if (idx === 0) {
               const promptData = await api.promptRequest(currentTaskId, idx);
               contentContainer.innerHTML =
+                toolsBanner +
                 renderSystemPromptSection(promptData?.systemPrompt) +
                 renderCacheExplanationBanner(call?.cacheExplanation) +
                 renderInitialPromptDiffMarkup(promptData, idx);
             } else {
               const comp = await api.promptCompare(currentTaskId, prevIdx, idx, 'full');
               contentContainer.innerHTML =
+                toolsBanner +
                 renderSystemPromptSection(comp?.systemPrompt2 || comp?.systemPrompt1) +
                 renderCacheExplanationBanner(call?.cacheExplanation) +
                 renderChangeAnnotationsBanner(comp?.annotations, prevIdx, idx) +
@@ -1795,18 +1858,34 @@ function renderReductionSequenceFeed(body, events) {
     };
   }
 
+  const focusedCall = activeCallFocusIndex !== null ? analyticsData?.apiCalls?.[activeCallFocusIndex] : null;
+  const isParallelCall = focusedCall?.isParallel || (focusedCall?.toolCount > 1);
+
   const callFocusBanner = activeCallFocusIndex !== null ? `
     <div class="pa-call-focus-banner" style="background:linear-gradient(90deg, rgba(16,185,129,0.18), rgba(56,189,248,0.18));border:1px solid #10b981;border-radius:6px;padding:10px 14px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;box-shadow:0 0 16px rgba(16,185,129,0.25)">
       <div style="display:flex;align-items:center;gap:10px">
-        <span style="font-size:16px">🎯</span>
+        <span style="font-size:16px">${isParallelCall ? '⚡' : '🎯'}</span>
         <div>
-          <div style="font-size:12.5px;font-weight:bold;color:#ffffff">
-            Inspecting API Call #${activeCallFocusIndex + 1}
-            <span style="font-size:11px;font-weight:normal;color:#38bdf8;margin-left:8px">(${filteredEvents.length} reduction event${filteredEvents.length === 1 ? '' : 's'} on this turn)</span>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span style="font-size:12.5px;font-weight:bold;color:#ffffff">
+              Inspecting API Call #${activeCallFocusIndex + 1}
+            </span>
+            ${isParallelCall ? `<span class="badge blue mono" style="font-size:10.5px;padding:1px 6px">⚡ ${focusedCall.toolCount} Parallel Tool Calls</span>` : (focusedCall?.toolCount === 1 ? `<span class="badge grey mono" style="font-size:10.5px;padding:1px 6px">🔧 ${escHtml(focusedCall.tools[0].tool)}</span>` : '')}
+            <span style="font-size:11px;font-weight:normal;color:#38bdf8">(${filteredEvents.length} reduction event${filteredEvents.length === 1 ? '' : 's'} on this turn)</span>
           </div>
           <div style="font-size:10.5px;color:var(--text-2);margin-top:2px">
-            Showing all files and diffs for Call #${activeCallFocusIndex + 1}. All cards are expanded below.
+            Showing all files, reductions, and diffs for Call #${activeCallFocusIndex + 1}. All cards are expanded below.
           </div>
+          ${isParallelCall && focusedCall.tools ? `
+            <div style="display:flex;align-items:center;gap:6px;margin-top:5px;flex-wrap:wrap">
+              <span style="font-size:10px;color:var(--text-3)">Concurrent tools:</span>
+              ${focusedCall.tools.map((t, ti) => `
+                <span class="mono" style="font-size:9.5px;background:rgba(56,189,248,0.15);color:#38bdf8;padding:1px 6px;border-radius:3px;border:1px solid rgba(56,189,248,0.25)" title="${escHtml(t.detail || '')}">
+                  [${ti + 1}] ${escHtml(t.tool)}${t.detail ? ` (${escHtml(t.detail.split('/').pop())})` : ''}
+                </span>
+              `).join('')}
+            </div>
+          ` : ''}
         </div>
       </div>
       <button id="pa-clear-call-focus-btn" class="action-btn" style="background:#0284c7;color:#fff;border:1px solid #38bdf8;padding:4px 12px;font-size:11px;cursor:pointer;font-weight:bold;border-radius:4px;white-space:nowrap">
@@ -2658,18 +2737,21 @@ function renderCallPillsStrip(calls, container) {
         const hasCmd = (c.commandTruncationBytes || 0) > 50 || c.hasCommandPruning;
         const hasScratch = (c.scratchOffloadedBytes || 0) > 50;
         const hasErr = c.hasError;
+        const isParallel = c.isParallel || (c.toolCount > 1);
 
         let badge = hasErr ? '⚠️' : (hasFile ? (hasScratch ? '📁⚡' : '📁') : (hasCmd ? '💻' : (hasScratch ? '⚡' : '')));
         if (hasErr && (hasFile || hasScratch)) badge = hasScratch ? '⚠️⚡' : '⚠️📁';
+        if (isParallel) badge = `⚡${c.toolCount}` + (hasErr ? ' ⚠️' : '');
 
-        const bg = isFocused ? '#0284c7' : (hasErr ? 'rgba(239,68,68,0.18)' : (hasFile ? 'rgba(16,185,129,0.15)' : (hasCmd ? 'rgba(6,182,212,0.15)' : (hasScratch ? 'rgba(232,121,249,0.15)' : 'var(--bg-3)'))));
-        const border = isFocused ? '#38bdf8' : (hasErr ? '#ef4444' : (hasFile ? '#10b981' : (hasCmd ? '#06b6d4' : (hasScratch ? '#e879f9' : 'var(--border)'))));
-        const color = isFocused ? '#ffffff' : (hasErr ? '#f87171' : (hasFile ? '#10b981' : (hasCmd ? '#06b6d4' : (hasScratch ? '#e879f9' : 'var(--text-2)'))));
+        const bg = isFocused ? '#0284c7' : (hasErr ? 'rgba(239,68,68,0.18)' : (isParallel ? 'rgba(56,189,248,0.15)' : (hasFile ? 'rgba(16,185,129,0.15)' : (hasCmd ? 'rgba(6,182,212,0.15)' : (hasScratch ? 'rgba(232,121,249,0.15)' : 'var(--bg-3)')))));
+        const border = isFocused ? '#38bdf8' : (hasErr ? '#ef4444' : (isParallel ? '#0284c7' : (hasFile ? '#10b981' : (hasCmd ? '#06b6d4' : (hasScratch ? '#e879f9' : 'var(--border)')))));
+        const color = isFocused ? '#ffffff' : (hasErr ? '#f87171' : (isParallel ? '#38bdf8' : (hasFile ? '#10b981' : (hasCmd ? '#06b6d4' : (hasScratch ? '#e879f9' : 'var(--text-2)')))));
 
         const errTitle = hasErr ? ` [⚠️ Error: ${c.errorDetails?.message || 'Failed'}]` : '';
+        const toolTitle = isParallel ? ` · ⚡ ${c.toolCount} parallel tools` : (c.toolCount === 1 ? ` · 🔧 1 tool` : '');
 
         return `
-          <button class="pa-call-pill-btn" data-call="${idx}" style="background:${bg};border:1px solid ${border};color:${color};padding:2px 7px;border-radius:4px;font-size:10.5px;font-weight:bold;cursor:pointer;white-space:nowrap;transition:all 0.15s;display:flex;align-items:center;gap:3px" title="Call #${idx + 1} (${fmtBytes(c.requestSize)})${errTitle} - Click to isolate & view diff">
+          <button class="pa-call-pill-btn" data-call="${idx}" style="background:${bg};border:1px solid ${border};color:${color};padding:2px 7px;border-radius:4px;font-size:10.5px;font-weight:bold;cursor:pointer;white-space:nowrap;transition:all 0.15s;display:flex;align-items:center;gap:3px" title="Call #${idx + 1} (${fmtBytes(c.requestSize)})${toolTitle}${errTitle} - Click to isolate & view diff">
             #${idx + 1}${badge ? `<span style="font-size:9px">${badge}</span>` : ''}
           </button>
         `;

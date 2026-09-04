@@ -343,6 +343,16 @@ function renderTaskColumn(t, ev, maxCost, maxDuration, colIdx) {
              </span>
            </div>
 
+           <!-- Parallel Concurrency Metric -->
+           <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--text-2); padding:6px 4px;">
+             <span>Concurrency</span>
+             <span style="font-weight:600; display:flex; align-items:center; gap:4px" class="mono">
+               ${(t.max_parallel_tools > 1 || t.parallel_tool_batches > 0)
+                 ? `<span style="color:#38bdf8">⚡ ${t.max_parallel_tools || 1}x (${t.parallel_tool_batches || 0} batches)</span>`
+                 : `<span style="color:var(--text-3)">Sequential (1x)</span>`}
+             </span>
+           </div>
+
            <!-- Interactive Errors Encountered -->
            <div class="interactive-op" data-type="errors" data-idx="${colIdx}" style="display:flex; justify-content:space-between; font-size:11px; color:var(--text-2); cursor:pointer; padding:6px 4px; border-radius:4px; transition: background 0.15s">
              <span>Errors Encountered</span>

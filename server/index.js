@@ -113,6 +113,12 @@ app.post('/api/sources/remove', async (req, res) => {
 // POST /api/refresh — re-parse
 app.post('/api/refresh', async (req, res) => {
   if (parsing) return res.json({ status: 'already_running' });
+  const force = req.body && req.body.force;
+  if (force) {
+    try {
+      db.prepare('DELETE FROM parse_meta').run();
+    } catch (e) {}
+  }
   parsing = true;
   res.json({ status: 'started' });
   try {

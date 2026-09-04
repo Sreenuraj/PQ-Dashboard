@@ -312,6 +312,7 @@ async function loadSessions(container, dateRange = {}, drilldown = {}) {
           <div style="display:flex;align-items:center;gap:6px">
             <span style="font-size:11px;color:var(--text-3);font-family:'JetBrains Mono',monospace">${t.id.substring(0,20)}…</span>
             ${t.is_multi_agent || (t.models && t.models.some(m => m.mode === 'subagent')) ? `<span class="badge purple" style="font-size:9.5px;padding:1px 5px">🤖 Subagents</span>` : ''}
+            ${t.max_parallel_tools > 1 ? `<span class="badge blue" style="font-size:9.5px;padding:1px 5px" title="${t.parallel_tool_batches || 0} parallel batches (peak: ${t.max_parallel_tools} concurrent tools)">⚡ ${t.max_parallel_tools}x Parallel</span>` : ''}
           </div>
           <div style="font-size:12px;color:var(--text-2);margin-top:2px;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
             ${t.first_message || '—'}

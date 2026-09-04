@@ -591,12 +591,35 @@ module.exports = (db, config, getStore) => {
         };
       }
 
-      // 3. Check UI messages until the next api_req_started for subagents
+      // 3. Check UI messages until the next api_req_started for tools & subagents
       let subagentRun = null;
       let initialPrompts = [];
+      const turnTools = [];
       for (let j = i + 1; j < uiMessages.length; j++) {
         const nextM = uiMessages[j];
         if (nextM.say === 'api_req_started') break;
+        if (nextM.say === 'tool' || nextM.ask === 'tool' || nextM.say === 'use_subagents' || nextM.say === 'postqode_browser_agent') {
+          let toolName = 'unknown';
+          let toolDetail = '';
+          let toolIsLocatedInWorkspace = null;
+          try {
+            const p = typeof nextM.text === 'string' ? JSON.parse(nextM.text) : nextM.text;
+            toolName = p.tool || p.toolName || p.server_name || (nextM.say === 'use_subagents' ? 'use_subagents' : 'tool');
+            toolDetail = p.path || p.command || p.arguments || '';
+            if (p.operationIsLocatedInWorkspace !== undefined) {
+              toolIsLocatedInWorkspace = p.operationIsLocatedInWorkspace;
+            }
+          } catch (e) {
+            toolName = nextM.say;
+          }
+          turnTools.push({
+            tool: toolName,
+            detail: toolDetail,
+            ts: nextM.ts,
+            workspace: toolIsLocatedInWorkspace,
+            type: nextM.type,
+          });
+        }
         if (nextM.say === 'use_subagents' && nextM.text) {
           try {
             const parsed = typeof nextM.text === 'string' ? JSON.parse(nextM.text) : nextM.text;
@@ -676,6 +699,10 @@ module.exports = (db, config, getStore) => {
         errorDetails,
         hasSubagents: !!subagentRun,
         subagents: subagentRun,
+        tools: turnTools,
+        toolCount: turnTools.length,
+        isParallel: turnTools.length > 1,
+        parallelCount: turnTools.length,
         requestText: data.request || null,
         modelId: mId,
         providerId: msg.modelInfo?.providerId || null,
@@ -1358,6 +1385,20 @@ module.exports = (db, config, getStore) => {
       }
     } catch (e) {}
 
+    // Concurrency / Parallel tool calls metrics for Prompt Observability
+    const parallelTurns = apiCalls.filter(c => c.isParallel);
+    const totalParallelTools = parallelTurns.reduce((s, c) => s + c.toolCount, 0);
+    const maxTurnTools = apiCalls.length ? Math.max(0, ...apiCalls.map(c => c.toolCount)) : 0;
+    const allTurnTools = apiCalls.reduce((s, c) => s + c.toolCount, 0);
+    const parallelStats = {
+      totalToolCalls: allTurnTools,
+      parallelToolCalls: totalParallelTools,
+      parallelBatches: parallelTurns.length,
+      maxParallel: maxTurnTools,
+      concurrencyPct: allTurnTools > 0 ? Math.round((totalParallelTools / allTurnTools) * 100) : 0,
+      roundtripsSaved: Math.max(0, totalParallelTools - parallelTurns.length),
+    };
+
     res.json({
       task: taskObj,
       filePaths: {
@@ -1367,6 +1408,7 @@ module.exports = (db, config, getStore) => {
         contextHistoryPath: fs.existsSync(ctxHistPath) ? ctxHistPath : null,
       },
       apiCalls,
+      parallelStats,
       modelPricing: matchedPricing,
       financialBreakdown,
       reductionCategories: {

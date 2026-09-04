@@ -48,7 +48,12 @@ function initSchema(db) {
       primary_agent TEXT,
       agent_count INTEGER DEFAULT 0,
       is_multi_agent INTEGER DEFAULT 0,
-      agent_sequence_json TEXT
+      agent_sequence_json TEXT,
+      parallel_tool_batches INTEGER DEFAULT 0,
+      max_parallel_tools INTEGER DEFAULT 0,
+      parallel_tool_calls INTEGER DEFAULT 0,
+      concurrency_rate REAL DEFAULT 0,
+      roundtrips_saved INTEGER DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS task_models (
@@ -95,7 +100,12 @@ function initSchema(db) {
       mode TEXT,
       reasoning_text TEXT,
       content_preview TEXT,
-      model_switched INTEGER DEFAULT 0
+      model_switched INTEGER DEFAULT 0,
+      is_parallel INTEGER DEFAULT 0,
+      parallel_count INTEGER DEFAULT 1,
+      parallel_index INTEGER DEFAULT 1,
+      parallel_group_id TEXT,
+      parallel_tools_json TEXT
     );
 
     CREATE TABLE IF NOT EXISTS parse_meta (
@@ -210,6 +220,17 @@ function initSchema(db) {
     'ALTER TABLE tasks ADD COLUMN agent_sequence_json TEXT',
     // Custom task label
     'ALTER TABLE tasks ADD COLUMN label TEXT',
+    // Parallel Tool Execution metrics
+    'ALTER TABLE tasks ADD COLUMN parallel_tool_batches INTEGER DEFAULT 0',
+    'ALTER TABLE tasks ADD COLUMN max_parallel_tools INTEGER DEFAULT 0',
+    'ALTER TABLE tasks ADD COLUMN parallel_tool_calls INTEGER DEFAULT 0',
+    'ALTER TABLE tasks ADD COLUMN concurrency_rate REAL DEFAULT 0',
+    'ALTER TABLE tasks ADD COLUMN roundtrips_saved INTEGER DEFAULT 0',
+    'ALTER TABLE events ADD COLUMN is_parallel INTEGER DEFAULT 0',
+    'ALTER TABLE events ADD COLUMN parallel_count INTEGER DEFAULT 1',
+    'ALTER TABLE events ADD COLUMN parallel_index INTEGER DEFAULT 1',
+    'ALTER TABLE events ADD COLUMN parallel_group_id TEXT',
+    'ALTER TABLE events ADD COLUMN parallel_tools_json TEXT',
   ];
   for (const sql of migrations) {
     try { db.exec(sql); } catch (e) {
@@ -280,8 +301,9 @@ function saveTask(db, taskId, source, summary, metadata, focusCompletion, events
      status,has_reasoning,has_context_reset,first_message,focus_chain_completion,
      environment,pq_version,event_count,
      activity_category,edit_turns,oneshot_turns,retry_cycles,shell_command_count,
-     primary_agent,agent_count,is_multi_agent,agent_sequence_json,label)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+     primary_agent,agent_count,is_multi_agent,agent_sequence_json,label,
+     parallel_tool_batches,max_parallel_tools,parallel_tool_calls,concurrency_rate,roundtrips_saved)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
     taskId, source,
     summary.first_ts, summary.last_ts, summary.duration,
@@ -305,7 +327,12 @@ function saveTask(db, taskId, source, summary, metadata, focusCompletion, events
     agentMeta.agent_count,
     agentMeta.is_multi_agent,
     agentMeta.agent_sequence_json,
-    existingLabel
+    existingLabel,
+    summary.parallel_tool_batches || 0,
+    summary.max_parallel_tools || 0,
+    summary.parallel_tool_calls || 0,
+    summary.concurrency_rate || 0,
+    summary.roundtrips_saved || 0
   );
 
   // Delete old events + related data for this task (replace)
@@ -317,8 +344,9 @@ function saveTask(db, taskId, source, summary, metadata, focusCompletion, events
   const insertEvent = db.prepare(`INSERT INTO events 
     (task_id,ts,type,sub_type,tool_name,command_text,error_message,error_category,
      cost,tokens_in,tokens_out,cache_reads,cache_writes,model_id,provider_id,mode,
-     reasoning_text,content_preview,model_switched,request_text,retry_count,context_pct,response_text) 
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+     reasoning_text,content_preview,model_switched,request_text,retry_count,context_pct,response_text,
+     is_parallel,parallel_count,parallel_index,parallel_group_id,parallel_tools_json) 
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
 
   const insertEventBatch = db.transaction((events) => {
     for (const e of events) {
@@ -332,7 +360,12 @@ function saveTask(db, taskId, source, summary, metadata, focusCompletion, events
         e.request_text || null,
         e.retry_count || 0,
         e.context_pct != null ? e.context_pct : null,
-        e.response_text || null
+        e.response_text || null,
+        e.is_parallel ? 1 : 0,
+        e.parallel_count || 1,
+        e.parallel_index || 1,
+        e.parallel_group_id || null,
+        e.parallel_tools ? JSON.stringify(e.parallel_tools) : null
       );
     }
   });

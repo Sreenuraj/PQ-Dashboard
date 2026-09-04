@@ -54,6 +54,11 @@ export async function renderTimeline(container, taskId) {
         <div class="summary-item"><div class="summary-label">Total Cost</div><div class="summary-value" style="color:var(--green)">${fmtCost(task.total_cost)}</div></div>
         <div class="summary-item"><div class="summary-label">API Calls</div><div class="summary-value">${task.api_call_count || 0}</div></div>
         <div class="summary-item"><div class="summary-label">Tool Calls</div><div class="summary-value">${task.tool_call_count || 0}</div></div>
+        ${(task.max_parallel_tools > 1 || task.parallel_tool_batches > 0) ? `
+          <div class="summary-item"><div class="summary-label">Parallel Batches</div><div class="summary-value" style="color:var(--blue)">⚡ ${task.parallel_tool_batches || 0}</div></div>
+          <div class="summary-item"><div class="summary-label">Peak Concurrency</div><div class="summary-value" style="color:var(--blue)">${task.max_parallel_tools || 1} tools</div></div>
+          <div class="summary-item"><div class="summary-label">Roundtrips Saved</div><div class="summary-value" style="color:var(--green)">~${task.roundtrips_saved || 0}</div></div>
+        ` : ''}
         <div class="summary-item"><div class="summary-label">Errors</div><div class="summary-value" style="color:${task.error_count > 0 ? 'var(--red)' : 'var(--text-2)'}">${task.error_count || 0}</div></div>
         <div class="summary-item"><div class="summary-label">Events</div><div class="summary-value">${events.length}</div></div>
         <div class="summary-item"><div class="summary-label">Model Switches</div><div class="summary-value" style="color:${modelSwitchCount > 0 ? 'var(--blue)' : 'var(--text-2)'}">${modelSwitchCount}</div></div>
@@ -181,6 +186,16 @@ function buildTimeline(events) {
         </div>
       ` : '';
 
+      // Parallel batch divider/header (shown before the first tool of each parallel batch)
+      const isParallelStart = e.is_parallel && (!prev || prev.parallel_group_id !== e.parallel_group_id);
+      const parallelBatchDivider = isParallelStart ? `
+        <div class="timeline-parallel-divider" style="display:inline-flex;align-items:center;margin:0 6px">
+          <span style="font-size:9.5px;background:rgba(56,189,248,0.15);border:1px solid rgba(56,189,248,0.4);color:#38bdf8;padding:2px 8px;border-radius:10px;font-weight:bold;white-space:nowrap;display:inline-flex;align-items:center;gap:3px" title="Parallel execution batch of ${e.parallel_count} tools dispatched concurrently in a single turn">
+            ⚡ ${e.parallel_count} Parallel Batch
+          </span>
+        </div>
+      ` : '';
+
       // Context window badge for api_req_started
       const ctxBadge = (e.sub_type === 'api_req_started' && e.context_pct != null) ?
         `<div class="ctx-badge ${ctxColor(e.context_pct)}">ctx ${e.context_pct}%</div>` : '';
@@ -189,14 +204,20 @@ function buildTimeline(events) {
       const retryBadge = (e.retry_count && e.retry_count > 0) ?
         `<div class="retry-badge">↺${e.retry_count}</div>` : '';
 
+      const nodeLabel = e.is_parallel
+        ? `⚡ ${e.tool_name || 'tool'} [${e.parallel_index}/${e.parallel_count}]`
+        : (e.sub_type?.replace('api_req_started','api')?.replace('checkpoint_created','ckpt') || '?');
+
       return `
+        ${parallelBatchDivider}
         ${modelSwitchDivider}
-        ${i > 0 && !modelSwitchDivider ? `<div class="timeline-connector ${e.error_category ? 'error-gap' : ''}"></div>` : ''}
-        <div class="timeline-node" data-idx="${i}" title="${e.sub_type}: ${escHtml(e.content_preview || '')}">
-          <div class="timeline-node-dot ${nodeClass(e)}">
+        ${i > 0 && !modelSwitchDivider && !parallelBatchDivider ? `<div class="timeline-connector ${e.error_category ? 'error-gap' : ''} ${e.is_parallel ? 'parallel-connector' : ''}"></div>` : ''}
+        <div class="timeline-node ${e.is_parallel ? 'parallel-node' : ''}" data-idx="${i}" title="${e.is_parallel ? `⚡ [${e.parallel_index}/${e.parallel_count}] Parallel Tool: ` : ''}${e.sub_type}: ${escHtml(e.content_preview || '')}">
+          <div class="timeline-node-dot ${nodeClass(e)}" style="${e.is_parallel ? 'position:relative;border-color:#38bdf8;box-shadow:0 0 8px rgba(56,189,248,0.35)' : ''}">
             ${nodeIcon(e)}
+            ${e.is_parallel ? `<span style="position:absolute;top:-7px;right:-8px;background:#0284c7;color:#fff;border-radius:6px;font-size:8px;padding:0 3px;font-weight:bold;line-height:1.2;border:1px solid rgba(255,255,255,0.3)">⚡${e.parallel_index}</span>` : ''}
           </div>
-          <div class="timeline-node-label">${e.sub_type?.replace('api_req_started','api')?.replace('checkpoint_created','ckpt') || '?'}</div>
+          <div class="timeline-node-label" style="${e.is_parallel ? 'color:#38bdf8;font-weight:600' : ''}">${nodeLabel}</div>
           ${ctxBadge}
           ${retryBadge}
           ${isLargeGap ? `<div style="font-size:9px;color:var(--text-3);margin-top:2px">+${fmtMs(gap)}</div>` : ''}
@@ -292,6 +313,36 @@ function wireTimelineClicks(events) {
             ${buildTriggerSection(events, idx)}
           ` : ''}
 
+          ${e.is_parallel ? `
+            <div style="padding:10px 14px;background:rgba(56,189,248,0.08);border:1px solid rgba(56,189,248,0.3);border-radius:var(--radius-sm);color:var(--text);font-size:12px;margin-bottom:12px">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                <span style="font-weight:bold;color:#38bdf8">⚡ Parallel Execution Batch: Tool [${e.parallel_index}/${e.parallel_count}]</span>
+                <span class="badge blue mono" style="font-size:10px;padding:2px 7px">${e.parallel_count} Concurrent Tools</span>
+              </div>
+              <div style="font-size:11px;color:var(--text-2);margin-bottom:8px">
+                This tool was executed concurrently in a parallel turn with ${e.parallel_count - 1} other tool${e.parallel_count > 2 ? 's' : ''}. Click any sibling below to jump to it:
+              </div>
+              ${(() => {
+                const batchSiblings = events.map((ev, i) => ({ ev, i })).filter(x => x.ev.parallel_group_id && x.ev.parallel_group_id === e.parallel_group_id);
+                if (!batchSiblings.length) return '';
+                return `
+                  <div style="display:flex;flex-direction:column;gap:4px">
+                    ${batchSiblings.map(s => `
+                      <div class="timeline-sibling-tool" data-target-idx="${s.i}" style="display:flex;align-items:center;justify-content:space-between;background:var(--bg-2);padding:5px 8px;border-radius:3px;font-size:11px;cursor:pointer;border:1px solid ${s.i === idx ? '#38bdf8' : 'var(--border)'}">
+                        <div style="display:flex;align-items:center;gap:6px;overflow:hidden">
+                          <span class="mono" style="color:${s.i === idx ? '#38bdf8' : 'var(--text-3)'};font-weight:bold">[${s.ev.parallel_index}/${s.ev.parallel_count}]</span>
+                          <span class="mono" style="color:var(--text);font-weight:600">${escHtml(s.ev.tool_name || 'tool')}</span>
+                          ${s.ev.content_preview ? `<span class="mono" style="color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:320px;font-size:10px" title="${escHtml(s.ev.content_preview)}">→ ${escHtml(s.ev.content_preview)}</span>` : ''}
+                        </div>
+                        ${s.i === idx ? '<span style="color:#38bdf8;font-size:10px;font-weight:bold">Selected</span>' : '<span style="color:var(--text-3);font-size:10px">Jump ↗</span>'}
+                      </div>
+                    `).join('')}
+                  </div>
+                `;
+              })()}
+            </div>
+          ` : ''}
+
           ${e.tool_name ? `
             <div style="font-size:12px;color:var(--text-2);margin-bottom:8px">
               🔧 Tool: <span class="mono">${e.tool_name}</span>
@@ -321,6 +372,19 @@ function wireTimelineClicks(events) {
           ` : ''}
         </div>
       `;
+
+      // Wire sibling tool jumps
+      panel.querySelectorAll('.timeline-sibling-tool').forEach(btn => {
+        btn.onclick = () => {
+          const targetIdx = parseInt(btn.dataset.targetIdx, 10);
+          const targetNode = document.querySelector(`.timeline-node[data-idx="${targetIdx}"]`);
+          if (targetNode) {
+            targetNode.click();
+            targetNode.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+          }
+        };
+      });
+
       panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     });
   });

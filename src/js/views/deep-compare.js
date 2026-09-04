@@ -234,6 +234,8 @@ export async function renderDeepCompare(container, params = new URLSearchParams(
           ${metricRow('Duration', comparedRows, r => fmtDuration(r.task.duration || 0), 'duration')}
           ${metricRow('API Calls', comparedRows, r => r.task.api_call_count || 0, 'api_calls')}
           ${metricRow('Tool Calls', comparedRows, r => r.task.tool_call_count || 0, 'tool_calls')}
+          ${metricRow('Parallel Batches', comparedRows, r => (r.task.parallel_tool_batches || 0) > 0 ? `<span style="color:#38bdf8;font-weight:600">⚡ ${r.task.parallel_tool_batches} batches (peak: ${r.task.max_parallel_tools}x)</span>` : '<span style="color:var(--text-3)">Sequential (1x)</span>')}
+          ${metricRow('Roundtrips Saved', comparedRows, r => (r.task.roundtrips_saved || 0) > 0 ? `<span style="color:var(--green);font-weight:600">~${r.task.roundtrips_saved} saved</span>` : '0')}
           ${metricRow('Errors', comparedRows, r => r.task.error_count || 0, 'errors')}
           ${metricRow('Context Condensation', comparedRows, r => r.task.has_context_reset ? '<span class="badge yellow">Yes</span>' : '<span class="badge green">No</span>')}
           ${metricRow('Status', comparedRows, r => `<span class="badge ${r.task.status === 'completed' ? 'green' : 'yellow'}">${escHtml(r.task.status)}</span>`)}

@@ -106,6 +106,11 @@ function parseUIMessages(filePath, apiHistoryPath, maxFileSize) {
       request_text: null,
       retry_count: 0,
       context_pct: null,
+      is_parallel: false,
+      parallel_count: 1,
+      parallel_index: 1,
+      parallel_group_id: null,
+      parallel_tools: null,
     };
 
     // Detect model switch
@@ -191,14 +196,6 @@ function parseUIMessages(filePath, apiHistoryPath, maxFileSize) {
       event.content_preview = toolData.preview;
     }
 
-    // ── ask.tool ──
-    if (msg.type === 'ask' && subType === 'tool' && msg.text) {
-      toolCallCount++;
-      const toolData = extractToolData(msg.text);
-      event.tool_name = toolData.tool;
-      event.content_preview = toolData.preview;
-    }
-
     // ── postqode_browser_agent (browser automation tools) ──
     if (subType === 'postqode_browser_agent' && msg.text) {
       toolCallCount++;
@@ -232,6 +229,7 @@ function parseUIMessages(filePath, apiHistoryPath, maxFileSize) {
 
     // ── use_subagents (dispatching parallel subagent workers) ──
     if (subType === 'use_subagents' && msg.text) {
+      toolCallCount++;
       let promptCount = 1;
       try {
         const d = JSON.parse(msg.text);
@@ -271,10 +269,9 @@ function parseUIMessages(filePath, apiHistoryPath, maxFileSize) {
     events.push(event);
   }
 
-  // ── Post-processing: Retry detection ──
-  // Walk events in order. When we see an error, look back at the preceding api_req_started.
-  // Multiple consecutive errors before the next api call = multiple retries.
+  // ── Post-processing: Retry detection & Parallel Tool Batches ──
   computeRetryCounts(events);
+  const parallelStats = computeParallelToolBatches(events);
 
   const summary = {
     first_ts: firstTs,
@@ -292,6 +289,11 @@ function parseUIMessages(filePath, apiHistoryPath, maxFileSize) {
     models_used: [...modelsUsed],
     has_reasoning: events.some(e => e.sub_type === 'reasoning'),
     event_count: events.length,
+    parallel_tool_batches: parallelStats.parallel_tool_batches,
+    max_parallel_tools: parallelStats.max_parallel_tools,
+    parallel_tool_calls: parallelStats.parallel_tool_calls,
+    concurrency_rate: parallelStats.concurrency_rate,
+    roundtrips_saved: parallelStats.roundtrips_saved,
   };
 
   return { events, summary };
@@ -325,6 +327,62 @@ function computeRetryCounts(events) {
       // Non-error, non-api event doesn't reset counter
     }
   }
+}
+
+/**
+ * Identify and tag parallel tool calls within each model turn.
+ * When the model requests multiple tool executions in a single turn,
+ * PostQode dispatches them concurrently.
+ */
+function computeParallelToolBatches(events) {
+  let currentBatch = [];
+  let parallelBatches = 0;
+  let maxParallel = 0;
+  let parallelToolCalls = 0;
+
+  function flushBatch() {
+    if (currentBatch.length > 1) {
+      parallelBatches++;
+      maxParallel = Math.max(maxParallel, currentBatch.length);
+      parallelToolCalls += currentBatch.length;
+      const groupId = `batch_${currentBatch[0].ts || Date.now()}_${currentBatch.length}`;
+      const toolNames = currentBatch.map(e => e.tool_name || 'tool');
+
+      currentBatch.forEach((e, idx) => {
+        e.is_parallel = true;
+        e.parallel_count = currentBatch.length;
+        e.parallel_index = idx + 1;
+        e.parallel_group_id = groupId;
+        e.parallel_tools = toolNames;
+      });
+    } else if (currentBatch.length === 1) {
+      currentBatch[0].is_parallel = false;
+      currentBatch[0].parallel_count = 1;
+      currentBatch[0].parallel_index = 1;
+      currentBatch[0].parallel_group_id = null;
+      currentBatch[0].parallel_tools = [currentBatch[0].tool_name || 'tool'];
+    }
+    currentBatch = [];
+  }
+
+  for (const e of events) {
+    if (e.sub_type === 'api_req_started' || e.sub_type === 'resume_task') {
+      flushBatch();
+    } else if (e.sub_type === 'tool' || e.sub_type === 'postqode_browser_agent' || e.sub_type === 'use_subagents' || (e.tool_name && e.tool_name !== 'subagents')) {
+      currentBatch.push(e);
+    }
+  }
+  flushBatch();
+
+  const allToolsCount = events.filter(e => e.sub_type === 'tool' || e.sub_type === 'postqode_browser_agent' || e.sub_type === 'use_subagents').length;
+
+  return {
+    parallel_tool_batches: parallelBatches,
+    max_parallel_tools: maxParallel,
+    parallel_tool_calls: parallelToolCalls,
+    concurrency_rate: allToolsCount > 0 ? +(parallelToolCalls / allToolsCount).toFixed(2) : 0,
+    roundtrips_saved: Math.max(0, parallelToolCalls - parallelBatches),
+  };
 }
 
 function extractApiReqData(text) {
