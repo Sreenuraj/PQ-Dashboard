@@ -78,6 +78,11 @@
           <a href="#/prompt-analytics" class="nav-item" data-view="prompt-analytics">
             <span class="nav-icon">🔬</span><span>Prompt Analytics</span>
           </a>
+
+          <div class="nav-section-label" style="margin-top:8px">Configuration</div>
+          <a href="#/sources" class="nav-item" data-view="sources">
+            <span class="nav-icon">⚙</span><span>Sources & Setup</span>
+          </a>
         </nav>
 
         <div class="sidebar-footer">
@@ -111,8 +116,12 @@
     </main>
   </div>
 
-  <!-- Date range picker and Theme Switch (shared/global) -->
-  <div id="date-range-wrapper" class="date-range-wrapper" style="display:none; gap:12px; align-items:center">
+  <!-- Date range picker, Theme Switch and Browser Button (shared/global) -->
+  <div id="date-range-wrapper" class="date-range-wrapper" style="display:none; gap:8px; align-items:center">
+    <button id="open-in-browser-btn" style="background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);cursor:pointer;font-size:11.5px;display:flex;align-items:center;gap:5px;padding:6px 10px;border-radius:var(--radius-sm);transition:all var(--transition)" title="Open in External Browser (http://localhost:3456)" onmouseenter="this.style.borderColor='var(--border-2)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--text-2)'">
+      <span style="font-size:12px">🌐</span>
+      <span style="font-weight:500">Open in Browser</span>
+    </button>
     <button id="theme-toggle" style="background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;padding:6px 10px;border-radius:var(--radius-sm);transition:all var(--transition)" title="Toggle Theme" onmouseenter="this.style.borderColor='var(--border-2)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--text-2)'">
       <span id="theme-icon">☼</span>
     </button>

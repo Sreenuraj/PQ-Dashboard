@@ -454,11 +454,34 @@ function extractAndPersistSystemPrompt(requestBody, capturedTs, modelId) {
 function startProxy(config = {}) {
   proxyPort = config.port || 3457;
   const bufferSize = config.buffer_size || 2000;
-  certsDir = path.resolve(config.certs_dir || './data/proxy-certs');
+  const rawCertsDir = config.certs_dir || path.join(require('os').homedir(), '.pq-dashboard', 'proxy-certs');
+  certsDir = path.resolve(rawCertsDir.replace(/^~/, require('os').homedir()));
   if (config.db) proxyDb = config.db; // wire in DB for system-prompt persistence
 
   // Ensure certs directory exists
   fs.mkdirSync(certsDir, { recursive: true });
+
+  // If the target certs directory is missing ca.pem, check fallback candidates
+  // to avoid generating a new un-trusted CA certificate.
+  const targetCaPath = path.join(certsDir, 'certs', 'ca.pem');
+  if (!fs.existsSync(targetCaPath)) {
+    const homedir = require('os').homedir();
+    const fallbackCandidates = [
+      path.join(homedir, '.pq-dashboard', 'proxy-certs'),
+      path.resolve(__dirname, '../../data/proxy-certs'),
+      path.resolve(__dirname, '../data/proxy-certs'),
+    ];
+    for (const cand of fallbackCandidates) {
+      const candCa = path.join(cand, 'certs', 'ca.pem');
+      if (fs.existsSync(candCa) && cand !== certsDir) {
+        try {
+          fs.cpSync(cand, certsDir, { recursive: true });
+          console.log(`🔐 Reused trusted proxy CA certificates from ${cand}`);
+          break;
+        } catch (e) {}
+      }
+    }
+  }
 
   loadMockRules();
 
@@ -896,7 +919,7 @@ function startProxy(config = {}) {
 
   // Bind explicitly to 127.0.0.1 (IPv4 loopback) for secure local operation
   // and compatibility with the net.connect patch.
-  proxyServer.listen({ port: proxyPort, host: '127.0.0.1', sslCaDir: certsDir }, () => {
+  proxyServer.listen({ port: proxyPort, host: '0.0.0.0', sslCaDir: certsDir }, () => {
     isRunning = true;
     const caPath = path.join(certsDir, 'certs/ca.pem');
     console.log(`📡 Network proxy listening on http://127.0.0.1:${proxyPort}`);

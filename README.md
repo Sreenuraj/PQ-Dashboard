@@ -91,63 +91,117 @@ A built-in MITM proxy (`port 3457`) that captures live HTTP/HTTPS network traffi
 
 ---
 
-## Prerequisites
+---
 
-- **Node.js** v18+
-- **npm** (bundled with Node)
+## VS Code Extension (`.vsix`)
 
-## Installation
+PQ Dashboard can be run as a native **VS Code Extension** that embeds the complete 18-page observability platform inside your editor with zero setup.
 
+### Installation
+Install the extension into any VS Code-compatible IDE:
 ```bash
-git clone <repo-url> && cd PQ-Dashboard
-npm install
+# Standard VS Code
+code --install-extension pq-dashboard-1.0.0.vsix
+
+# VS Code Insiders
+code-insiders --install-extension pq-dashboard-1.0.0.vsix
+
+# Cursor
+cursor --install-extension pq-dashboard-1.0.0.vsix
+
+# Windsurf
+windsurf --install-extension pq-dashboard-1.0.0.vsix
 ```
+*Or via VS Code GUI: Extensions view (`Cmd+Shift+X`) → Click `...` menu at top-right → select **"Install from VSIX..."**.*
+
+### How to Access the Dashboard
+1. **Editor Tab**: Click **`PQ: 🟢 3456`** in the bottom-right status bar or run `Cmd+Shift+P` → `PostQode: Open Full Dashboard` to open all 18 pages in a full-width editor tab.
+2. **🌐 Open in External Browser**:
+   - Click the **"Open in Browser"** button in the top navigation bar of the dashboard.
+   - Or click the **🌐 icon** in the top toolbar of the PostQode Activity Bar sidebar.
+   - Or run `Cmd+Shift+P` → `PostQode: Open in External Browser`.
+   - Access directly anytime at: `http://localhost:3456`.
+3. **Activity Bar Sidebar**: Click the **PostQode Dashboard** icon in the left Activity Bar (distinguished from the main PostQode agent by three telemetry analytics bars in the upper right) to view:
+   - 🖥️ **IDE Sources**: Live task counts across VS Code, Insiders, Cursor, and Windsurf.
+   - 📡 **Network Proxy**: Port 3457 status, connected clients, and 1-click routing toggle.
+   - 📊 **Quick Stats**: Real-time sessions, total cost, and error rate.
+   - ⚡ **Quick Actions**: Open dashboard, open in browser, scan new tasks, run behavioral tests.
+
+### 1-Click Proxy Auto-Configuration & Controls
+
+The dashboard and VS Code extension provide built-in 1-click controls to manage proxy routing and certificate trust without manual configuration:
+
+#### ⚡ 1-Click Auto-Configure Proxy
+- **From Dashboard UI**: Open *Network Inspector Studio* (`#/network`) → Click **"⚡ 1-Click Auto-Configure Proxy"** in the empty state or in the **❓ Setup Guide** drawer.
+- **From Activity Bar Sidebar**: Under *Network Proxy*, click **"Enable Proxy Routing (Auto-Configure)"**.
+- **From Command Palette**: Run `Cmd+Shift+P` → **`PostQode: Enable Network Proxy Routing (Auto-Configure)`**.
+- **What it does automatically**:
+  - Injects `"http.proxy": "http://127.0.0.1:3457"` into your IDE `settings.json` (supports VS Code, Insiders, Cursor, and Windsurf).
+  - Sets `"http.proxyStrictSSL": false` so intercepted requests are not blocked.
+  - Sets `"http.proxySupport": "override"` to ensure all extension HTTP/HTTPS traffic routes through the proxy.
+  - Configures `"http.noProxy": ["localhost", "127.0.0.1", "us.i.posthog.com", "mobile.events.data.microsoft.com", "main.vscode-cdn.net"]` so local IPC and telemetry are bypassed.
+
+#### 🛑 1-Click Disable Proxy (Direct Internet)
+- Click **"🛑 Disable Proxy"** in the Setup Guide, or click **"Stop Proxy Routing"** in the sidebar, or run `PostQode: Disable Network Proxy Routing`.
+- This immediately removes the proxy settings from `settings.json` so PostQode connects directly to the internet.
+
+#### 🔐 1-Click Root CA Certificate Trust (Required for HTTPS Decryption)
+Because HTTPS traffic is encrypted with TLS, decrypting live LLM prompts requires trusting the proxy's local root CA certificate once on your computer.
+
+- **1-Click from UI/Sidebar**:
+  - Click **"🔐 Trust Certificate"** in the Setup Guide drawer or sidebar.
+  - An integrated terminal opens and runs the exact command for your operating system:
+    - **macOS (Terminal)**:
+      ```bash
+      sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "$HOME/.pq-dashboard/proxy-certs/certs/ca.pem"
+      ```
+    - **Windows (PowerShell)**:
+      ```powershell
+      Import-Certificate -FilePath "$HOME\.pq-dashboard\proxy-certs\certs\ca.pem" -CertStoreLocation Cert:\CurrentUser\Root
+      ```
+    - **Linux (Terminal)**:
+      ```bash
+      sudo cp "$HOME/.pq-dashboard/proxy-certs/certs/ca.pem" /usr/local/share/ca-certificates/pq-ca.crt && sudo update-ca-certificates
+      ```
+- **Persistent Global Location**: Certificates are stored permanently in `~/.pq-dashboard/proxy-certs`. They survive extension updates, reinstalls, and work seamlessly across VS Code, Insiders, Cursor, Windsurf, and standalone browser sessions.
 
 ---
 
-## Running the Dashboard
+### ⚙️ Sources & Configuration Management (Zero-Config + UI Control)
 
-### macOS / Linux (1-Click)
-```bash
-./start.sh
-```
+When sharing `pq-dashboard-1.0.0.vsix` with your team, team members **do not need access to the repository or manual `pq-config.yaml` editing**:
 
-### Windows (1-Click)
-Run in Command Prompt / PowerShell or double-click:
-```cmd
-start.cmd
-```
-*(Or double-click `start.bat`)*
+1. **Automatic Zero-Config Discovery**:
+   - On first launch, PQ Dashboard automatically scans the local system and discovers standard PostQode task storage paths for **VS Code**, **VS Code Insiders**, **Cursor**, **Windsurf**, and **Standalone PostQode** on **macOS, Windows, and Linux**.
+   - If task directories exist, they are enabled and parsed automatically out of the box.
 
-The Windows script automatically:
-1. Checks for Node.js and npm in your `PATH`.
-2. Runs `scripts/init-platform-config.js` to scan `%APPDATA%` and auto-configure `pq-config.yaml` with valid Windows IDE paths.
-3. Kills any stale processes on dashboard ports.
-4. Starts backend and frontend servers, then opens `http://localhost:5173` in your default browser.
+2. **Dedicated UI: "Sources & Setup" (`#/sources`)**:
+   - Accessible via the sidebar under **Configuration → Sources & Setup** or via Command Palette `Cmd+Shift+P` → **`PostQode: Configure Sources & Setup`**.
+   - **Configured Task Sources List**: View all active directories, task counts, and enable/disable individual sources with live toggle switches.
+   - **Auto-Detected IDEs**: Shows all IDE installations on the computer with 1-click `+ Add` buttons.
+   - **Add Custom Task Folder Form**:
+     - 📁 **Browse Folder**: Opens native OS directory picker dialog to select custom task folders.
+     - 🔍 **Test Path**: Tests any path (supporting `~` and environment variables) and reports whether the folder exists and how many tasks are inside before saving.
+     - 💾 **Add Source & Rescan**: Persists the source and immediately triggers an incremental background re-parse.
+   - **Network Proxy Card**: Shows live proxy routing status with 1-click enable/disable and certificate verification.
 
-### Manual Startup (Two Terminals)
-```bash
-# Terminal 1: Backend (port 3456)
-npm start
+3. **VS Code Sidebar & Commands**:
+   - In the PostQode Activity Bar view under **PostQode IDE Sources**:
+     - Click **`+ Add Custom Task Folder...`** (`pq.addSource`) to pick a folder using the native OS file picker.
+     - Click **`Manage Sources in Dashboard`** (`pq.openSources`) to jump directly to `#/sources`.
 
-# Terminal 2: Frontend dev server (port 5173)
-npm run dev
-```
+4. **Persistent User Configuration**:
+   - Custom sources and user toggles are stored in `~/.pq-dashboard/pq-config.yaml`.
+   - Updating or reinstalling the `.vsix` extension preserves all custom folders, toggles, and settings.
 
----
+## Out-of-the-Box Behavior: What to Expect When Sharing the .vsix
 
-## HTTPS / SSL Proxy Certificate Trust
+When you distribute `pq-dashboard-1.0.0.vsix` to a teammate or install it on a fresh machine:
 
-VS Code extensions run in separate processes and require trusting the proxy CA certificate for HTTPS interception:
-
-- **macOS (Terminal)**:
-  ```bash
-  sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "data/proxy-certs/certs/ca.pem"
-  ```
-- **Windows (Admin PowerShell)**:
-  ```powershell
-  Import-Certificate -FilePath "data\proxy-certs\certs\ca.pem" -CertStoreLocation Cert:\LocalMachine\Root
-  ```
+| Feature / Page | Works Out of the Box? | User Action Required |
+|----------------|------------------------|----------------------|
+| **17 Analytical Pages** (Task Timelines, Cost Tracking, Prompt Analytics, Context Reductions, Model Ranking, Diffs, Behavioral Testing, Error Classification, Scratch Inspector) | **YES — 100% Out of the Box** | None. Install the `.vsix` and all tasks across all installed IDEs (VS Code, Insiders, Cursor, Windsurf) are automatically scanned and visualized. |
+| **Network Inspector Studio** (Live MITM Proxy on `port 3457`) | **Requires 1-Click Activation** | 1. Click **"⚡ Auto-Configure Proxy"** in the sidebar or Network Studio.<br>2. Click **"🔐 Trust Certificate"** once to allow HTTPS decryption. |
 
 ---
 

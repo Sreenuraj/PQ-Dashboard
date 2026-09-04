@@ -15,6 +15,7 @@ import { renderTest } from './views/test.js';
 import { renderDeepCompare } from './views/deep-compare.js';
 import { renderNetwork } from './views/network.js';
 import { renderPromptAnalytics, silentRefreshPromptAnalytics } from './views/prompt-analytics.js';
+import { renderSources } from './views/sources.js';
 import { api }            from './api.js';
 import { getDateRange, initDatePicker } from './components/date-picker.js';
 import { applyChartTheme } from './components/charts.js';
@@ -44,6 +45,17 @@ if (themeToggle) {
   });
 }
 
+const openBrowserBtn = document.getElementById('open-in-browser-btn');
+if (openBrowserBtn) {
+  openBrowserBtn.addEventListener('click', () => {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({ type: 'openBrowser' }, '*');
+    } else {
+      window.open(window.location.origin, '_blank');
+    }
+  });
+}
+
 const container = document.getElementById('view-container');
 
 // ── Routes ──
@@ -67,6 +79,7 @@ const routes = {
   deepcompare: (p) => renderDeepCompare(container, p),
   network:     (p) => renderNetwork(container),
   'prompt-analytics': (p) => renderPromptAnalytics(container, p),
+  sources:     (p) => renderSources(container),
 };
 
 function currentView() {
@@ -120,6 +133,18 @@ window.addEventListener('daterange:change', () => {
 });
 
 window.addEventListener('hashchange', navigate);
+
+// Listen for navigation messages from VS Code extension host
+window.addEventListener('message', (e) => {
+  if (e.data?.type === 'navigate' && e.data.route) {
+    const targetHash = e.data.route.startsWith('#') ? e.data.route : `#/${e.data.route.replace(/^\/?#?\/?/, '')}`;
+    if (window.location.hash !== targetHash) {
+      window.location.hash = targetHash;
+    } else {
+      navigate();
+    }
+  }
+});
 
 // ── Refresh & Auto-Refresh Controls ──
 const refreshWidget = document.getElementById('refresh-widget');

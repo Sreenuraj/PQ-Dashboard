@@ -1,0 +1,16 @@
+.git/**
+.gitignore
+.DS_Store
+data/**
+docs/**
+src/**
+!src/img/logo.svg
+*.vsix
+*.log
+nodemon.json
+vite.config.js
+start.sh
+start.bat
+start.cmd
+scripts/**
+scratch/**

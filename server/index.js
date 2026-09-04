@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const http = require('http');
-const { loadConfig, saveConfig } = require('./config');
+const { loadConfig, saveConfig, getSourcesStatus, addSource, toggleSource, removeSource, validateSourcePath } = require('./config');
 const { runParser } = require('./parser/index');
 const { getDB } = require('./cache/db');
 const { loadModelRegistry, getAllModels, getModelInfo } = require('./model-registry');
@@ -50,6 +50,64 @@ app.put('/api/config', (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// ── Sources API ──
+app.get('/api/sources', (req, res) => {
+  try {
+    res.json(getSourcesStatus());
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/sources/validate', (req, res) => {
+  const { path: testPath } = req.body || {};
+  res.json(validateSourcePath(testPath || ''));
+});
+
+app.post('/api/sources', async (req, res) => {
+  try {
+    const result = addSource(req.body || {});
+    config = loadConfig();
+    res.json(result);
+    setImmediate(async () => {
+      try {
+        loadModelRegistry(config.sources);
+        await runParser(config);
+      } catch {}
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/sources/toggle', async (req, res) => {
+  const { index, enabled } = req.body || {};
+  const result = toggleSource(index, enabled);
+  if (!result.ok) return res.status(400).json(result);
+  config = loadConfig();
+  res.json(result);
+  setImmediate(async () => {
+    try {
+      loadModelRegistry(config.sources);
+      await runParser(config);
+    } catch {}
+  });
+});
+
+app.post('/api/sources/remove', async (req, res) => {
+  const { index } = req.body || {};
+  const result = removeSource(index);
+  if (!result.ok) return res.status(400).json(result);
+  config = loadConfig();
+  res.json(result);
+  setImmediate(async () => {
+    try {
+      loadModelRegistry(config.sources);
+      await runParser(config);
+    } catch {}
+  });
 });
 
 // POST /api/refresh — re-parse
@@ -105,10 +163,14 @@ server.listen(port, '0.0.0.0', async () => {
   const proxyConfig = config.proxy || {};
   if (proxyConfig.enabled !== false) {
     try {
+      const defaultCertsDir = path.join(require('os').homedir(), '.pq-dashboard', 'proxy-certs');
+      const rawCertsDir = proxyConfig.certs_dir || defaultCertsDir;
+      const resolvedCertsDir = path.resolve(rawCertsDir.replace(/^~/, require('os').homedir()));
+
       startProxy({
         port: proxyConfig.port || 3457,
-        buffer_size: proxyConfig.buffer_size || 500,
-        certs_dir: proxyConfig.certs_dir || './data/proxy-certs',
+        buffer_size: proxyConfig.buffer_size || 2000,
+        certs_dir: resolvedCertsDir,
         db, // wire in DB so proxy can persist captured system prompts
       });
     } catch (e) {

@@ -1,543 +1,14 @@
 import { api } from '../api.js';
-
-// ── Helpers ──
-function escHtml(s) {
-  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-function fmtBytes(bytes) {
-  if (!bytes || bytes === 0) return '0 B';
-  if (bytes < 1024) return bytes + ' B';
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-  return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
-}
-
-function fmtDuration(ms) {
-  if (!ms && ms !== 0) return '—';
-  if (ms < 1000) return ms + 'ms';
-  return (ms / 1000).toFixed(2) + 's';
-}
-
-function fmtTime(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  return d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
-    + '.' + String(d.getMilliseconds()).padStart(3, '0');
-}
-
-function methodClass(m) {
-  const map = { GET: 'green', POST: 'blue', PUT: 'yellow', PATCH: 'yellow', DELETE: 'red', OPTIONS: 'grey', HEAD: 'grey' };
-  return map[(m || '').toUpperCase()] || 'grey';
-}
-
-function statusClass(code) {
-  if (!code || code === 0) return 'red';
-  if (code < 300) return 'green';
-  if (code < 400) return 'blue';
-  if (code < 500) return 'yellow';
-  return 'red';
-}
-
-function tagLabel(tag) {
-  const labels = {
-    postqode: 'PostQode',
-    openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', cohere: 'Cohere',
-    mistral: 'Mistral', groq: 'Groq', deepseek: 'DeepSeek', together: 'Together',
-    fireworks: 'Fireworks', github: 'GitHub', copilot: 'Copilot', other: 'Other',
-  };
-  return labels[tag] || tag || 'Other';
-}
-
-function tagColorClass(tag) {
-  const map = {
-    postqode: 'accent',
-    openai: 'green', anthropic: 'purple', google: 'blue', cohere: 'cyan',
-    mistral: 'yellow', groq: 'accent', copilot: 'cyan', github: 'grey',
-  };
-  return map[tag] || 'grey';
-}
-
-function prettyJson(str) {
-  if (!str) return '';
-  try {
-    const parsed = JSON.parse(str);
-    return JSON.stringify(parsed, null, 2);
-  } catch {
-    return str;
-  }
-}
-
-function syntaxHighlight(json) {
-  if (!json) return '';
-  if (json.length > 60000) {
-    return escHtml(json);
-  }
-  return escHtml(json)
-    .replace(/"([^"]+)":/g, '<span class="json-key">"$1"</span>:')
-    .replace(/: "(.*?)"/g, ': <span class="json-string">"$1"</span>')
-    .replace(/: (\d+\.?\d*)/g, ': <span class="json-number">$1</span>')
-    .replace(/: (true|false)/g, ': <span class="json-bool">$1</span>')
-    .replace(/: (null)/g, ': <span class="json-null">$1</span>');
-}
-
-function getByteLength(str) {
-  if (!str) return 0;
-  if (typeof str !== 'string') return 0;
-  try {
-    return (new TextEncoder().encode(str)).length;
-  } catch {
-    return str.length;
-  }
-}
-
-function truncateUrl(url, maxLen = 80) {
-  if (!url) return '';
-  let clean = url.replace(/^https?:\/\//, '');
-  if (clean.length <= maxLen) return clean;
-  return clean.slice(0, maxLen) + '…';
-}
-
-function getEndpointTail(url, maxLen = 32) {
-  if (!url) return '';
-  try {
-    const u = new URL(url);
-    const pathname = u.pathname;
-    const search = u.search ? (u.search.length > 10 ? '?...' : u.search) : '';
-    const fullTarget = pathname + search;
-
-    if (fullTarget.length <= maxLen) return fullTarget;
-
-    const segments = pathname.split('/').filter(Boolean);
-    if (!segments.length) return u.host;
-
-    if (segments.length <= 2) {
-      const short = '/' + segments.join('/') + search;
-      return short.length <= maxLen ? short : '…' + short.slice(-(maxLen - 1));
-    }
-
-    let accumulated = '';
-    for (let i = segments.length - 1; i >= 0; i--) {
-      const candidate = '/' + segments.slice(i).join('/') + (accumulated === '' ? search : '');
-      if (candidate.length > maxLen - 2) {
-        if (accumulated) return '…' + accumulated;
-        return '…' + candidate.slice(-(maxLen - 2));
-      }
-      accumulated = candidate;
-    }
-    return '…' + accumulated;
-  } catch {
-    return url.length > maxLen ? '…' + url.slice(-(maxLen - 1)) : url;
-  }
-}
-
-function getParsedOrRawBody(bodyStr) {
-  if (!bodyStr) return null;
-  try {
-    return JSON.parse(bodyStr);
-  } catch {
-    return bodyStr;
-  }
-}
-
-function generateCurl(r) {
-  let cmd = `curl -X ${r.method} "${r.url}"`;
-  
-  if (r.requestHeaders) {
-    Object.entries(r.requestHeaders).forEach(([name, val]) => {
-      const safeVal = String(val).replace(/"/g, '\\"');
-      cmd += ` \\\n  -H "${name}: ${safeVal}"`;
-    });
-  }
-  
-  if (r.requestBody && r.method !== 'GET' && r.method !== 'HEAD') {
-    let parsed = getParsedOrRawBody(r.requestBody);
-    let bodyData = typeof parsed === 'object' ? JSON.stringify(parsed) : parsed;
-    const safeBody = String(bodyData).replace(/"/g, '\\"');
-    cmd += ` \\\n  -d "${safeBody}"`;
-  }
-  
-  return cmd;
-}
-
-function generateNodeFetch(r) {
-  const headers = { ...r.requestHeaders };
-  delete headers['host'];
-  delete headers['connection'];
-  delete headers['content-length'];
-  delete headers['accept-encoding'];
-
-  let code = `const response = await fetch("${r.url}", {\n`;
-  code += `  method: "${r.method}",\n`;
-  code += `  headers: ${JSON.stringify(headers, null, 2).replace(/\n/g, '\n  ')}`;
-  
-  if (r.requestBody && r.method !== 'GET' && r.method !== 'HEAD') {
-    let parsed = getParsedOrRawBody(r.requestBody);
-    const bodyStr = typeof parsed === 'object' ? JSON.stringify(parsed, null, 2) : `\`${parsed}\``;
-    code += `,\n  body: ${bodyStr.replace(/\n/g, '\n  ')}`;
-  }
-  code += `\n});\nconst data = await response.json();\nconsole.log(data);`;
-  return code;
-}
-
-function generateBrowserFetch(r) {
-  const headers = { ...r.requestHeaders };
-  delete headers['host'];
-  delete headers['connection'];
-  
-  let code = `fetch("${r.url}", {\n`;
-  code += `  method: "${r.method}",\n`;
-  code += `  headers: ${JSON.stringify(headers, null, 2).replace(/\n/g, '\n  ')}`;
-  
-  if (r.requestBody && r.method !== 'GET' && r.method !== 'HEAD') {
-    let parsed = getParsedOrRawBody(r.requestBody);
-    const bodyStr = typeof parsed === 'object' ? JSON.stringify(parsed, null, 2) : `\`${parsed}\``;
-    code += `,\n  body: ${bodyStr.replace(/\n/g, '\n  ')}`;
-  }
-  code += `\n})\n.then(res => res.json())\n.then(data => console.log(data));`;
-  return code;
-}
-
-function sortObjectKeys(obj) {
-  if (typeof obj !== 'object' || obj === null) return obj;
-  if (Array.isArray(obj)) return obj.map(sortObjectKeys);
-  const sorted = {};
-  Object.keys(obj).sort().forEach(k => {
-    sorted[k] = sortObjectKeys(obj[k]);
-  });
-  return sorted;
-}
-
-function getPrettified(val) {
-  if (!val) return '';
-  try {
-    const obj = JSON.parse(val);
-    return JSON.stringify(obj, null, 2);
-  } catch {
-    return val;
-  }
-}
-
-function diffLines(lines1, lines2) {
-  const n = lines1.length;
-  const m = lines2.length;
-  const dp = Array.from({ length: n + 1 }, () => Array(m + 1).fill(0));
-  for (let i = 1; i <= n; i++) {
-    for (let j = 1; j <= m; j++) {
-      if (lines1[i - 1] === lines2[j - 1]) {
-        dp[i][j] = dp[i - 1][j - 1] + 1;
-      } else {
-        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
-      }
-    }
-  }
-
-  let i = n;
-  let j = m;
-  const diff = [];
-  while (i > 0 || j > 0) {
-    if (i > 0 && j > 0 && lines1[i - 1] === lines2[j - 1]) {
-      diff.unshift({ type: 'unchanged', left: lines1[i - 1], right: lines2[j - 1] });
-      i--;
-      j--;
-    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-      diff.unshift({ type: 'added', left: null, right: lines2[j - 1] });
-      j--;
-    } else {
-      diff.unshift({ type: 'removed', left: lines1[i - 1], right: null });
-      i--;
-    }
-  }
-  return diff;
-}
-
-function extractSystemPromptStart(bodyStr) {
-  if (!bodyStr || typeof bodyStr !== 'string') return null;
-  try {
-    const parsed = JSON.parse(bodyStr);
-    if (Array.isArray(parsed.messages) && parsed.messages[0]?.role === 'system') {
-      const c = parsed.messages[0].content;
-      if (typeof c === 'string') return c;
-      if (Array.isArray(c)) {
-        return c.map(b => (typeof b === 'string' ? b : (b?.text || ''))).join('\n');
-      }
-    }
-    if (typeof parsed.system === 'string') return parsed.system;
-    if (Array.isArray(parsed.system)) {
-      return parsed.system.map(b => (typeof b === 'string' ? b : (b?.text || ''))).join('\n');
-    }
-  } catch (e) {
-    const m = bodyStr.match(/"role"\s*:\s*"system"[\s\S]*?"content"\s*:\s*(?:"([^"\\]*(?:\\.[^"\\]*)*)"|\[\s*\{\s*"(?:type"\s*:\s*"text"\s*,\s*"text|"text)"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)")/i);
-    if (m) {
-      const raw = m[1] || m[2];
-      try { return JSON.parse('"' + raw + '"'); } catch { return raw; }
-    }
-    const mSys = bodyStr.match(/"system"\s*:\s*(?:"([^"\\]*(?:\\.[^"\\]*)*)")/i);
-    if (mSys) {
-      try { return JSON.parse('"' + mSys[1] + '"'); } catch { return mSys[1]; }
-    }
-    const mYouAre = bodyStr.match(/"(You are [^"\r\n\\]+)/i);
-    if (mYouAre) {
-      return mYouAre[1];
-    }
-  }
-  return null;
-}
-
-function extractAgentLabel(systemText) {
-  if (!systemText || typeof systemText !== 'string') return null;
-
-  let cleanText = systemText.trim();
-  const identityMatch = cleanText.match(/<identity>([\s\S]*?)<\/identity>/i);
-  if (identityMatch) {
-    cleanText = identityMatch[1].trim();
-  }
-
-  const lines = cleanText.split('\n').map(l => l.trim()).filter(Boolean);
-  if (!lines.length) return null;
-  const firstLine = lines[0].replace(/^[#*_\s-]+/, '').replace(/[*_]+$/, '').trim();
-
-  // 1. PostQode Subagent check (MUST be on the first line / identity)
-  if (/^you are (?:the )?postqode subagent\b/i.test(firstLine) || /^postqode subagent\b/i.test(firstLine)) {
-    return 'PostQode Subagent';
-  }
-
-  // 2. Generic Subagent declared on the first line
-  if (/^you are (?:an? )?(?:autonomous )?(?:specialized )?([a-z0-9_-]+\s+subagent|subagent)\b/i.test(firstLine)) {
-    const m = firstLine.match(/^you are (?:an? )?(?:autonomous )?(?:specialized )?([a-z0-9_-]+\s+subagent|subagent)\b/i);
-    return m ? m[1].replace(/\b\w/g, c => c.toUpperCase()) : 'Subagent';
-  }
-
-  // 3. PostQode Main Agent check (MUST be at the start of the first line)
-  if (/^you are postqode\b/i.test(firstLine) || /^postqode\b/i.test(firstLine)) {
-    return 'PostQode';
-  }
-
-  // 4. Explicit Role/Agent/Identity keywords on line 1
-  const roleMatch = firstLine.match(/^(?:role|agent|identity|system|persona|name):\s*([^,.\n]+)/i);
-  if (roleMatch) {
-    return roleMatch[1].trim();
-  }
-
-  // 5. 'You are [Name], a/an...' on line 1
-  const youAreMatch = firstLine.match(/^you are (?:an? )?([^,.]+)/i);
-  if (youAreMatch) {
-    const raw = youAreMatch[1].trim();
-    if (/^helpful (?:ai )?assistant/i.test(raw)) return 'Assistant';
-    if (/^autonomous specialized ai worker/i.test(raw)) return 'Subagent';
-    if (raw && !/^(?:ai|model|llm|large language model)\b/i.test(raw) && raw.length < 35) {
-      return raw.replace(/\b\w/g, c => c.toUpperCase());
-    }
-  }
-
-  return null;
-}
-
-// ── Client-Side Dynamic Subagent Registry ────────────────────────────────
-const clientSubagentRegistry = []; // { index: number, snippet: string }
-const clientDynamicSubagentMap = new Map();
-let clientNextSubagentIndex = 1;
-
-function registerClientParentPrompts(responseBody) {
-  if (!responseBody || typeof responseBody !== 'string' || !responseBody.includes('subagent')) return;
-  let fullArgs = '';
-  if (responseBody.includes('data: ')) {
-    const lines = responseBody.split('\n');
-    for (const line of lines) {
-      if (line.startsWith('data: ') && !line.includes('[DONE]')) {
-        try {
-          const data = JSON.parse(line.slice(6));
-          const delta = data.choices?.[0]?.delta;
-          if (delta?.tool_calls) {
-            for (const tc of delta.tool_calls) {
-              if (tc.function?.arguments) fullArgs += tc.function.arguments;
-            }
-          }
-        } catch {}
-      }
-    }
-  }
-  if (!fullArgs) {
-    try {
-      const resJson = JSON.parse(responseBody);
-      const tc = resJson.choices?.[0]?.message?.tool_calls?.find(t => /subagent/i.test(t.function?.name || ''));
-      if (tc?.function?.arguments) fullArgs = tc.function.arguments;
-    } catch {}
-  }
-  if (fullArgs) {
-    try {
-      const parsed = typeof fullArgs === 'object' ? fullArgs : JSON.parse(fullArgs);
-      for (const [k, v] of Object.entries(parsed)) {
-        if (typeof v === 'string' && v.trim().length > 10) {
-          const numMatch = k.match(/\d+/);
-          const idx = numMatch ? parseInt(numMatch[0], 10) : clientSubagentRegistry.length + 1;
-          const snippet = v.trim().slice(0, 100);
-          if (!clientSubagentRegistry.some(p => p.index === idx && p.snippet === snippet)) {
-            clientSubagentRegistry.push({ index: idx, snippet });
-          }
-        }
-      }
-    } catch {}
-  }
-}
-
-function resolveClientSubagentIndex(userPromptText) {
-  if (!userPromptText || typeof userPromptText !== 'string') return null;
-  const cleanPrompt = userPromptText.trim();
-  for (const p of clientSubagentRegistry) {
-    if (cleanPrompt.includes(p.snippet) || p.snippet.includes(cleanPrompt.slice(0, 80))) {
-      return p.index;
-    }
-  }
-  const taskKey = cleanPrompt.slice(0, 150).replace(/\s+/g, ' ');
-  if (!clientDynamicSubagentMap.has(taskKey)) {
-    clientDynamicSubagentMap.set(taskKey, clientNextSubagentIndex++);
-  }
-  return clientDynamicSubagentMap.get(taskKey);
-}
-
-function getAgentLabel(r) {
-  if (!r) return null;
-  if (r._cachedAgentLabel !== undefined) return r._cachedAgentLabel;
-
-  // 1. If server or record already assigned 'Subagent 1', 'Subagent 2', etc.
-  if (r.agentLabel && /^Subagent \d+$/i.test(r.agentLabel)) {
-    r._cachedAgentLabel = r.agentLabel;
-    return r.agentLabel;
-  }
-  if (r.subagentIndex) {
-    const label = `Subagent ${r.subagentIndex}`;
-    r._cachedAgentLabel = label;
-    return label;
-  }
-
-  let label = null;
-  if (r.requestBody) {
-    const sysText = extractSystemPromptStart(r.requestBody);
-    if (sysText) {
-      label = extractAgentLabel(sysText);
-    }
-  }
-  if (!label && r.agentLabel) {
-    label = r.agentLabel;
-  }
-
-  // 2. If identified as subagent, resolve to dynamic Subagent 1, Subagent 2, etc.
-  if (label && /subagent/i.test(label)) {
-    let uText = '';
-    try {
-      const parsed = typeof r.requestBody === 'object' ? r.requestBody : JSON.parse(r.requestBody);
-      const uMsg = parsed.messages?.find(m => m.role === 'user');
-      if (uMsg) {
-        uText = typeof uMsg.content === 'string' ? uMsg.content : (Array.isArray(uMsg.content) ? uMsg.content.map(c => c.text || '').join(' ') : '');
-      }
-    } catch {}
-    const subIdx = resolveClientSubagentIndex(uText);
-    if (subIdx) {
-      label = `Subagent ${subIdx}`;
-    }
-  }
-
-  r._cachedAgentLabel = label;
-  return label;
-}
-
-function calculateUsageAndCost(r) {
-  if (!r.responseBody) return null;
-
-  let reqJson = null;
-  let resJson = null;
-  
-  try { reqJson = JSON.parse(r.requestBody); } catch {}
-  try { resJson = JSON.parse(r.responseBody); } catch {}
-  
-  if (!resJson) return null;
-
-  // Extract model name
-  const model = reqJson?.model || resJson?.model || '';
-  if (!model) return null;
-
-  // Extract token counts
-  let inputTokens = 0;
-  let outputTokens = 0;
-  
-  if (resJson.usage) {
-    inputTokens = resJson.usage.prompt_tokens || resJson.usage.input_tokens || 0;
-    outputTokens = resJson.usage.completion_tokens || resJson.usage.output_tokens || 0;
-  } else if (resJson.usageMetadata) {
-    inputTokens = resJson.usageMetadata.promptTokenCount || 0;
-    outputTokens = resJson.usageMetadata.candidatesTokenCount || 0;
-  }
-
-  const totalTokens = inputTokens + outputTokens;
-  if (totalTokens === 0) return null;
-
-  // Simple pricing database (Rates per 1M tokens in USD)
-  let inputRate = 1.0; // fallback $1.00 / 1M
-  let outputRate = 3.0; // fallback $3.00 / 1M
-  const m = model.toLowerCase();
-
-  if (m.includes('gpt-4o-mini')) {
-    inputRate = 0.15;
-    outputRate = 0.60;
-  } else if (m.includes('gpt-4o')) {
-    inputRate = 5.00;
-    outputRate = 15.00;
-  } else if (m.includes('o1-mini')) {
-    inputRate = 3.00;
-    outputRate = 12.00;
-  } else if (m.includes('o1-')) {
-    inputRate = 15.00;
-    outputRate = 60.00;
-  } else if (m.includes('gpt-4')) {
-    inputRate = 10.00;
-    outputRate = 30.00;
-  } else if (m.includes('gpt-3.5')) {
-    inputRate = 0.50;
-    outputRate = 1.50;
-  } else if (m.includes('claude-3-5-sonnet') || m.includes('claude-3.5-sonnet')) {
-    inputRate = 3.00;
-    outputRate = 15.00;
-  } else if (m.includes('claude-3-opus')) {
-    inputRate = 15.00;
-    outputRate = 75.00;
-  } else if (m.includes('claude-3-haiku')) {
-    inputRate = 0.25;
-    outputRate = 1.25;
-  } else if (m.includes('gemini-1.5-flash')) {
-    inputRate = 0.075;
-    outputRate = 0.30;
-  } else if (m.includes('gemini-1.5-pro')) {
-    inputRate = 1.25;
-    outputRate = 5.00;
-  } else if (m.includes('deepseek')) {
-    inputRate = 0.14;
-    outputRate = 0.28;
-  }
-
-  const cost = (inputTokens * inputRate / 1000000) + (outputTokens * outputRate / 1000000);
-
-  return {
-    model,
-    inputTokens,
-    outputTokens,
-    totalTokens,
-    cost
-  };
-}
-
-function safeGetStorage(key, fallback = '') {
-  try {
-    return typeof localStorage !== 'undefined' ? (localStorage.getItem(key) || fallback) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function safeSetStorage(key, val) {
-  try {
-    if (typeof localStorage !== 'undefined') localStorage.setItem(key, val);
-  } catch {}
-}
+import {
+  escHtml, fmtBytes, fmtDuration, fmtTime, methodClass, statusClass, tagLabel, tagColorClass,
+  prettyJson, syntaxHighlight, getByteLength, truncateUrl, getEndpointTail, getParsedOrRawBody,
+  generateCurl, generateNodeFetch, generateBrowserFetch, sortObjectKeys, getPrettified, diffLines,
+  extractSystemPromptStart, extractAgentLabel
+} from './network/helpers.js';
+import {
+  registerClientParentPrompts, resolveClientSubagentIndex, getAgentLabel,
+  calculateUsageAndCost, safeGetStorage, safeSetStorage
+} from './network/subagents.js';
 
 // ── State ──
 let ws = null;
@@ -1190,6 +661,23 @@ function openDrawer(name) {
   document.getElementById('network-setup-btn')?.classList.toggle('active', name === 'setup');
   document.getElementById('network-mocks-btn')?.classList.toggle('active', name === 'mocks');
   document.getElementById('network-intercept-btn')?.classList.toggle('active', name === 'intercept');
+
+  if (name === 'setup') {
+    fetch('/api/network/proxy/ide-status')
+      .then(r => r.json())
+      .then(data => {
+        const pill = document.getElementById('network-proxy-status-pill');
+        if (pill) {
+          if (data.anyConfigured) {
+            pill.className = 'status-pill success';
+            pill.textContent = '🟢 Proxy Active (127.0.0.1:3457)';
+          } else {
+            pill.className = 'status-pill';
+            pill.textContent = '⚪ Direct (No Proxy)';
+          }
+        }
+      }).catch(() => {});
+  }
 }
 
 function closeDrawer() {
@@ -1406,9 +894,17 @@ export async function renderNetwork(container) {
                 <div class="empty-state" style="padding:40px 20px;min-height:auto">
                   <div class="icon">📡</div>
                   <p>Waiting for network traffic…</p>
-                  <p style="margin-top:6px;font-size:11px;color:var(--text-3)">
-                    Ensure VS Code proxy is pointing to port ${status.port || 3457}. Click Setup Guide above for step-by-step help.
+                  <p style="margin-top:6px;font-size:11px;color:var(--text-3);max-width:440px;margin-left:auto;margin-right:auto">
+                    Ensure VS Code proxy is pointing to port <code>${status.port || 3457}</code>. Click below to automatically configure settings.json in 1 click.
                   </p>
+                  <div style="display:flex;gap:8px;margin-top:14px;justify-content:center;flex-wrap:wrap">
+                    <button id="empty-auto-config-btn" class="action-btn primary" style="font-size:11px;padding:6px 14px">
+                      ⚡ 1-Click Auto-Configure Proxy
+                    </button>
+                    <button id="empty-setup-guide-btn" class="action-btn secondary" style="font-size:11px;padding:6px 14px">
+                      ❓ Open Setup Guide
+                    </button>
+                  </div>
                 </div>
               </td></tr>
             </tbody>
@@ -1474,15 +970,38 @@ export async function renderNetwork(container) {
         <button class="network-control-btn network-drawer-close" title="Close">✕</button>
       </div>
       <div class="network-drawer-body">
+        <!-- 1-Click Auto-Configuration Action Bar -->
+        <div class="network-setup-quick-actions" style="margin-bottom:16px;padding:12px 14px;background:var(--bg-2);border-radius:var(--radius-sm);border:1px solid var(--border)">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+            <span style="font-weight:600;font-size:12.5px;color:var(--text);display:flex;align-items:center;gap:6px">
+              ⚡ 1-Click Auto-Configuration
+            </span>
+            <span id="network-proxy-status-pill" class="status-pill info" style="font-size:10px">Checking IDEs...</span>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button id="btn-auto-config-proxy" class="action-btn primary" style="font-size:11px;padding:6px 12px">
+              ⚡ Auto-Configure Proxy
+            </button>
+            <button id="btn-disable-proxy" class="action-btn secondary" style="font-size:11px;padding:6px 12px">
+              🛑 Disable Proxy
+            </button>
+            <button id="btn-trust-ca-cert" class="action-btn secondary" style="font-size:11px;padding:6px 12px">
+              🔐 Trust Certificate
+            </button>
+          </div>
+          <div id="network-auto-config-msg" style="font-size:11px;color:var(--text-3);margin-top:8px;display:none"></div>
+        </div>
+
         <p style="font-size:12px;color:var(--text-2);margin-top:0;margin-bottom:14px">
-          Configure VS Code to route AI requests through the local MITM proxy on port <code>${status.port || 3457}</code>.
+          Route PostQode AI requests through the local MITM proxy on port <code>${status.port || 3457}</code> to inspect live prompts and network payloads.
         </p>
+
         <div class="network-setup-steps" style="display:flex;flex-direction:column;gap:12px">
           <div class="setup-step">
             <div class="setup-step-num">1</div>
             <div class="setup-step-content">
               <strong>Open VS Code Settings</strong>
-              <p>Press <code>Cmd + ,</code> (or <code>Ctrl + ,</code> on Windows/Linux)</p>
+              <p>Press <code>Cmd + ,</code> (or <code>Ctrl + ,</code> on Windows/Linux) or edit <code>settings.json</code> directly.</p>
             </div>
           </div>
           <div class="setup-step">
@@ -1491,7 +1010,7 @@ export async function renderNetwork(container) {
               <strong>Set HTTP Proxy</strong>
               <p>Search for <code>http.proxy</code> and set value to:</p>
               <div class="setup-code-block">
-                <code id="proxy-url-value">http://localhost:${status.port || 3457}</code>
+                <code id="proxy-url-value">http://127.0.0.1:${status.port || 3457}</code>
                 <button id="copy-proxy-url" class="setup-copy-btn" title="Copy">📋</button>
               </div>
             </div>
@@ -1500,55 +1019,62 @@ export async function renderNetwork(container) {
             <div class="setup-step-num">3</div>
             <div class="setup-step-content">
               <strong>Disable Strict SSL</strong>
-              <p>Search for <code>http.proxyStrictSSL</code> and <strong>uncheck</strong> it (set to <code>false</code>)</p>
+              <p>Search for <code>http.proxyStrictSSL</code> and <strong>uncheck</strong> it (set to <code>false</code>).</p>
             </div>
           </div>
           <div class="setup-step">
             <div class="setup-step-num">4</div>
             <div class="setup-step-content">
-              <strong>Configure Proxy Bypass</strong>
-              <p>Search for <code>http.noProxy</code> and add: <code>localhost, 127.0.0.1</code> to prevent proxying local IPC</p>
+              <strong>Configure Proxy Bypass (noProxy)</strong>
+              <p>Ensure telemetry and local IPC bypass the proxy:</p>
+              <div class="setup-code-block">
+                <code id="noproxy-url-value" style="word-break: break-all;">localhost, 127.0.0.1, us.i.posthog.com, mobile.events.data.microsoft.com, main.vscode-cdn.net</code>
+                <button id="copy-noproxy-url" class="setup-copy-btn" title="Copy">📋</button>
+              </div>
             </div>
           </div>
           <div class="setup-step">
             <div class="setup-step-num">5</div>
             <div class="setup-step-content" style="width: 100%;">
-              <strong>Handle Extension Auth & TLS Trust</strong>
+              <strong>Trust Root CA Certificate (One-Time for HTTPS)</strong>
               <div style="margin-top: 8px; display: flex; flex-direction: column; gap: 10px;">
                 <div>
-                  <span style="font-size: 10.5px; color: var(--text-3); font-weight: bold; display: block;">Option A: Trust CA Certificate in macOS (Recommended)</span>
+                  <span style="font-size: 10.5px; color: var(--text-3); font-weight: bold; display: block;">🍎 macOS (Terminal)</span>
                   <div class="setup-code-block" style="margin-top: 4px;">
-                    <code id="macos-trust-cmd-value" style="word-break: break-all;">sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "${status.ca_cert_path || ''}"</code>
+                    <code id="macos-trust-cmd-value" style="word-break: break-all;">sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "${status.ca_cert_path || '$HOME/.pq-dashboard/proxy-certs/certs/ca.pem'}"</code>
                     <button id="copy-macos-trust-cmd" class="setup-copy-btn" title="Copy">📋</button>
                   </div>
                 </div>
                 <div>
-                  <span style="font-size: 10.5px; color: var(--text-3); font-weight: bold; display: block;">Option B: Launch VS Code with Node Certificate Trust</span>
+                  <span style="font-size: 10.5px; color: var(--text-3); font-weight: bold; display: block;">🔌 Windows (PowerShell)</span>
                   <div class="setup-code-block" style="margin-top: 4px;">
-                    <code id="env-var-secure-value" style="word-break: break-all;">NODE_EXTRA_CA_CERTS="${status.ca_cert_path || ''}" code</code>
-                    <button id="copy-env-var-secure" class="setup-copy-btn" title="Copy">📋</button>
+                    <code id="win-trust-cmd-value" style="word-break: break-all;">Import-Certificate -FilePath "${status.ca_cert_path || '$HOME\\.pq-dashboard\\proxy-certs\\certs\\ca.pem'}" -CertStoreLocation Cert:\CurrentUser\Root</code>
+                    <button id="copy-win-trust-cmd" class="setup-copy-btn" title="Copy">📋</button>
                   </div>
                 </div>
                 <div>
-                  <span style="font-size: 10.5px; color: var(--text-3); font-weight: bold; display: block;">Option C: Ignore Validation (Quick local bypass)</span>
+                  <span style="font-size: 10.5px; color: var(--text-3); font-weight: bold; display: block;">🐧 Linux (Terminal)</span>
                   <div class="setup-code-block" style="margin-top: 4px;">
-                    <code id="env-var-easy-value" style="word-break: break-all;">NODE_TLS_REJECT_UNAUTHORIZED=0 code</code>
-                    <button id="copy-env-var-easy" class="setup-copy-btn" title="Copy">📋</button>
+                    <code id="linux-trust-cmd-value" style="word-break: break-all;">sudo cp "${status.ca_cert_path || '$HOME/.pq-dashboard/proxy-certs/certs/ca.pem'}" /usr/local/share/ca-certificates/pq-ca.crt &amp;&amp; sudo update-ca-certificates</code>
+                    <button id="copy-linux-trust-cmd" class="setup-copy-btn" title="Copy">📋</button>
                   </div>
                 </div>
               </div>
             </div>
           </div>
         </div>
-        <div class="setup-json-block" style="margin-top:16px">
-          <p style="font-size:11px;color:var(--text-3);margin-bottom:6px">Or paste this into your <code>settings.json</code>:</p>
+        <div class="setup-json-block" style="margin-top:16px;position:relative">
+          <p style="font-size:11px;color:var(--text-3);margin-bottom:6px">Or paste this into your IDE's <code>settings.json</code>:</p>
           <pre class="setup-json-pre"><code id="settings-json-value">{
-  "http.proxy": "http://localhost:${status.port || 3457}",
+  "http.proxy": "http://127.0.0.1:${status.port || 3457}",
   "http.proxyStrictSSL": false,
+  "http.proxySupport": "override",
   "http.noProxy": [
     "localhost",
     "127.0.0.1",
-    "api.postqode.ai"
+    "us.i.posthog.com",
+    "mobile.events.data.microsoft.com",
+    "main.vscode-cdn.net"
   ]
 }</code></pre>
           <button id="copy-settings-json" class="setup-copy-btn" title="Copy JSON" style="position:absolute;top:8px;right:8px">📋</button>
@@ -1924,11 +1450,204 @@ function bindToolbarEvents(status) {
     });
   }
 
-  // Copy buttons in Setup Drawer
+  // ── Setup Drawer 1-Click Actions & Copy Buttons ──
+  async function checkAndRefreshIdeProxyStatus() {
+    const pill = document.getElementById('network-proxy-status-pill');
+    const autoBtn = document.getElementById('btn-auto-config-proxy');
+    const emptyAutoBtn = document.getElementById('empty-auto-config-btn');
+    const trustBtn = document.getElementById('btn-trust-ca-cert');
+
+    try {
+      const [ideRes, certRes] = await Promise.all([
+        fetch('/api/network/proxy/ide-status').then(r => r.json()),
+        fetch('/api/network/proxy/trust-cert').then(r => r.json()).catch(() => ({})),
+      ]);
+
+      if (ideRes.anyConfigured) {
+        if (pill) {
+          pill.className = 'status-pill success';
+          pill.textContent = '🟢 Proxy Active (127.0.0.1:3457)';
+        }
+        if (autoBtn) {
+          autoBtn.textContent = '✓ Proxy Configured';
+          autoBtn.title = 'Proxy is already configured in settings.json';
+        }
+        if (emptyAutoBtn) {
+          emptyAutoBtn.textContent = '✓ Proxy Configured';
+          emptyAutoBtn.title = 'Proxy is already configured in settings.json';
+        }
+      } else {
+        if (pill) {
+          pill.className = 'status-pill';
+          pill.textContent = '⚪ Direct (No Proxy)';
+        }
+        if (autoBtn) {
+          autoBtn.textContent = '⚡ Auto-Configure Proxy';
+          autoBtn.title = 'Add proxy settings to settings.json';
+        }
+        if (emptyAutoBtn) {
+          emptyAutoBtn.textContent = '⚡ 1-Click Auto-Configure Proxy';
+          emptyAutoBtn.title = 'Add proxy settings to settings.json';
+        }
+      }
+
+      if (certRes.isTrusted && trustBtn) {
+        trustBtn.textContent = '✅ Certificate Trusted';
+        trustBtn.style.borderColor = 'rgba(16, 185, 129, 0.4)';
+        trustBtn.style.color = '#10b981';
+        trustBtn.title = 'Proxy CA Certificate is already trusted in your system trust store.';
+      } else if (trustBtn) {
+        trustBtn.textContent = '🔐 Trust Certificate';
+        trustBtn.style.borderColor = '';
+        trustBtn.style.color = '';
+        trustBtn.title = 'Install proxy root certificate into OS trust store';
+      }
+    } catch {
+      if (pill) pill.textContent = '⚪ Direct';
+    }
+  }
+
+  const handleAutoConfigure = async () => {
+    const msgEl = document.getElementById('network-auto-config-msg');
+    if (msgEl) {
+      msgEl.style.display = 'block';
+      msgEl.style.color = '#818cf8';
+      msgEl.textContent = 'Checking configuration...';
+    }
+
+    try {
+      // First check status: if already configured, do not touch!
+      const statusRes = await fetch('/api/network/proxy/ide-status').then(r => r.json());
+      if (statusRes.anyConfigured) {
+        const configuredNames = statusRes.ides.filter(i => i.isConfigured).map(i => i.name);
+        if (msgEl) {
+          msgEl.style.color = '#10b981';
+          msgEl.textContent = `ℹ️ Proxy is already configured in: ${configuredNames.join(', ')} (127.0.0.1:3457). No changes needed.`;
+        }
+        checkAndRefreshIdeProxyStatus();
+        return;
+      }
+
+      try {
+        window.parent?.postMessage({ type: 'enableProxy' }, '*');
+      } catch {}
+
+      const res = await fetch('/api/network/proxy/auto-configure', { method: 'POST' });
+      const data = await res.json();
+      if (data.ok && data.modified?.length) {
+        if (msgEl) {
+          msgEl.style.color = '#10b981';
+          msgEl.textContent = `✅ Proxy configured in: ${data.modified.join(', ')}! (127.0.0.1:3457)`;
+        }
+      } else {
+        if (msgEl) {
+          msgEl.style.color = '#10b981';
+          msgEl.textContent = '✅ VS Code Proxy settings applied!';
+        }
+      }
+      checkAndRefreshIdeProxyStatus();
+    } catch (err) {
+      if (msgEl) {
+        msgEl.style.color = '#ef4444';
+        msgEl.textContent = `Error: ${err.message}`;
+      }
+    }
+  };
+
+  const handleDisableProxy = async () => {
+    const msgEl = document.getElementById('network-auto-config-msg');
+    if (msgEl) {
+      msgEl.style.display = 'block';
+      msgEl.style.color = '#818cf8';
+      msgEl.textContent = 'Checking configuration...';
+    }
+
+    try {
+      const statusRes = await fetch('/api/network/proxy/ide-status').then(r => r.json());
+      if (!statusRes.anyConfigured) {
+        if (msgEl) {
+          msgEl.style.color = '#94a3b8';
+          msgEl.textContent = 'ℹ️ Proxy is not configured. PostQode is already connecting directly.';
+        }
+        checkAndRefreshIdeProxyStatus();
+        return;
+      }
+
+      try {
+        window.parent?.postMessage({ type: 'disableProxy' }, '*');
+      } catch {}
+
+      const res = await fetch('/api/network/proxy/disable', { method: 'POST' });
+      await res.json();
+      if (msgEl) {
+        msgEl.style.color = '#94a3b8';
+        msgEl.textContent = '🛑 Proxy disabled. PostQode now connects directly to the internet.';
+      }
+      checkAndRefreshIdeProxyStatus();
+    } catch (err) {
+      if (msgEl) {
+        msgEl.style.color = '#ef4444';
+        msgEl.textContent = `Error: ${err.message}`;
+      }
+    }
+  };
+
+  const handleTrustCert = async () => {
+    const msgEl = document.getElementById('network-auto-config-msg');
+    try {
+      const certRes = await fetch('/api/network/proxy/trust-cert').then(r => r.json());
+      if (certRes.isTrusted) {
+        if (msgEl) {
+          msgEl.style.display = 'block';
+          msgEl.style.color = '#10b981';
+          msgEl.textContent = '✅ Proxy CA Certificate is already trusted in your system Keychain! HTTPS decryption is active.';
+        }
+        return;
+      }
+
+      try {
+        window.parent?.postMessage({ type: 'trustCertificate' }, '*');
+      } catch {}
+
+      if (certRes.command) {
+        await navigator.clipboard.writeText(certRes.command);
+      }
+      if (msgEl) {
+        msgEl.style.display = 'block';
+        msgEl.style.color = '#10b981';
+        msgEl.textContent = `🔐 Trust command copied to clipboard! (Path: ${certRes.caPath || ''})`;
+      }
+    } catch (err) {
+      if (msgEl) {
+        msgEl.style.display = 'block';
+        msgEl.style.color = '#ef4444';
+        msgEl.textContent = `Error: ${err.message}`;
+      }
+    }
+  };
+
+  document.getElementById('btn-auto-config-proxy')?.addEventListener('click', handleAutoConfigure);
+  document.getElementById('empty-auto-config-btn')?.addEventListener('click', handleAutoConfigure);
+  document.getElementById('btn-disable-proxy')?.addEventListener('click', handleDisableProxy);
+  document.getElementById('btn-trust-ca-cert')?.addEventListener('click', handleTrustCert);
+
+  document.getElementById('empty-setup-guide-btn')?.addEventListener('click', () => {
+    openDrawer('setup');
+    checkAndRefreshIdeProxyStatus();
+  });
+
   document.getElementById('copy-proxy-url')?.addEventListener('click', () => {
     const val = document.getElementById('proxy-url-value')?.textContent || '';
     navigator.clipboard.writeText(val).then(() => {
       const btn = document.getElementById('copy-proxy-url');
+      if (btn) { btn.textContent = '✓'; setTimeout(() => { btn.textContent = '📋'; }, 1500); }
+    });
+  });
+
+  document.getElementById('copy-noproxy-url')?.addEventListener('click', () => {
+    const val = document.getElementById('noproxy-url-value')?.textContent || '';
+    navigator.clipboard.writeText(val).then(() => {
+      const btn = document.getElementById('copy-noproxy-url');
       if (btn) { btn.textContent = '✓'; setTimeout(() => { btn.textContent = '📋'; }, 1500); }
     });
   });
@@ -1941,26 +1660,26 @@ function bindToolbarEvents(status) {
     });
   });
 
-  document.getElementById('copy-env-var-easy')?.addEventListener('click', () => {
-    const val = document.getElementById('env-var-easy-value')?.textContent || '';
-    navigator.clipboard.writeText(val).then(() => {
-      const btn = document.getElementById('copy-env-var-easy');
-      if (btn) { btn.textContent = '✓'; setTimeout(() => { btn.textContent = '📋'; }, 1500); }
-    });
-  });
-
-  document.getElementById('copy-env-var-secure')?.addEventListener('click', () => {
-    const val = document.getElementById('env-var-secure-value')?.textContent || '';
-    navigator.clipboard.writeText(val).then(() => {
-      const btn = document.getElementById('copy-env-var-secure');
-      if (btn) { btn.textContent = '✓'; setTimeout(() => { btn.textContent = '📋'; }, 1500); }
-    });
-  });
-
   document.getElementById('copy-macos-trust-cmd')?.addEventListener('click', () => {
     const val = document.getElementById('macos-trust-cmd-value')?.textContent || '';
     navigator.clipboard.writeText(val).then(() => {
       const btn = document.getElementById('copy-macos-trust-cmd');
+      if (btn) { btn.textContent = '✓'; setTimeout(() => { btn.textContent = '📋'; }, 1500); }
+    });
+  });
+
+  document.getElementById('copy-win-trust-cmd')?.addEventListener('click', () => {
+    const val = document.getElementById('win-trust-cmd-value')?.textContent || '';
+    navigator.clipboard.writeText(val).then(() => {
+      const btn = document.getElementById('copy-win-trust-cmd');
+      if (btn) { btn.textContent = '✓'; setTimeout(() => { btn.textContent = '📋'; }, 1500); }
+    });
+  });
+
+  document.getElementById('copy-linux-trust-cmd')?.addEventListener('click', () => {
+    const val = document.getElementById('linux-trust-cmd-value')?.textContent || '';
+    navigator.clipboard.writeText(val).then(() => {
+      const btn = document.getElementById('copy-linux-trust-cmd');
       if (btn) { btn.textContent = '✓'; setTimeout(() => { btn.textContent = '📋'; }, 1500); }
     });
   });

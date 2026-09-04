@@ -240,3 +240,18 @@ function escHtml(s) {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 }
+
+/**
+ * Click-to-Source Bridge: Signals parent VS Code Webview to open the file in the editor
+ */
+export function openInEditor(filePath, line = 1) {
+  if (!filePath) return;
+  if (window.parent && window.parent !== window) {
+    window.parent.postMessage({ type: 'openFile', filePath, line }, '*');
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.openInEditor = openInEditor;
+}
+
