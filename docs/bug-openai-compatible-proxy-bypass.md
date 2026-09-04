@@ -70,7 +70,7 @@ The expectation is reasonable: VSCode's `http.proxy` setting is the standard, do
 | 1 | Verified `settings.json` has `http.proxy: http://localhost:3457`, `http.proxyStrictSSL: false`, and Azure host is **not** in `http.noProxy`. | ✅ Settings correct. Still not captured. |
 | 2 | Verified the dashboard MITM cert for `pq-postqode-resource.services.ai.azure.com` exists at `data/proxy-certs/certs/pq-postqode-resource.services.ai.azure.com.pem` — so MITM TLS for that host would succeed. | ✅ Cert present. Still not captured. |
 | 3 | Confirmed other VSCode traffic (PostQode provider, telemetry, marketplace) is being captured by the inspector during the same session. | ✅ Confirms proxy is alive and reachable. Other traffic flows. |
-| 4 | Fully quit VSCode Insiders (Cmd+Q) and relaunched from terminal with proxy env vars to force the SDK to read them: <pre>HTTPS_PROXY=http://127.0.0.1:3457 \\<br>HTTP_PROXY=http://127.0.0.1:3457 \\<br>NO_PROXY=localhost,127.0.0.1,... \\<br>NODE_EXTRA_CA_CERTS="/Users/sreenuraj/PQ-Dashboard/data/proxy-certs/certs/ca.pem" \\<br>code-insiders</pre> | ❌ Still not captured. This is the key signal — see Root Cause below. |
+| 4 | Fully quit VSCode Insiders (Cmd+Q) and relaunched from terminal with proxy env vars to force the SDK to read them: <pre>HTTPS_PROXY=http://127.0.0.1:3457 \\<br>HTTP_PROXY=http://127.0.0.1:3457 \\<br>NO_PROXY=localhost,127.0.0.1,... \\<br>NODE_EXTRA_CA_CERTS="$HOME/.pq-dashboard/proxy-certs/certs/ca.pem" \\<br>code-insiders</pre> | ❌ Still not captured. This is the key signal — see Root Cause below. |
 | 5 | Reviewed the dashboard proxy source (`server/proxy/index.js`) to rule out provider-side filtering. The proxy captures **every** host that reaches it; unknown hosts get tagged `other` but are still stored and broadcast. Provider/host filtering is purely a frontend UI concern. | ✅ Dashboard is not filtering. Confirms the request never reaches the proxy. |
 
 ---
@@ -151,10 +151,10 @@ These don't fix the bug, but improve UX when the bug *is* fixed and the traffic 
 
 - **OS:** macOS Tahoe
 - **VSCode:** Insiders build
-- **PQ Dashboard:** workspace `/Users/sreenuraj/PQ-Dashboard`, commit `8b52dd48`
+- **PQ Dashboard:** workspace `PQ-Dashboard`, commit `8b52dd48`
 - **Proxy:** `http://127.0.0.1:3457`, MITM via `http-mitm-proxy`
 - **Dashboard proxy file under review:** `server/proxy/index.js`
-- **CA cert location:** `/Users/sreenuraj/PQ-Dashboard/data/proxy-certs/certs/ca.pem`
+- **CA cert location:** `$HOME/.pq-dashboard/proxy-certs/certs/ca.pem`
 
 ---
 

@@ -921,14 +921,13 @@ function startProxy(config = {}) {
   // and compatibility with the net.connect patch.
   proxyServer.listen({ port: proxyPort, host: '0.0.0.0', sslCaDir: certsDir }, () => {
     isRunning = true;
-    const caPath = path.join(certsDir, 'certs/ca.pem');
     console.log(`📡 Network proxy listening on http://127.0.0.1:${proxyPort}`);
-    console.log(`   CA certs stored in: ${certsDir}`);
+    console.log(`   CA certs stored in: ~/.pq-dashboard/proxy-certs`);
     console.log(`\n🔒 To intercept HTTPS traffic without SSL errors, trust the proxy CA certificate:`);
     console.log(`   🍎 macOS (Terminal):`);
-    console.log(`      sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "${caPath}"`);
+    console.log(`      sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "$HOME/.pq-dashboard/proxy-certs/certs/ca.pem"`);
     console.log(`   🔌 Windows (Admin PowerShell):`);
-    console.log(`      Import-Certificate -FilePath "${caPath}" -CertStoreLocation Cert:\\LocalMachine\\Root\n`);
+    console.log(`      Import-Certificate -FilePath "$HOME\\.pq-dashboard\\proxy-certs\\certs\\ca.pem" -CertStoreLocation Cert:\\CurrentUser\\Root\n`);
   });
 
   return { store };
@@ -941,7 +940,7 @@ function getProxyStatus() {
   return {
     running: isRunning,
     port: proxyPort,
-    ca_cert_path: certsDir ? path.join(certsDir, 'certs/ca.pem') : '',
+    ca_cert_path: '$HOME/.pq-dashboard/proxy-certs/certs/ca.pem',
     ...store ? store.stats() : { count: 0, maxSize: 500 },
   };
 }

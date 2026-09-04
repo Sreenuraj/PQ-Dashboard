@@ -391,14 +391,15 @@ module.exports = (getStore, getStatus, getClientCount, getMockRules, addMockRule
     }
 
     let command = '';
+    const displayPath = '~/.pq-dashboard/proxy-certs/certs/ca.pem';
     if (platform === 'darwin') {
-      command = `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "${caPath}"`;
+      command = `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "$HOME/.pq-dashboard/proxy-certs/certs/ca.pem"`;
     } else if (platform === 'win32') {
-      command = `Import-Certificate -FilePath "${caPath}" -CertStoreLocation Cert:\\CurrentUser\\Root`;
+      command = `Import-Certificate -FilePath "$HOME\\.pq-dashboard\\proxy-certs\\certs\\ca.pem" -CertStoreLocation Cert:\\CurrentUser\\Root`;
     } else {
-      command = `sudo cp "${caPath}" /usr/local/share/ca-certificates/pq-ca.crt && sudo update-ca-certificates`;
+      command = `sudo cp "$HOME/.pq-dashboard/proxy-certs/certs/ca.pem" /usr/local/share/ca-certificates/pq-ca.crt && sudo update-ca-certificates`;
     }
-    res.json({ caPath, exists: fs.existsSync(caPath), isTrusted, platform, command });
+    res.json({ caPath: displayPath, fullPath: caPath, exists: fs.existsSync(caPath), isTrusted, platform, command });
   });
 
   return router;

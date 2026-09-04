@@ -295,6 +295,6 @@ PQ-Dashboard/
 | **No data visible** | Check `pq-config.yaml` — ensure source paths are correct and `enabled: true`. On Windows, run `scripts/init-platform-config.js` to auto-detect paths. |
 | **Port in use error (EADDRINUSE)** | Ports 3456 or 5173 are occupied. Run `./start.sh` (macOS) or `start.cmd` (Windows) which automatically terminates stale port listeners. |
 | **Model Context Window Unknown** | The Model Registry automatically fetches live context windows from OpenRouter on startup. Ensure internet connectivity on launch or check local cache. |
-| **HTTPS requests fail through proxy** | Add the CA cert from `data/proxy-certs/certs/ca.pem` to your system keychain (macOS) or Windows Certificate Store (`Import-Certificate`). |
+| **HTTPS requests fail through proxy** | Add the CA cert from `~/.pq-dashboard/proxy-certs/certs/ca.pem` to your system keychain (macOS) or Windows Certificate Store (`Import-Certificate`). |
 | **Stale data after schema change** | Delete `data/dashboard.db` and trigger a refresh to perform a clean initial parse. |
 

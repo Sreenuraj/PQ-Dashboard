@@ -118,13 +118,13 @@ echo   API:       http://localhost:%PORT%
 echo   Proxy:     http://localhost:3457  ← set as VS Code http.proxy
 echo.
 
-set "CA_CERT_PATH=%DIR%data\proxy-certs\certs\ca.pem"
+set "CA_CERT_PATH=%USERPROFILE%\.pq-dashboard\proxy-certs\certs\ca.pem"
 if exist "%CA_CERT_PATH%" (
     echo   🔒 HTTPS/SSL Trust Instructions:
     echo      Since VS Code extensions ignore proxy SSL settings, trust the proxy CA cert globally:
     echo.
-    echo      🔌 Windows (Run in Admin PowerShell):
-    echo         Import-Certificate -FilePath "%CA_CERT_PATH%" -CertStoreLocation Cert:\LocalMachine\Root
+    echo      🔌 Windows (Run in PowerShell):
+    echo         Import-Certificate -FilePath "$HOME\.pq-dashboard\proxy-certs\certs\ca.pem" -CertStoreLocation Cert:\CurrentUser\Root
     echo.
 )
 

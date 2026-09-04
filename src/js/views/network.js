@@ -1041,21 +1041,21 @@ export async function renderNetwork(container) {
                 <div>
                   <span style="font-size: 10.5px; color: var(--text-3); font-weight: bold; display: block;">🍎 macOS (Terminal)</span>
                   <div class="setup-code-block" style="margin-top: 4px;">
-                    <code id="macos-trust-cmd-value" style="word-break: break-all;">sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "${status.ca_cert_path || '$HOME/.pq-dashboard/proxy-certs/certs/ca.pem'}"</code>
+                    <code id="macos-trust-cmd-value" style="word-break: break-all;">sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "$HOME/.pq-dashboard/proxy-certs/certs/ca.pem"</code>
                     <button id="copy-macos-trust-cmd" class="setup-copy-btn" title="Copy">📋</button>
                   </div>
                 </div>
                 <div>
                   <span style="font-size: 10.5px; color: var(--text-3); font-weight: bold; display: block;">🔌 Windows (PowerShell)</span>
                   <div class="setup-code-block" style="margin-top: 4px;">
-                    <code id="win-trust-cmd-value" style="word-break: break-all;">Import-Certificate -FilePath "${status.ca_cert_path || '$HOME\\.pq-dashboard\\proxy-certs\\certs\\ca.pem'}" -CertStoreLocation Cert:\CurrentUser\Root</code>
+                    <code id="win-trust-cmd-value" style="word-break: break-all;">Import-Certificate -FilePath "$HOME\.pq-dashboard\proxy-certs\certs\ca.pem" -CertStoreLocation Cert:\CurrentUser\Root</code>
                     <button id="copy-win-trust-cmd" class="setup-copy-btn" title="Copy">📋</button>
                   </div>
                 </div>
                 <div>
                   <span style="font-size: 10.5px; color: var(--text-3); font-weight: bold; display: block;">🐧 Linux (Terminal)</span>
                   <div class="setup-code-block" style="margin-top: 4px;">
-                    <code id="linux-trust-cmd-value" style="word-break: break-all;">sudo cp "${status.ca_cert_path || '$HOME/.pq-dashboard/proxy-certs/certs/ca.pem'}" /usr/local/share/ca-certificates/pq-ca.crt &amp;&amp; sudo update-ca-certificates</code>
+                    <code id="linux-trust-cmd-value" style="word-break: break-all;">sudo cp "$HOME/.pq-dashboard/proxy-certs/certs/ca.pem" /usr/local/share/ca-certificates/pq-ca.crt &amp;&amp; sudo update-ca-certificates</code>
                     <button id="copy-linux-trust-cmd" class="setup-copy-btn" title="Copy">📋</button>
                   </div>
                 </div>
@@ -1615,7 +1615,8 @@ function bindToolbarEvents(status) {
       if (msgEl) {
         msgEl.style.display = 'block';
         msgEl.style.color = '#10b981';
-        msgEl.textContent = `🔐 Trust command copied to clipboard! (Path: ${certRes.caPath || ''})`;
+        const displayCertPath = certRes.caPath ? certRes.caPath.replace(/^[a-zA-Z]:\\[^\\]+\\[^\\]+|^\/Users\/[^\/]+|^\/home\/[^\/]+/, '~') : '~/.pq-dashboard/proxy-certs/certs/ca.pem';
+        msgEl.textContent = `🔐 Trust command copied to clipboard! (Path: ${displayCertPath})`;
       }
     } catch (err) {
       if (msgEl) {
