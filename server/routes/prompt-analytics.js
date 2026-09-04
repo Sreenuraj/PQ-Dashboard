@@ -833,7 +833,10 @@ module.exports = (db, config, getStore) => {
               promptSnippetText = item.text;
               const lines = item.text.split('\n');
               const fLineIdx = lines.findIndex(l => l.includes(fname));
-              if (fLineIdx >= 0) {
+              if (fname.includes('subagents') || toolName === 'use_subagents' || toolName === 'agents') {
+                targetPath = '🤖 Subagent Findings';
+                toolName = 'use_subagents';
+              } else if (fLineIdx >= 0) {
                 for (let l = fLineIdx; l >= Math.max(0, fLineIdx - 5); l--) {
                   const m = lines[l].match(/\[([a-z_]+)\s+for\s+['\"]([^'\"]+)['\"]\]/i);
                   if (m) {
@@ -852,14 +855,19 @@ module.exports = (db, config, getStore) => {
               if (item.text.includes(fname)) {
                 if (!promptSnippetText) promptSnippetText = item.text;
                 if (!targetPath) {
-                  const lines = item.text.split('\n');
-                  const fLineIdx = lines.findIndex(l => l.includes(fname));
-                  if (fLineIdx >= 0) {
-                    for (let l = fLineIdx; l >= Math.max(0, fLineIdx - 5); l--) {
-                      const m = lines[l].match(/\[([a-z_]+)\s+for\s+['\"]([^'\"]+)['\"]\]/i);
-                      if (m) {
-                        targetPath = m[2];
-                        break;
+                  if (fname.includes('subagents') || toolName === 'use_subagents' || toolName === 'agents') {
+                    targetPath = '🤖 Subagent Findings';
+                    toolName = 'use_subagents';
+                  } else {
+                    const lines = item.text.split('\n');
+                    const fLineIdx = lines.findIndex(l => l.includes(fname));
+                    if (fLineIdx >= 0) {
+                      for (let l = fLineIdx; l >= Math.max(0, fLineIdx - 5); l--) {
+                        const m = lines[l].match(/\[([a-z_]+)\s+for\s+['\"]([^'\"]+)['\"]\]/i);
+                        if (m) {
+                          targetPath = m[2];
+                          break;
+                        }
                       }
                     }
                   }
@@ -880,12 +888,17 @@ module.exports = (db, config, getStore) => {
                   promptSnippetText = indexedHistory[parsedIdx].text;
                 }
                 if (!targetPath && promptSnippetText) {
-                  const lines = promptSnippetText.split('\n');
-                  for (let l = 0; l < Math.min(lines.length, 5); l++) {
-                    const m = lines[l].match(/\[([a-z_]+)\s+for\s+['\"]([^'\"]+)['\"]\]/i);
-                    if (m) {
-                      targetPath = m[2];
-                      break;
+                  if (fname.includes('subagents') || toolName === 'use_subagents' || toolName === 'agents') {
+                    targetPath = '🤖 Subagent Findings';
+                    toolName = 'use_subagents';
+                  } else {
+                    const lines = promptSnippetText.split('\n');
+                    for (let l = 0; l < Math.min(lines.length, 5); l++) {
+                      const m = lines[l].match(/\[([a-z_]+)\s+for\s+['\"]([^'\"]+)['\"]\]/i);
+                      if (m) {
+                        targetPath = m[2];
+                        break;
+                      }
                     }
                   }
                 }
@@ -964,7 +977,10 @@ module.exports = (db, config, getStore) => {
           const diffChunks = computeExactDiffChunks(rawPreviewText, promptSnippetText || '');
 
           let reductionCategory = 'Scratch Offload';
-          if (toolName === 'read_file') reductionCategory = 'File Read Truncated';
+          if (toolName === 'use_subagents' || toolName === 'agents' || fname.includes('subagents')) {
+            reductionCategory = 'Subagents Offload';
+            displayTarget = `🤖 Subagent Findings Offloaded (${fname})`;
+          } else if (toolName === 'read_file') reductionCategory = 'File Read Truncated';
           else if (toolName === 'execute_command') reductionCategory = 'Terminal Output Truncated';
           else if (toolName === 'postqode_browser_agent') reductionCategory = 'Browser Snapshot Offloaded';
           else if (toolName === 'use_skill') reductionCategory = 'Skill Instructions Truncated';
@@ -1081,6 +1097,25 @@ module.exports = (db, config, getStore) => {
         const totalIn = sub.inputTokens || items.reduce((s, it) => s + (it.inputTokens || 0), 0);
         const totalOut = sub.outputTokens || items.reduce((s, it) => s + (it.outputTokens || 0), 0);
 
+        // Check if subagent findings were offloaded to scratch
+        const subScratch = scratchEvents.find(s => s.toolName === 'use_subagents' || s.filename.includes('subagents'));
+        if (subScratch) {
+          sub.scratchOffloaded = true;
+          sub.scratchFile = subScratch.filename;
+          sub.rawBytes = subScratch.rawBytes;
+          sub.promptBytes = subScratch.promptBytes;
+          sub.bytesSaved = subScratch.bytesSaved;
+        }
+
+        const successesCount = sub.successes != null ? sub.successes : items.filter(it => it.status === 'completed').length;
+        const failuresCount = sub.failures != null ? sub.failures : items.filter(it => it.status === 'failed').length;
+        if (sub.status === 'failed' && successesCount > 0 && failuresCount === 0) {
+          sub.isFalseFailure = true;
+        }
+
+        const anomalyNotice = sub.isFalseFailure ? `\n⚠️ PostQode Status Anomaly: Reported status is "failed" in logs, but all ${successesCount} workers completed with 0 failures.` : '';
+        const offloadNotice = sub.scratchOffloaded ? `\n📦 Context Offload: ${sub.rawBytes.toLocaleString()} bytes offloaded to scratch file (${sub.scratchFile}); only ${sub.promptBytes.toLocaleString()} bytes kept in prompt history.` : '';
+
         reductionEvents.push({
           eventIndex: reductionEvents.length,
           callIndex: c.index,
@@ -1088,12 +1123,12 @@ module.exports = (db, config, getStore) => {
           msgIndex: c.historyIndex >= 0 ? c.historyIndex : 0,
           role: 'subagent',
           category: 'Subagents',
-          targetName: `🤖 Subagents: ${items.length || sub.total || 1} parallel workers (${workerModel.split('/').pop()})`,
-          beforeSize: totalIn * 4,
-          afterSize: totalOut * 4,
-          bytesSaved: 0,
+          targetName: `🤖 Subagents: ${items.length || sub.total || 1} parallel workers (${workerModel.split('/').pop()})${sub.scratchOffloaded ? ` [📦 ${(sub.bytesSaved / 1024).toFixed(1)} KB offloaded to scratch]` : ''}`,
+          beforeSize: (sub.scratchOffloaded ? sub.rawBytes : totalIn * 4),
+          afterSize: (sub.scratchOffloaded ? sub.promptBytes : totalOut * 4),
+          bytesSaved: sub.scratchOffloaded ? sub.bytesSaved : 0,
           diffChunks: {
-            prefix: `[Subagent Parallel Execution on Call #${c.turn}]\nModel: ${workerModel}\nWorkers: ${items.length || sub.total || 1} (${sub.completed || items.length} completed)\nTools Executed: ${totalTools}\nInput Tokens: ${totalIn.toLocaleString()} | Output Tokens: ${totalOut.toLocaleString()}\nSubagent Total Cost: $${totalCost.toFixed(4)}`,
+            prefix: `[Subagent Parallel Execution on Call #${c.turn}]\nModel: ${workerModel}\nWorkers: ${items.length || sub.total || 1} (${sub.completed || items.length} completed)\nTools Executed: ${totalTools}\nInput Tokens: ${totalIn.toLocaleString()} | Output Tokens: ${totalOut.toLocaleString()}\nSubagent Total Cost: $${totalCost.toFixed(4)}${anomalyNotice}${offloadNotice}`,
             removedText: '',
             insertedText: items.map((it, idx) => `=== Worker #${it.index || idx + 1} [${it.status || 'completed'}] Model: ${it.modelId || workerModel} (Tools: ${it.toolCalls || 0}, Cost: $${(it.totalCost || 0).toFixed(4)}) ===\nGoal / Prompt:\n${it.prompt || ''}\n\nFindings & Results:\n${it.result || it.latestToolCall || '(Running / no result returned)'}\n`).join('\n---\n'),
             suffix: '',
@@ -1179,6 +1214,12 @@ module.exports = (db, config, getStore) => {
         if (sub.items) sub.items.forEach(it => { if (it.modelId) res.push(it.modelId); });
         return res;
       }))),
+      isFalseFailure: apiCalls.some(c => c.subagents?.isFalseFailure),
+      hasScratchOffload: apiCalls.some(c => c.subagents?.scratchOffloaded),
+      scratchFile: apiCalls.find(c => c.subagents?.scratchFile)?.subagents?.scratchFile || null,
+      scratchSavedBytes: apiCalls.reduce((s, c) => s + (c.subagents?.bytesSaved || 0), 0),
+      scratchRawBytes: apiCalls.reduce((s, c) => s + (c.subagents?.rawBytes || 0), 0),
+      scratchPromptBytes: apiCalls.reduce((s, c) => s + (c.subagents?.promptBytes || 0), 0),
     };
 
     // Calculate Financial Cost Breakdown per API Call (Supports mid-task model switches & Subagents!)

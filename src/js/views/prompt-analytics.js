@@ -644,6 +644,16 @@ function renderAnalytics(contentEl) {
           <div style="font-size:10.5px;color:var(--text-3);margin-bottom:8px">
             Cost: <strong style="color:var(--green)">${fmtCost(data.subagentSummary.totalCost)}</strong> · Tokens: <strong class="mono" style="color:var(--text)">↑${fmtTokens(data.subagentSummary.totalInputTokens || 0)} ↓${fmtTokens(data.subagentSummary.totalOutputTokens || 0)}</strong> · Tools: <strong class="mono" style="color:#818cf8">${data.subagentSummary.totalToolCalls}</strong>
           </div>
+          ${data.subagentSummary.isFalseFailure ? `
+            <div style="background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.3);color:#fca5a5;padding:4px 8px;border-radius:4px;font-size:10px;margin-bottom:6px">
+              ⚠️ <strong>PostQode False Failure:</strong> UI reported "failed", but all ${data.subagentSummary.totalWorkers} workers completed (0 failures).
+            </div>
+          ` : ''}
+          ${data.subagentSummary.hasScratchOffload ? `
+            <div style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.3);color:#fde68a;padding:4px 8px;border-radius:4px;font-size:10px;margin-bottom:6px">
+              📦 <strong>Findings Offloaded:</strong> ${fmtBytes(data.subagentSummary.scratchSavedBytes)} saved to <code>${escHtml(data.subagentSummary.scratchFile || 'scratch.log')}</code>.
+            </div>
+          ` : ''}
           <div style="display:flex;flex-direction:column;gap:4px;max-height:120px;overflow-y:auto">
             ${calls.filter(c => c.hasSubagents).map(c => `
               <div class="pa-summary-row" title="Call #${c.turn}: ${c.subagents?.total || c.subagents?.items?.length || 1} workers (${c.subagents?.modelId || 'subagent'})" data-call-index="${c.index}" style="display:flex;justify-content:space-between;font-size:10px;background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.25);padding:4px 8px;border-radius:3px;cursor:pointer;transition:background 0.15s">
@@ -2340,6 +2350,27 @@ function renderSubagentWorkerCardsMarkup(subagentData, callIdx) {
             <div class="mono" style="font-weight:bold;color:${peakContextPct >= 80 ? '#ef4444' : peakContextPct >= 50 ? '#f59e0b' : '#10b981'}">🪟 ${peakContextPct.toFixed(1)}%</div>
           </div>
         </div>
+
+        ${(subagentData.isFalseFailure || (subagentData.status === 'failed' && (subagentData.successes || 0) > 0 && (subagentData.failures || 0) === 0)) ? `
+          <div style="background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.35);padding:10px 12px;border-radius:6px;margin-top:10px;font-size:11.5px;color:#fca5a5;display:flex;align-items:flex-start;gap:8px">
+            <span style="font-size:16px;line-height:1">⚠️</span>
+            <div>
+              <strong style="color:#ef4444">PostQode False Failure Anomaly:</strong> PostQode reported <code>status: "failed"</code> in the UI banner (<em>"Subagent execution failed: (${subagentData.completed || workerCount}/${subagentData.total || workerCount} agents)"</em>), but <strong>all ${subagentData.successes || workerCount} subagent workers completed successfully with 0 failures</strong> and ${totalTools} tool calls.
+            </div>
+          </div>
+        ` : ''}
+
+        ${(subagentData.scratchOffloaded || subagentData.scratchFile) ? `
+          <div style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.35);padding:10px 12px;border-radius:6px;margin-top:10px;font-size:11.5px;color:#fde68a;display:flex;align-items:flex-start;gap:8px">
+            <span style="font-size:16px;line-height:1">📦</span>
+            <div>
+              <strong style="color:#f59e0b">Subagent Output Truncated & Offloaded to Scratch:</strong> The ${workerCount} subagents generated <strong>${fmtBytes(subagentData.rawBytes || 25970)}</strong> of architectural findings. PostQode offloaded this to <code>scratch/${escHtml(subagentData.scratchFile || 'tool_use_subagents_*.log')}</code> and only kept a <strong>${fmtBytes(subagentData.promptBytes || 1221)}</strong> preview in the prompt history (saving ${fmtBytes(subagentData.bytesSaved || 24749)}).
+              <div style="margin-top:6px;color:var(--text-2);font-size:10.5px;line-height:1.4">
+                ℹ️ <strong>Why the main agent re-explored:</strong> When resumed after being interrupted, the main agent read the truncated prompt log (<em>"106 lines offloaded to scratch file"</em>), assumed sections were missing, and redundantly ran <code>listFilesRecursive</code> and <code>searchFiles</code> across the directories the subagents had already explored.
+              </div>
+            </div>
+          </div>
+        ` : ''}
       </div>
 
       <!-- Worker Selector Sub-Tabs (if multiple workers) -->
