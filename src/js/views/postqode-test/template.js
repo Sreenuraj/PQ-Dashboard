@@ -28,39 +28,62 @@ export function getTemplate() {
         </div>
       </div>
 
-      <!-- Control Grid -->
-      <div class="testlab-grid">
-        <!-- 1. Target Host -->
-        <div class="testlab-card">
-          <div class="testlab-card-title">
-            <span>1. Target IDE Host</span>
-            <span class="testlab-info-badge" id="testlab-target-badge">Checking...</span>
+      <!-- Compact Control Strip (Replaces massive bulky cards) -->
+      <div class="testlab-config-strip">
+        <div class="testlab-config-bar">
+          <!-- 1. Target IDE Host -->
+          <div class="testlab-config-group">
+            <label class="testlab-config-label" for="testlab-target-select">
+              <span>💻 Target Host</span>
+              <span class="testlab-info-badge" id="testlab-target-badge">Checking...</span>
+            </label>
+            <select id="testlab-target-select" class="testlab-select testlab-config-select">
+              <option value="vscode-insiders">VS Code Insiders (Detected)</option>
+              <option value="vscode">VS Code Stable</option>
+              <option value="cursor">Cursor</option>
+              <option value="windsurf">Windsurf</option>
+            </select>
           </div>
-          <select id="testlab-target-select" class="testlab-select">
-            <option value="vscode-insiders">VS Code Insiders (Detected)</option>
-            <option value="vscode">VS Code Stable</option>
-            <option value="cursor">Cursor</option>
-            <option value="windsurf">Windsurf</option>
-          </select>
-          <div style="font-size: 11px; color: var(--text-3); line-height: 1.4;">
-            Runs in an isolated sandbox (<code style="font-family: var(--font-mono); color: var(--text-2);">/tmp/pq-profile-*</code>). Your daily VS Code workspace, extensions, and settings remain 100% untouched.
+
+          <!-- 2. Extension Build Source -->
+          <div class="testlab-config-group">
+            <label class="testlab-config-label" for="testlab-build-select">
+              <span>📦 Extension Build</span>
+              <span class="testlab-info-badge success" id="testlab-build-badge">Installed</span>
+            </label>
+            <select id="testlab-build-select" class="testlab-select testlab-config-select">
+              <option value="installed" selected>Already Installed (Sandbox Copy)</option>
+              <option value="local">Local Build (VSIX / Directory)</option>
+              <option value="marketplace">Marketplace (Fetch &amp; Verify)</option>
+            </select>
+          </div>
+
+          <!-- 3. AI Response Mode & Model -->
+          <div class="testlab-config-group">
+            <label class="testlab-config-label">
+              <span>⚡ AI Mode</span>
+              <span class="testlab-info-badge" id="testlab-mode-badge">Mocked (Free)</span>
+            </label>
+            <div class="testlab-pill-group testlab-config-pills" id="testlab-mode-pills">
+              <button class="testlab-pill active" data-mode="mocked" title="Deterministic mock responses via port 3457 (Free)">Mocked (Free)</button>
+              <button class="testlab-pill" data-mode="live" title="Live API execution via PostQode Cloud">Live Provider</button>
+            </div>
+          </div>
+
+          <!-- Advanced / Drawer Toggle Button -->
+          <div class="testlab-config-action">
+            <button id="testlab-toggle-advanced-btn" type="button" class="testlab-btn testlab-btn-secondary" style="padding: 6px 12px; font-size: 11px; white-space: nowrap;">
+              <span>⚙ Options &amp; Credentials</span>
+              <span id="testlab-advanced-chevron" style="display: inline-block; transition: transform 0.2s;">▾</span>
+            </button>
           </div>
         </div>
 
-        <!-- 2. Build Source -->
-        <div class="testlab-card">
-          <div class="testlab-card-title">
-            <span>2. Extension Build Source</span>
-            <span class="testlab-info-badge success" id="testlab-build-badge">Installed</span>
-          </div>
-          <select id="testlab-build-select" class="testlab-select">
-            <option value="installed" selected>Already Installed Version (Sandbox Copy)</option>
-            <option value="local">Local Build (VSIX / Directory)</option>
-            <option value="marketplace">Marketplace (Fetch, Test &amp; Verify Latest)</option>
-          </select>
-
+        <!-- Collapsible Advanced Drawer (VSIX file picker, Live Provider inputs, Sandbox notes) -->
+        <div id="testlab-advanced-drawer" class="testlab-advanced-drawer" style="display: none;">
           <!-- Interactive File Picker & Detected Builds Container -->
-          <div id="testlab-local-path-container" style="display: none; margin-top: 4px;">
+          <div id="testlab-local-path-container" style="display: none; padding-bottom: 8px; border-bottom: 1px solid var(--border);">
+            <div style="font-size: 11px; font-weight: 600; color: var(--text-2); margin-bottom: 4px;">Local VSIX Build File or Directory:</div>
             <div class="testlab-file-row">
               <input type="text" id="testlab-local-path-input" class="testlab-select" placeholder="/path/to/postqode.vsix or directory" style="flex: 1; font-family: var(--font-mono); font-size: 11px;" />
               <button id="testlab-browse-file-btn" class="testlab-btn testlab-btn-secondary" style="padding: 6px 12px; font-size: 11px; white-space: nowrap;">
@@ -70,7 +93,7 @@ export function getTemplate() {
             </div>
 
             <!-- Detected Local Builds Quick-Picker -->
-            <div id="testlab-detected-chips-container" style="margin-top: 8px;">
+            <div id="testlab-detected-chips-container" style="margin-top: 6px;">
               <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
                 <span style="font-size: 11px; font-weight: 600; color: var(--text-2);">Discovered Local Builds:</span>
                 <span id="testlab-refresh-vsix-btn" style="font-size: 10px; color: var(--accent); cursor: pointer;">Scan</span>
@@ -81,61 +104,48 @@ export function getTemplate() {
             </div>
           </div>
 
-          <div style="font-size: 11px; color: var(--text-3); line-height: 1.4;">
-            Selecting <strong>Local Build</strong> or <strong>Marketplace</strong> automatically tests both <strong>Clean Uninstall</strong> and <strong>Clean Install</strong> lifecycle phases (INS-07 &amp; INS-01).
-          </div>
-        </div>
-
-        <!-- 3. AI Response Mode & Model Selection -->
-        <div class="testlab-card">
-          <div class="testlab-card-title">
-            <span>3. AI Response Mode &amp; Model</span>
-            <span class="testlab-info-badge" id="testlab-mode-badge">Mocked (Free)</span>
-          </div>
-          <div class="testlab-pill-group" id="testlab-mode-pills">
-            <button class="testlab-pill active" data-mode="mocked">Mocked (Free / Deterministic)</button>
-            <button class="testlab-pill" data-mode="live">Live Provider</button>
-          </div>
-
           <!-- Live Provider & Model Inputs (revealed in Live mode) -->
-          <div id="testlab-live-model-container" style="display: none; margin-top: 6px; display: flex; flex-direction: column; gap: 10px;">
-            <!-- Copy instructions -->
-            <div style="font-size: 11px; color: var(--text-2); background: rgba(56, 139, 253, 0.1); border: 1px solid rgba(56, 139, 253, 0.3); border-radius: var(--radius-sm); padding: 8px 10px; line-height: 1.4;">
-              💡 <strong>Live Execution:</strong> Enter the API Provider and Model ID below (or copy them directly from your PostQode extension settings ⚙ in the sidebar).
+          <div id="testlab-live-model-container" style="display: none; flex-direction: column; gap: 8px;">
+            <div style="font-size: 11px; color: var(--text-2); background: rgba(56, 139, 253, 0.08); border: 1px solid rgba(56, 139, 253, 0.25); border-radius: var(--radius-sm); padding: 6px 10px; line-height: 1.4;">
+              💡 <strong>Live Execution:</strong> Enter the API Provider and Model ID below (or auto-fill directly from your active PostQode extension).
             </div>
 
-            <!-- API Provider Input -->
-            <div>
-              <label for="testlab-live-provider-input" style="font-size: 11px; font-weight: 600; color: var(--text-2); display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-                <span>API Provider:</span>
-                <span id="testlab-detected-provider-badge" class="testlab-info-badge success" style="font-size: 9.5px; padding: 1px 6px; display: none;">From PostQode</span>
-              </label>
-              <input type="text" id="testlab-live-provider-input" class="testlab-input" placeholder="e.g. postqode, anthropic, openai-native, openrouter" value="postqode" style="width: 100%; box-sizing: border-box; padding: 8px 10px; font-size: 12px; font-family: var(--font-mono); background: var(--bg-3); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" />
-            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px;">
+              <!-- API Provider Input -->
+              <div>
+                <label for="testlab-live-provider-input" style="font-size: 11px; font-weight: 600; color: var(--text-2); display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                  <span>API Provider:</span>
+                  <span id="testlab-detected-provider-badge" class="testlab-info-badge success" style="font-size: 9.5px; padding: 1px 6px; display: none;">From PostQode</span>
+                </label>
+                <input type="text" id="testlab-live-provider-input" class="testlab-input" placeholder="e.g. postqode, anthropic, openai-native, openrouter" value="postqode" style="width: 100%; box-sizing: border-box; padding: 6px 10px; font-size: 12px; font-family: var(--font-mono); background: var(--bg-3); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" />
+              </div>
 
-            <!-- Model Input -->
-            <div>
-              <label for="testlab-live-model-input" style="font-size: 11px; font-weight: 600; color: var(--text-2); display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-                <span>Model ID:</span>
-                <span id="testlab-detected-model-badge" class="testlab-info-badge success" style="font-size: 9.5px; padding: 1px 6px; display: none;">From PostQode</span>
-              </label>
-              <input type="text" id="testlab-live-model-input" class="testlab-input" placeholder="e.g. moonshotai/kimi-k3, claude-sonnet-4.5, gpt-4o" value="moonshotai/kimi-k3" style="width: 100%; box-sizing: border-box; padding: 8px 10px; font-size: 12px; font-family: var(--font-mono); background: var(--bg-3); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" />
+              <!-- Model Input -->
+              <div>
+                <label for="testlab-live-model-input" style="font-size: 11px; font-weight: 600; color: var(--text-2); display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                  <span>Model ID:</span>
+                  <span id="testlab-detected-model-badge" class="testlab-info-badge success" style="font-size: 9.5px; padding: 1px 6px; display: none;">From PostQode</span>
+                </label>
+                <input type="text" id="testlab-live-model-input" class="testlab-input" placeholder="e.g. moonshotai/kimi-k3, claude-sonnet-4.5, gpt-4o" value="moonshotai/kimi-k3" style="width: 100%; box-sizing: border-box; padding: 6px 10px; font-size: 12px; font-family: var(--font-mono); background: var(--bg-3); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" />
+              </div>
             </div>
 
             <!-- Auto-Fill from PostQode & Sync status -->
-            <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 10.5px; color: var(--text-3); background: var(--bg-1); padding: 6px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border);">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 10.5px; color: var(--text-3); background: var(--bg-1); padding: 5px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border);">
               <span id="testlab-detected-config-text" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">⚡ Detecting PostQode active config...</span>
               <button id="testlab-sync-config-btn" type="button" class="testlab-btn testlab-btn-secondary" style="padding: 2px 8px; font-size: 10px; flex-shrink: 0;" title="Re-detect and auto-fill current active provider and model from PostQode">🔄 Auto-fill</button>
             </div>
           </div>
 
-          <div style="font-size: 11px; color: var(--text-3); line-height: 1.4;">
-            <strong style="color: var(--text-2);">Mocked:</strong> Intercepts completions via PQ proxy (port 3457) with zero token cost. Fullscreen testing runs automatically.
+          <!-- Sandbox Note -->
+          <div style="font-size: 10.5px; color: var(--text-3); line-height: 1.4; border-top: 1px dashed var(--border); padding-top: 6px;">
+            🛡 <strong>Isolated Sandbox:</strong> Runs in <code style="font-family: var(--font-mono); color: var(--text-2);">/tmp/pq-profile-*</code>. Daily VS Code settings, extensions, and workspaces remain 100% untouched.
           </div>
         </div>
+      </div>
 
-        <!-- 4. Test Scenarios -->
-        <div class="testlab-card" style="grid-column: 1 / -1;">
+      <!-- 4. Test Scenarios -->
+      <div class="testlab-card">
           <div class="testlab-card-title" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
             <span>4. Test Scenarios</span>
             <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
@@ -192,7 +202,6 @@ export function getTemplate() {
             <div style="color: var(--text-3); font-size: 12px; padding: 12px;">Loading release checklist...</div>
           </div>
         </div>
-      </div>
 
       <!-- Active Execution & Step Monitor with Pause / Resume / Stop Controls -->
       <div id="testlab-execution-section" style="display: none;">

@@ -51,6 +51,10 @@ export function initChecklist(state, startTestRunFn) {
   const quickSheetSelect = document.getElementById('testlab-quick-sheet-select');
   const runSheetBtn      = document.getElementById('testlab-run-sheet-btn');
 
+  const toggleAdvancedBtn = document.getElementById('testlab-toggle-advanced-btn');
+  const advancedDrawer    = document.getElementById('testlab-advanced-drawer');
+  const advancedChevron   = document.getElementById('testlab-advanced-chevron');
+
   // ── renderChecklist ───────────────────────────────────────────────────────
   function renderChecklist(categoryFilter = 'all') {
     state.currentCategory = categoryFilter;
@@ -385,6 +389,17 @@ export function initChecklist(state, startTestRunFn) {
     });
   }
 
+  // ── Advanced Drawer Toggle ───────────────────────────────────────────────
+  if (toggleAdvancedBtn && advancedDrawer) {
+    toggleAdvancedBtn.addEventListener('click', () => {
+      const isHidden = advancedDrawer.style.display === 'none';
+      advancedDrawer.style.display = isHidden ? 'flex' : 'none';
+      if (advancedChevron) {
+        advancedChevron.style.transform = isHidden ? 'rotate(180deg)' : 'rotate(0deg)';
+      }
+    });
+  }
+
   // ── Mode pills (Mocked / Live) ────────────────────────────────────────────
   modePills.forEach((pill) => {
     pill.addEventListener('click', () => {
@@ -393,7 +408,15 @@ export function initChecklist(state, startTestRunFn) {
       state.currentMode = pill.dataset.mode;
       modeBadge.textContent =
         state.currentMode === 'live' ? 'Live (Real API Calls)' : 'Mocked (Free)';
-      liveModelContainer.style.display = state.currentMode === 'live' ? 'block' : 'none';
+      if (state.currentMode === 'live') {
+        liveModelContainer.style.display = 'flex';
+        if (advancedDrawer) {
+          advancedDrawer.style.display = 'flex';
+          if (advancedChevron) advancedChevron.style.transform = 'rotate(180deg)';
+        }
+      } else {
+        liveModelContainer.style.display = 'none';
+      }
       renderChecklist(state.currentCategory);
     });
   });
@@ -403,6 +426,10 @@ export function initChecklist(state, startTestRunFn) {
     const val = buildSelect.value;
     if (val === 'local') {
       localPathContainer.style.display = 'block';
+      if (advancedDrawer) {
+        advancedDrawer.style.display = 'flex';
+        if (advancedChevron) advancedChevron.style.transform = 'rotate(180deg)';
+      }
       buildBadge.textContent  = 'Local VSIX';
       buildBadge.className    = 'testlab-info-badge';
       loadDetectedVsix();
