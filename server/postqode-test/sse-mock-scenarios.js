@@ -278,10 +278,307 @@ async function streamParallelToolCalls({
   return sentChunks.join('');
 }
 
+/**
+ * Stream mock response for PostQode Slash Commands.
+ * Simulates tool calls (e.g. write_to_file for AGENTS.md, rules, workflows)
+ * or structured text responses according to the slash command invoked.
+ */
+async function streamSlashCommandResponse({
+  res,
+  command,
+  param = '',
+  model = 'moonshotai/kimi-k3',
+  onChunk,
+}) {
+  const cmd = (command || '').toLowerCase().trim();
+
+  if (cmd === '/init' || cmd.startsWith('/init')) {
+    const agentsMdContent = `# PostQode Workspace Guidelines\n\n## Project Architecture\n- Architecture: Express REST API & Vite Web Application\n- Target Host: VS Code / VS Code Insiders\n- Proxy Engine: Port 3457\n\n## Coding & Testing Standards\n- Run automated matrix tests via PQ Dashboard\n- Maintain clean sandboxes and full teardown\n`;
+    return streamToolCallResponse({
+      res,
+      toolName: 'write_to_file',
+      argsObj: { path: 'AGENTS.md', content: agentsMdContent },
+      model,
+      onChunk,
+    });
+  }
+
+  if (cmd === '/newrule' || cmd.startsWith('/newrule')) {
+    const ruleName = param.trim() || 'code-style';
+    const ruleContent = `# Rule: ${ruleName}\n\n- Ensure code quality and consistent formatting\n- Use meaningful variable names\n- Add unit tests for all newly added endpoints\n`;
+    // new_rule is a real PostQode tool — PostQode handles writing this to .postqode/rules/
+    return streamToolCallResponse({
+      res,
+      toolName: 'new_rule',
+      argsObj: { path: `.postqode/rules/${ruleName}.md`, content: ruleContent },
+      model,
+      onChunk,
+    });
+  }
+
+  if (cmd === '/workflow' || cmd.startsWith('/workflow')) {
+    const wfName = param.trim() || 'deploy-service';
+    const wfContent = `# Workflow: ${wfName}\n\n## 1. Run Verification\nVerify build succeeds without errors.\n\n## 2. Deploy Service\nDeploy updated package to target environment.\n\n## Validation\n- Check service status endpoint returns 200 OK\n`;
+    // new_workflow is a real PostQode tool — PostQode handles writing this to .postqode/workflows/
+    return streamToolCallResponse({
+      res,
+      toolName: 'new_workflow',
+      argsObj: { path: `.postqode/workflows/${wfName}.md`, content: wfContent },
+      model,
+      onChunk,
+    });
+  }
+
+  if (cmd === '/newtask' || cmd.startsWith('/newtask')) {
+    const handoffContext = `## Handoff Context for New Task\n- Goal: Automated PostQode test verification\n- Progress: Configured CDP controller and test runners\n- Active Files: Scenarios, checklist, runner, and mock proxy\n- Key Decisions: Multi-IDE support enabled (VS Code, Cursor, Windsurf)\n`;
+    return streamToolCallResponse({
+      res,
+      toolName: 'new_task',
+      argsObj: { context: handoffContext },
+      model,
+      onChunk,
+    });
+  }
+
+  if (cmd === '/compact' || cmd.startsWith('/compact')) {
+    const summaryContext = `## Compacted Conversation Summary\n- Context: Completed initial environment inspection and CDP connection.\n- Decision: Target host selected as VS Code Insiders with live Moonshot Kimi K3 provider.\n- Status: All dependencies healthy and proxy active.\n`;
+    // Stream a visible summary text first so DOM has content to detect,
+    // then emit the condense tool call that PostQode uses to render the action button
+    return streamToolCallResponse({
+      res,
+      toolName: 'condense',
+      argsObj: { summary: summaryContext },
+      model,
+      onChunk,
+    });
+  }
+
+  if (cmd === '/globalrule' || cmd.startsWith('/globalrule')) {
+    const ruleName = param.trim() || 'security-baseline';
+    const globalRulePath = require('path').join(require('os').homedir(), '.postqode', 'rules', `${ruleName}.md`);
+    const ruleContent = `# Global Rule: ${ruleName}\n\n- Follow organizational security baseline\n- Never commit unencrypted secrets or credentials\n- Enforce strict typing across all modules\n`;
+    // new_global_rule is a real PostQode tool — PostQode handles writing this to global ~/.postqode/rules/
+    return streamToolCallResponse({
+      res,
+      toolName: 'new_global_rule',
+      argsObj: { path: globalRulePath, content: ruleContent },
+      model,
+      onChunk,
+    });
+  }
+
+  if (cmd === '/globalworkflow' || cmd.startsWith('/globalworkflow')) {
+    const wfName = param.trim() || 'team-review';
+    const globalWfPath = require('path').join(require('os').homedir(), '.postqode', 'workflows', `${wfName}.md`);
+    const wfContent = `# Global Workflow: ${wfName}\n\n## 1. Peer Review\nRun code quality check across repository.\n\n## 2. Security Scan\nRun dependency audit and secret scan.\n`;
+    // new_global_workflow is a real PostQode tool — PostQode handles writing this to global ~/.postqode/workflows/
+    return streamToolCallResponse({
+      res,
+      toolName: 'new_global_workflow',
+      argsObj: { path: globalWfPath, content: wfContent },
+      model,
+      onChunk,
+    });
+  }
+
+  if (cmd === '/reportbug' || cmd.startsWith('/reportbug')) {
+    return streamToolCallResponse({
+      res,
+      toolName: 'report_bug',
+      argsObj: {
+        title: 'PostQode automated test verification report',
+        description: 'Automated test run diagnostic verification',
+        steps_to_reproduce: '1. Launch IDE with CDP\n2. Open PostQode webview\n3. Execute sanity check',
+        expected_behavior: 'All assertions pass cleanly',
+        actual_behavior: 'Verified successfully'
+      },
+      model,
+      onChunk,
+    });
+  }
+
+  if (cmd === '/deep-planning' || cmd.startsWith('/deep-planning')) {
+    const responseText = `# Deep Planning: Architecture & Execution Blueprint\n\n## 1. Codebase Investigation\nAnalyzed components and dependencies across workspace.\n\n## 2. Implementation Strategy\n- Step 1: Establish isolated testing sandbox with custom profile.\n- Step 2: Route completions via proxy to validate SSE chunks.\n- Step 3: Capture DOM evidence and verify state persistence.\n\n## 3. Verification Plan\nRun test suite and check Allure assertion report.`;
+    return streamTextResponse({ res, text: responseText, model, onChunk });
+  }
+
+  if (cmd === '/explain-changes' || cmd.startsWith('/explain-changes')) {
+    const responseText = `### Git Diff Explanation\n\n1. **Scenarios Expansion**: Added dedicated modules for Slash Commands and Workflows.\n2. **UI Controls**: Added quick module dropdown option and navigation tabs.\n3. **Mock Engine**: Added deterministic SSE handlers for zero-token verification.`;
+    return streamTextResponse({ res, text: responseText, model, onChunk });
+  }
+
+  // Fallback for custom slash command / workflow
+  return streamTextResponse({
+    res,
+    text: `Executed slash command \`${cmd}\` successfully. All pipeline assertions verified.`,
+    model,
+    onChunk,
+  });
+}
+
+/**
+ * Stream HTTP error (e.g. 401 Unauthorized for PROV-09).
+ */
+function streamHttpError({ res, statusCode = 401, message = 'Invalid API key: unauthorized', code = 'invalid_api_key' }) {
+  if (res.writableEnded || res.destroyed) return;
+  res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({
+    error: {
+      message,
+      type: 'authentication_error',
+      code,
+    },
+  }));
+}
+
+/**
+ * Stream tool call that requires explicit user approval (CHAT-04).
+ * Uses execute_command which triggers PostQode's approval card.
+ */
+async function streamApprovalToolCall({
+  res,
+  command = "echo 'Testing PostQode Approval Workflow'",
+  model = 'moonshotai/kimi-k3',
+  onChunk,
+}) {
+  return streamToolCallResponse({
+    res,
+    toolName: 'execute_command',
+    argsObj: { command, requires_approval: true },
+    model,
+    onChunk,
+  });
+}
+
+/**
+ * Stream background task tool call (CHAT-11).
+ */
+async function streamBackgroundTaskResponse({
+  res,
+  command = 'echo "Background task in progress..." && sleep 1',
+  model = 'moonshotai/kimi-k3',
+  onChunk,
+}) {
+  return streamToolCallResponse({
+    res,
+    toolName: 'execute_command',
+    argsObj: { command, requires_approval: false },
+    model,
+    onChunk,
+  });
+}
+
+/**
+ * Stream mistake / malformed response to test mistake escalation guard (CHAT-08).
+ */
+async function streamMistakeResponse({
+  res,
+  attemptNumber = 1,
+  model = 'moonshotai/kimi-k3',
+  onChunk,
+}) {
+  // Deliberately stream text without expected tools or malformed content
+  const mistakeText = attemptNumber >= 2
+    ? 'I am having trouble formatting the tool call properly. Please provide guidance.'
+    : 'Processing request with incomplete parameters...';
+  return streamTextResponse({
+    res,
+    text: mistakeText,
+    model,
+    onChunk,
+  });
+}
+
+/**
+ * Stream mock response for PostQode Workflows with tool invocation support.
+ */
+async function streamWorkflowStepResponse({
+  res,
+  stepNumber = 1,
+  workflowName = 'review-pr.md',
+  toolCall = null,
+  model = 'moonshotai/kimi-k3',
+  onChunk,
+}) {
+  if (toolCall === 'ask_followup_question' || stepNumber === 2) {
+    return streamToolCallResponse({
+      res,
+      toolName: 'ask_followup_question',
+      argsObj: {
+        question: `Workflow [${workflowName}] step 2 requires verification: Confirm PR review actions?`,
+        options: ['Proceed with Automated Review', 'Require Manual Sign-off'],
+      },
+      model,
+      onChunk,
+    });
+  }
+  const text = `### Workflow Step ${stepNumber}: [${workflowName}]\n1. Inspecting workspace configuration and dependencies.\n2. Executing automated validation assertions.\n3. Step completed cleanly with status: SUCCESS.`;
+  return streamTextResponse({ res, text, model, onChunk });
+}
+
+/**
+ * Stream mock response for PostQode Skills invoking the use_skill tool.
+ */
+async function streamSkillToolCallResponse({
+  res,
+  skillName = 'custom-deploy',
+  argsObj = null,
+  model = 'moonshotai/kimi-k3',
+  onChunk,
+}) {
+  return streamToolCallResponse({
+    res,
+    toolName: 'use_skill',
+    argsObj: argsObj || { skill_name: skillName },
+    model,
+    onChunk,
+  });
+}
+
+/**
+ * Stream multi-step file read and summary loop response.
+ * Used for CHAT-02.
+ */
+async function streamMultiStepFileReadSummary({
+  res,
+  reqBody = null,
+  model = 'moonshotai/kimi-k3',
+  onChunk,
+}) {
+  const messages = reqBody?.messages || [];
+  const hasToolResult = messages.some(
+    (m) => m.role === 'tool' || (typeof m.content === 'string' && m.content.includes('sample-project'))
+  );
+
+  if (hasToolResult) {
+    const summaryText = `### Project Structure Summary\n- Package: **sample-project** (v1.0.0)\n- File \`package.json\` verified.\n- Multi-turn loop completed successfully without errors.`;
+    return streamTextResponse({ res, text: summaryText, model, onChunk });
+  }
+
+  // Turn 1: emit read_file tool call
+  return streamToolCallResponse({
+    res,
+    toolName: 'read_file',
+    argsObj: { path: 'package.json' },
+    model,
+    onChunk,
+  });
+}
+
 module.exports = {
   buildChunk,
   streamTextResponse,
   streamToolCallResponse,
   streamWithThinkTags,
   streamParallelToolCalls,
+  streamSlashCommandResponse,
+  streamWorkflowStepResponse,
+  streamSkillToolCallResponse,
+  streamMultiStepFileReadSummary,
+  streamHttpError,
+  streamApprovalToolCall,
+  streamBackgroundTaskResponse,
+  streamMistakeResponse,
 };
+
+

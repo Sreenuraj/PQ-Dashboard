@@ -3,6 +3,9 @@
 Automated release-testing studio for the PostQode VS Code extension, built into PQ Dashboard.  
 Covers the full **PostQode Release Test Checklist** sheet-by-sheet — from provider selection to chat streaming to history state — with both **Mocked** (free, deterministic) and **Live** (real API) execution modes.
 
+> **Methodology: Live-Capture-Then-Mock**  
+> Tests are designed using real captured behavior: each feature is first run live with `postqode:moonshotai/kimi-k3`, the actual SSE stream, tool call names, UI button labels, and DOM changes are observed and recorded, then used to build accurate deterministic mocks. This ensures tests assert **real behavior**, not guesses.
+
 ---
 
 ## Quick Start
@@ -105,6 +108,8 @@ Teardown runs on:
 | Chat & Agent Mode | CHAT-01 to CHAT-12 | ✅ |
 | Chat & Agent Mode | CHAT-13 | ❌ Manual (multi-window lock) |
 | Files & Terminal Tools | FILE-01 | ✅ |
+| Slash Commands | SLASH-01 `/newtask`, SLASH-02 `/compact`, SLASH-03 `/init`, SLASH-04 `/newrule`, SLASH-05 `/globalrule`, SLASH-06 `/workflow`, SLASH-07 `/globalworkflow`, SLASH-08 `/reportbug`, SLASH-09 `/deep-planning`, SLASH-10 `/explain-changes` | ✅ |
+| Workflows, Rules & Skills | FLOW-01 to FLOW-03, RULE-01 to RULE-02, SKILL-01 to SKILL-03 | ✅ |
 
 ---
 
@@ -182,3 +187,28 @@ For Live mode, API keys are entered directly in the UI (never stored in config f
 | CDP attach timeout | Another VS Code process may be holding the port — kill stale processes with `pkill -f "code-insiders"` |
 | Mock SSE not responding | Verify proxy is running on port 3457: `curl http://localhost:3457` |
 | VSIX upload fails | Check `/tmp` has write access; VSIX must be < 200 MB |
+| Many VS Code windows, none closing | The teardown `pkill -9 -f <profile>` now runs after every scenario. If stuck, run `pkill -9 -f pq-profile` manually |
+| INS-01/INS-07 ETIMEDOUT | Fixed: install/uninstall tests now use filesystem verification instead of blocking CLI calls |
+| Slash command button not found | Tests now wait for PostQode to finish processing the tool call (3s grace + 15s polling) before asserting button visibility |
+| `TypeError: controller.waitForMessageContaining is not a function` | Fixed: method is now present in cdp-controller.js |
+
+---
+
+## PostQode Tool Names (Source of Truth)
+
+Confirmed from PostQode extension source (`dist/github-review-bot.js`):
+
+| Tool Enum | Tool Name Used in SSE |
+|-----------|---------------------|
+| `CONDENSE` | `condense` |
+| `NEW_TASK` | `new_task` |
+| `NEW_RULE` | `new_rule` |
+| `NEW_WORKFLOW` | `new_workflow` |
+| `NEW_GLOBAL_RULE` | `new_global_rule` |
+| `NEW_GLOBAL_WORKFLOW` | `new_global_workflow` |
+| `FILE_NEW` | `write_to_file` |
+| `FILE_EDIT` | `replace_in_file` |
+| `ASK` | `ask_followup_question` |
+| `BASH` | `execute_command` |
+| `REPORT_BUG` | `report_bug` |
+| `USE_SKILL` | `use_skill` |
