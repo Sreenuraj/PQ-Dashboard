@@ -36,7 +36,7 @@ export async function renderPostQodeTest(container) {
   // 3. Init runner first so we have startTestRun available for checklist inline buttons
   const runner = initRunner(state, null /* renderChecklist injected below */);
 
-  // 4. Init checklist — pass startTestRun so "Run Sheet" inline buttons work
+  // 4. Init checklist — pass startTestRun so "Run Module" inline buttons work
   const { renderChecklist, setScenarioChecked } = initChecklist(state, runner.startTestRun);
 
   // 5. Init report — pass renderChecklist + startTestRun for re-run wiring

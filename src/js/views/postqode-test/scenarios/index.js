@@ -11,6 +11,8 @@ import { mcpScenarios } from './mcp.js';
 import { historyScenarios } from './history-state.js';
 import { chatScenarios } from './chat-agent.js';
 import { filesScenarios } from './files-tools.js';
+import { slashScenarios } from './slash-commands.js';
+import { workflowRuleSkillScenarios } from './workflows-rules-skills.js';
 
 export const allScenarios = [
   ...providerScenarios,
@@ -21,6 +23,8 @@ export const allScenarios = [
   ...mcpScenarios,
   ...chatScenarios,
   ...filesScenarios,
+  ...slashScenarios,
+  ...workflowRuleSkillScenarios,
 ];
 
 // Named re-exports for direct use in preset logic
@@ -33,4 +37,7 @@ export {
   historyScenarios,
   chatScenarios,
   filesScenarios,
+  slashScenarios,
+  workflowRuleSkillScenarios,
 };
+

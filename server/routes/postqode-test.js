@@ -5,6 +5,7 @@ const os = require('os');
 const { execSync } = require('child_process');
 const { PostQodeTestRunner } = require('../postqode-test/runner');
 const { generateAllureHtml } = require('../postqode-test/allure-reporter');
+const Database = require('better-sqlite3');
 
 const runsBaseDir = path.resolve('./data/postqode-test-runs');
 
@@ -66,23 +67,37 @@ module.exports = () => {
 
     // Check Cursor
     const cursorApp = '/Applications/Cursor.app';
+    const cursorBin = '/usr/local/bin/cursor';
+    const cursorExtDir = path.join(os.homedir(), '.cursor', 'extensions');
+    let cursorExtVersion = null;
+    if (fs.existsSync(cursorExtDir)) {
+      const match = fs.readdirSync(cursorExtDir).find((d) => d.startsWith('postqode.postqode-'));
+      if (match) cursorExtVersion = match.replace('postqode.postqode-', '');
+    }
     targets.push({
       id: 'cursor',
       name: 'Cursor',
-      isAvailable: fs.existsSync(cursorApp),
-      extensionInstalled: false,
-      extensionVersion: 'Not inspected',
+      isAvailable: fs.existsSync(cursorApp) || fs.existsSync(cursorBin),
+      extensionInstalled: !!cursorExtVersion,
+      extensionVersion: cursorExtVersion || 'Not installed',
       isDefault: false,
     });
 
     // Check Windsurf
     const windsurfApp = '/Applications/Windsurf.app';
+    const windsurfBin = '/usr/local/bin/windsurf';
+    const windsurfExtDir = path.join(os.homedir(), '.windsurf', 'extensions');
+    let windsurfExtVersion = null;
+    if (fs.existsSync(windsurfExtDir)) {
+      const match = fs.readdirSync(windsurfExtDir).find((d) => d.startsWith('postqode.postqode-'));
+      if (match) windsurfExtVersion = match.replace('postqode.postqode-', '');
+    }
     targets.push({
       id: 'windsurf',
       name: 'Windsurf',
-      isAvailable: fs.existsSync(windsurfApp),
-      extensionInstalled: false,
-      extensionVersion: 'Not inspected',
+      isAvailable: fs.existsSync(windsurfApp) || fs.existsSync(windsurfBin),
+      extensionInstalled: !!windsurfExtVersion,
+      extensionVersion: windsurfExtVersion || 'Not installed',
       isDefault: false,
     });
 
@@ -175,6 +190,54 @@ module.exports = () => {
     });
   });
 
+  // GET /api/postqode-test/active-llm-config — detect active provider & model from PostQode state
+  router.get('/postqode-test/active-llm-config', (req, res) => {
+    try {
+      const host = req.query.host || 'vscode-insiders';
+      const isMac = process.platform === 'darwin';
+      const isWin = process.platform === 'win32';
+      let appDataDir = isMac
+        ? path.join(os.homedir(), 'Library', 'Application Support')
+        : (isWin ? (process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming')) : path.join(os.homedir(), '.config'));
+
+      const hostFolderMap = {
+        'vscode-insiders': 'Code - Insiders',
+        'vscode':          'Code',
+        'cursor':          'Cursor',
+        'windsurf':        'Windsurf',
+      };
+      const folder = hostFolderMap[host] || 'Code - Insiders';
+      const dbPath = path.join(appDataDir, folder, 'User', 'globalStorage', 'state.vscdb');
+
+      if (!fs.existsSync(dbPath)) {
+        return res.json({ detected: false, provider: 'postqode', model: 'moonshotai/kimi-k3' });
+      }
+
+      const db = new Database(dbPath, { readonly: true, timeout: 2000 });
+      try {
+        const row = db.prepare('SELECT value FROM ItemTable WHERE key = ?').get('PostQode.postqode');
+        if (row && row.value) {
+          const parsed = JSON.parse(row.value);
+          const provider = parsed.agentModeApiProvider || parsed.actModeApiProvider || parsed.planModeApiProvider || 'postqode';
+          let model = 'moonshotai/kimi-k3';
+          if (provider === 'postqode' || provider === 'openrouter' || provider === 'vercel-ai-gateway') {
+            model = parsed.agentModeOpenRouterModelId || parsed.actModeOpenRouterModelId || parsed.planModeOpenRouterModelId || parsed.agentModeApiModelId || 'moonshotai/kimi-k3';
+          } else if (provider === 'openai-native') {
+            model = parsed.agentModeOpenAiModelId || parsed.planModeOpenAiModelId || parsed.agentModeApiModelId || 'gpt-4o';
+          } else {
+            model = parsed.agentModeApiModelId || parsed.agentModeOpenRouterModelId || 'moonshotai/kimi-k3';
+          }
+          return res.json({ detected: true, host, provider, model });
+        }
+      } finally {
+        try { db.close(); } catch (_) {}
+      }
+      res.json({ detected: false, provider: 'postqode', model: 'moonshotai/kimi-k3' });
+    } catch (e) {
+      res.json({ detected: false, provider: 'postqode', model: 'moonshotai/kimi-k3', error: e.message });
+    }
+  });
+
   // GET /api/postqode-test/checklist — full release checklist items
   router.get('/postqode-test/checklist', (req, res) => {
     const checklistPath = path.resolve('./data/checklist-items.json');
@@ -263,6 +326,36 @@ module.exports = () => {
           { id: 'FILE-01', name: 'FILE-01: Agent tool execution (write_to_file) & workspace mutation', priority: 'P0', defaultChecked: true, automatable: 'Yes' },
         ],
       },
+      {
+        name: 'Slash Commands',
+        description: 'All 10 PostQode slash commands: /newtask, /compact, /init, /newrule, /globalrule, /workflow, /globalworkflow, /reportbug, /deep-planning, /explain-changes.',
+        scenarios: [
+          { id: 'SLASH-01', name: 'SLASH-01: /newtask (Distilled context & fresh task creation)', priority: 'P0', defaultChecked: true, automatable: 'Yes' },
+          { id: 'SLASH-02', name: 'SLASH-02: /compact (Context summarization & history truncation)', priority: 'P0', defaultChecked: true, automatable: 'Yes' },
+          { id: 'SLASH-03', name: 'SLASH-03: /init (Codebase analysis & AGENTS.md generation)', priority: 'P0', defaultChecked: true, automatable: 'Yes' },
+          { id: 'SLASH-04', name: 'SLASH-04: /newrule (Project-specific rule creation)', priority: 'P1', defaultChecked: true, automatable: 'Yes' },
+          { id: 'SLASH-05', name: 'SLASH-05: /globalrule (Global rule creation across workspaces)', priority: 'P1', defaultChecked: true, automatable: 'Yes' },
+          { id: 'SLASH-06', name: 'SLASH-06: /workflow (Project workflow definition)', priority: 'P1', defaultChecked: true, automatable: 'Yes' },
+          { id: 'SLASH-07', name: 'SLASH-07: /globalworkflow (Global workflow definition)', priority: 'P1', defaultChecked: true, automatable: 'Yes' },
+          { id: 'SLASH-08', name: 'SLASH-08: /reportbug (Guided GitHub issue compilation)', priority: 'P1', defaultChecked: true, automatable: 'Yes' },
+          { id: 'SLASH-09', name: 'SLASH-09: /deep-planning (Deep silent investigation & plan mode)', priority: 'P0', defaultChecked: true, automatable: 'Yes' },
+          { id: 'SLASH-10', name: 'SLASH-10: /explain-changes (Inline git diff & change explanation)', priority: 'P1', defaultChecked: true, automatable: 'Yes' },
+        ],
+      },
+      {
+        name: 'Workflows, Rules & Skills',
+        description: 'PostQode automation workflows, rules auto-injection into prompt context, custom skills engine and modal toggles.',
+        scenarios: [
+          { id: 'FLOW-01', name: 'FLOW-01: Workflow invocation via slash (/[workflow.md])', priority: 'P0', defaultChecked: true, automatable: 'Yes' },
+          { id: 'FLOW-02', name: 'FLOW-02: Workflow enable/disable toggle in modal', priority: 'P1', defaultChecked: true, automatable: 'Yes' },
+          { id: 'FLOW-03', name: 'FLOW-03: Workflow tool sequencing & ask_followup_question', priority: 'P0', defaultChecked: true, automatable: 'Yes' },
+          { id: 'RULE-01', name: 'RULE-01: Project rules auto-injection into context', priority: 'P0', defaultChecked: true, automatable: 'Yes' },
+          { id: 'RULE-02', name: 'RULE-02: Rule enable/disable toggle in modal', priority: 'P1', defaultChecked: true, automatable: 'Yes' },
+          { id: 'SKILL-01', name: 'SKILL-01: Custom skill discovery & YAML frontmatter parsing', priority: 'P1', defaultChecked: true, automatable: 'Yes' },
+          { id: 'SKILL-02', name: 'SKILL-02: Skill enable/disable toggle in modal', priority: 'P1', defaultChecked: true, automatable: 'Yes' },
+          { id: 'SKILL-03', name: 'SKILL-03: Dynamic skill activation & use_skill tool validation', priority: 'P0', defaultChecked: true, automatable: 'Yes' },
+        ],
+      },
     ];
 
     const packs = [
@@ -276,6 +369,18 @@ module.exports = () => {
         id: 'providers',
         name: 'Providers & Models Suite',
         description: 'Automated coverage of Provider selection persistence, SecretStorage security, Plan vs Agent model configuration, 401 error cards, and context window metrics.',
+        defaultSelected: false,
+      },
+      {
+        id: 'slash',
+        name: 'Slash Commands Suite',
+        description: 'Automated coverage of all 10 PostQode slash commands (/newtask, /compact, /init, /newrule, /workflow, etc.) with real action buttons and disk verification.',
+        defaultSelected: false,
+      },
+      {
+        id: 'workflows',
+        name: 'Workflows, Rules & Skills Suite',
+        description: 'Automated coverage of PostQode automation workflows, rules auto-injection into prompt context, custom skills engine and modal toggles.',
         defaultSelected: false,
       },
     ];
@@ -297,6 +402,7 @@ module.exports = () => {
       mode = 'mocked',
       buildSource = 'installed',
       localBuildPath = null,
+      liveProvider = 'postqode',
       liveModel = 'moonshotai/kimi-k3',
       providerApiKeys = {},
       scenarios,
@@ -311,6 +417,7 @@ module.exports = () => {
       mode,
       buildSource,
       localBuildPath,
+      liveProvider,
       liveModel,
       providerApiKeys,
       scenarios,

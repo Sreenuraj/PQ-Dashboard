@@ -374,7 +374,30 @@ html, body {
   background: var(--bg);
 }
 
-#view-container { padding: 24px 28px; max-width: 1440px; }
+#view-container {
+  padding: 24px 28px;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+@media (min-width: 1920px) {
+  #view-container {
+    padding: 28px 36px;
+  }
+}
+
+@media (max-width: 1100px) {
+  #view-container {
+    padding: 20px;
+  }
+}
+
+@media (max-width: 760px) {
+  #view-container {
+    padding: 14px;
+  }
+}
 
 /* ── Top Bar ── */
 .top-bar {

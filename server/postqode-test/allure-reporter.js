@@ -746,6 +746,7 @@ function generateAllureHtml(runDir, reportData, options = {}) {
                 <tr><td>PostQode Version</td><td style="color: var(--accent); font-weight: 600;">${reportData.environment?.postqodeVersion || reportData.postqodeVersion || 'v3.0.26-beta.2'}</td></tr>
                 <tr><td>Host OS</td><td>${reportData.environment?.os || reportData.os || 'macOS'}</td></tr>
                 <tr><td>Target Host</td><td>${host}</td></tr>
+                <tr><td>API Provider</td><td style="font-weight: 600; color: #58a6ff;">${reportData.environment?.liveProvider || reportData.liveProvider || 'postqode'}</td></tr>
                 <tr><td>Default Model</td><td style="font-family: ui-monospace, monospace; color: #a371f7;">${reportData.environment?.defaultModel || reportData.liveModel || 'moonshotai/kimi-k3'}</td></tr>
                 <tr><td>Build Source</td><td>${buildSource}</td></tr>
                 <tr><td>Execution Mode</td><td>${reportData.mode || 'mocked'}</td></tr>
@@ -954,9 +955,10 @@ function generateAllureHtml(runDir, reportData, options = {}) {
 
       container.innerHTML = \`
         <div class="detail-header">
-          <div class="detail-top-row" style="display: flex; align-items: center; gap: 8px;">
+          <div class="detail-top-row" style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
             <span class="severity-badge severity-\${(step.priority || 'P0').toLowerCase()}" style="font-size: 11px; padding: 2px 8px;">\${step.priority || 'P0'}</span>
             <span class="status-badge \${step.status}">\${statusIcon}</span>
+            \${step.sideEffects ? '<span class="status-badge" style="background: rgba(56,189,248,0.15); color: #38bdf8; border: 1px solid rgba(56,189,248,0.3); font-size: 10px;">' + step.sideEffects + '</span>' : ''}
             <h2 style="margin: 0; font-size: 18px; color: var(--text);">\${step.checklistId ? '[' + step.checklistId + '] ' : ''}\${step.title || step.scenario}</h2>
             <a href="/#/postqode-test?rerun=\${encodeURIComponent(step.checklistId || step.id)}" target="_blank" class="btn btn-primary" style="margin-left: auto; padding: 4px 12px; font-size: 11px; text-decoration: none;" title="Re-run this test in PQ Dashboard">▶ Re-run in Dashboard</a>
           </div>
@@ -967,6 +969,38 @@ function generateAllureHtml(runDir, reportData, options = {}) {
             <span>Status: <strong style="color:\${isPass ? '#3fb950' : '#f85149'}">\${step.status.toUpperCase()}</strong></span>
           </div>
         </div>
+
+        <!-- Purpose & 4-Phase Verification Contract -->
+        \${step.meaning || step.pipeline ? \`
+        <div class="section-card" style="border-left: 3px solid #388bfd;">
+          <div class="section-card-title" style="color: #58a6ff;">Architectural Purpose & 4-Phase Contract</div>
+          \${step.meaning ? \`
+            <div style="background: rgba(56,139,253,0.08); border-radius: 6px; padding: 10px 12px; margin-bottom: 10px; font-size: 13px; line-height: 1.5; color: var(--text);">
+              <strong style="color: #58a6ff;">Why This Test Exists:</strong> \${step.meaning}
+            </div>
+          \` : ''}
+          \${step.pipeline ? \`
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; font-size: 12px;">
+              <div style="background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px;">
+                <div style="font-weight: 600; color: #79c0ff; margin-bottom: 4px;">1. Request Sent</div>
+                <div style="color: var(--text-muted); line-height: 1.4;">\${step.pipeline.request || 'Standard dispatched prompt'}</div>
+              </div>
+              <div style="background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px;">
+                <div style="font-weight: 600; color: #d2a8ff; margin-bottom: 4px;">2. Tools Invocations</div>
+                <div style="color: var(--text-muted); line-height: 1.4; font-family: ui-monospace, monospace;">\${step.pipeline.tools || 'None (DOM/UI interaction)'}</div>
+              </div>
+              <div style="background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px;">
+                <div style="font-weight: 600; color: #ffa657; margin-bottom: 4px;">3. Response Streamed</div>
+                <div style="color: var(--text-muted); line-height: 1.4;">\${step.pipeline.response || 'Streaming blocks & completion response'}</div>
+              </div>
+              <div style="background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px;">
+                <div style="font-weight: 600; color: #7ee787; margin-bottom: 4px;">4. UI & Side Effects</div>
+                <div style="color: var(--text-muted); line-height: 1.4;">\${step.pipeline.uiAndSideEffects || 'State and DOM verification'}</div>
+              </div>
+            </div>
+          \` : ''}
+        </div>
+        \` : ''}
 
         <!-- Description & Steps -->
         <div class="section-card">

@@ -278,7 +278,11 @@ export function initReport(state, renderChecklist, startTestRun) {
     kpiHost.textContent      = `${report.host} (${report.buildSource || 'installed'})`;
     if (kpiVersion) kpiVersion.textContent = (report.environment?.postqodeVersion) || report.postqodeVersion || '—';
     if (kpiOs)      kpiOs.textContent      = (report.environment?.os) || report.os || '—';
-    if (kpiModel)   kpiModel.textContent   = (report.environment?.defaultModel) || report.liveModel || (report.mode === 'live' ? 'kimi-k3' : 'Mock Engine');
+    if (kpiModel) {
+      const p = report.environment?.liveProvider || report.liveProvider;
+      const m = report.environment?.defaultModel || report.liveModel;
+      kpiModel.textContent = p && m && !m.includes(p) ? `${p} / ${m}` : (m || (report.mode === 'live' ? 'kimi-k3' : 'Mock Engine'));
+    }
 
     // Populate area filter dropdown
     populateAreaFilter(report.steps);
@@ -327,12 +331,39 @@ export function initReport(state, renderChecklist, startTestRun) {
       const area = step.sheetName || step.category || 'Core';
       const row  = document.createElement('tr');
       row.dataset.area = area;  // used for client-side filter
+
+      const pipelineHtml = step.pipeline ? `
+        <details style="margin-top:6px;font-size:10px;color:var(--text-3);">
+          <summary style="cursor:pointer;color:var(--accent);font-weight:600;display:inline-flex;align-items:center;gap:4px;">
+            <span>🔍 4-Phase Contract</span>
+          </summary>
+          <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:4px;padding:6px 8px;margin-top:4px;line-height:1.5;">
+            <div><strong style="color:var(--text-2);">1. Request:</strong> ${escapeHtml(step.pipeline.request || 'Dispatched')}</div>
+            <div><strong style="color:var(--text-2);">2. Tools:</strong> <code style="font-family:var(--font-mono);color:#79c0ff;">${escapeHtml(step.pipeline.tools || 'None')}</code></div>
+            <div><strong style="color:var(--text-2);">3. Response:</strong> ${escapeHtml(step.pipeline.response || 'Streaming handled')}</div>
+            <div><strong style="color:var(--text-2);">4. UI & Side Effects:</strong> <span style="color:#7ee787;">${escapeHtml(step.pipeline.uiAndSideEffects || 'State verified')}</span></div>
+          </div>
+        </details>` : '';
+
+      const meaningHtml = step.meaning ? `
+        <div style="font-size:11px;color:#58a6ff;background:rgba(56,139,253,0.08);border-left:3px solid #388bfd;padding:4px 8px;border-radius:4px;margin-top:4px;">
+          <strong>Purpose:</strong> ${escapeHtml(step.meaning)}
+        </div>` : '';
+
+      const sideEffectsBadge = step.sideEffects ? `
+        <span class="testlab-info-badge" style="background:rgba(56,189,248,0.15);color:#38bdf8;font-size:9px;font-weight:600;margin-left:6px;vertical-align:middle;">${escapeHtml(step.sideEffects)}</span>` : '';
+
       row.innerHTML = `
         <td style="font-family:var(--font-mono);color:var(--accent);font-weight:700;">${step.checklistId || step.id}</td>
         <td style="color:var(--text-3);font-size:11px;">${area}</td>
         <td>
-          <div style="font-weight:600;color:var(--text);">${step.title || step.scenario}</div>
+          <div style="font-weight:600;color:var(--text);">
+            ${step.title || step.scenario}
+            ${sideEffectsBadge}
+          </div>
           <div style="font-size:11px;color:var(--text-3);margin-top:2px;white-space:pre-line;">${step.steps || ''}</div>
+          ${meaningHtml}
+          ${pipelineHtml}
         </td>
         <td>
           <span class="testlab-model-pill ${modelClass}" title="${escapeHtml(modelVal)}">${escapeHtml(modelVal)}</span>

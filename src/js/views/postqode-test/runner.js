@@ -17,10 +17,11 @@ export function initRunner(state, renderChecklist) {
   const execPauseBtn    = document.getElementById('testlab-exec-pause-btn');
   const execStopBtn     = document.getElementById('testlab-exec-stop-btn');
 
-  const targetSelect    = document.getElementById('testlab-target-select');
-  const buildSelect     = document.getElementById('testlab-build-select');
-  const localPathInput  = document.getElementById('testlab-local-path-input');
-  const liveModelSelect = document.getElementById('testlab-live-model-select');
+  const targetSelect      = document.getElementById('testlab-target-select');
+  const buildSelect       = document.getElementById('testlab-build-select');
+  const localPathInput    = document.getElementById('testlab-local-path-input');
+  const liveProviderInput = document.getElementById('testlab-live-provider-input');
+  const liveModelInput    = document.getElementById('testlab-live-model-input');
 
   const executionSection = document.getElementById('testlab-execution-section');
   const executionStatus  = document.getElementById('testlab-execution-status');
@@ -261,7 +262,8 @@ export function initRunner(state, renderChecklist) {
           mode:          state.currentMode,
           buildSource:   buildSelect.value,
           localBuildPath: localPathInput.value.trim() || null,
-          liveModel:     liveModelSelect.value || 'moonshotai/kimi-k3',
+          liveProvider:  (liveProviderInput && liveProviderInput.value.trim()) || 'postqode',
+          liveModel:     (liveModelInput && liveModelInput.value.trim()) || 'moonshotai/kimi-k3',
           providerApiKeys,
           scenarios:     selectedScenarios,
         }),

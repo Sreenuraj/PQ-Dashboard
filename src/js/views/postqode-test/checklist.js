@@ -19,6 +19,8 @@ export function initChecklist(state, startTestRunFn) {
   const categoryTabs     = document.getElementById('testlab-category-tabs');
   const selectAllBtn     = document.getElementById('testlab-select-all');
   const presetP0Btn      = document.getElementById('testlab-preset-p0');
+  const presetSlashBtn   = document.getElementById('testlab-preset-slash');
+  const presetFlowsBtn   = document.getElementById('testlab-preset-flows');
   const presetProvBtn    = document.getElementById('testlab-preset-prov');
   const presetChatBtn    = document.getElementById('testlab-preset-chat');
   const presetGuiBtn     = document.getElementById('testlab-preset-gui');
@@ -39,7 +41,12 @@ export function initChecklist(state, startTestRunFn) {
   const modeBadge        = document.getElementById('testlab-mode-badge');
   const modePills        = document.querySelectorAll('#testlab-mode-pills .testlab-pill');
   const liveModelContainer = document.getElementById('testlab-live-model-container');
-  const liveModelSelect  = document.getElementById('testlab-live-model-select');
+  const liveProviderInput  = document.getElementById('testlab-live-provider-input');
+  const liveModelInput     = document.getElementById('testlab-live-model-input');
+  const detectedProviderBadge = document.getElementById('testlab-detected-provider-badge');
+  const detectedModelBadge    = document.getElementById('testlab-detected-model-badge');
+  const detectedConfigText    = document.getElementById('testlab-detected-config-text');
+  const syncConfigBtn         = document.getElementById('testlab-sync-config-btn');
 
   const quickSheetSelect = document.getElementById('testlab-quick-sheet-select');
   const runSheetBtn      = document.getElementById('testlab-run-sheet-btn');
@@ -104,7 +111,7 @@ export function initChecklist(state, startTestRunFn) {
             </div>
           </div>
           <div class="sheet-group-body"
-               style="${isCollapsed ? 'display: none;' : 'display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));'} gap: 12px; margin-top: 8px;">
+               style="${isCollapsed ? 'display: none;' : 'display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));'} gap: 12px; margin-top: 8px;">
       `;
 
       for (const sc of items) {
@@ -132,17 +139,45 @@ export function initChecklist(state, startTestRunFn) {
         const isChecked  = isLiveOnlyDisabled ? false : sc.defaultChecked;
         const isDisabled = isLiveOnlyDisabled || (sc.requiresApiKey && !isChecked);
 
+        const meaningHtml = sc.meaning
+          ? `<div style="font-size: 11px; color: var(--text-2); margin-top: 5px; line-height: 1.4; border-left: 2px solid var(--accent); padding-left: 8px;">
+               <span style="font-weight: 600; color: var(--text);">Purpose:</span> ${sc.meaning}
+             </div>`
+          : '';
+
+        const pipelineHtml = sc.pipeline
+          ? `
+            <details style="margin-top: 6px; font-size: 11px;" onclick="event.stopPropagation();">
+              <summary style="cursor: pointer; color: var(--accent); font-weight: 600; font-size: 10px; user-select: none;">
+                🔍 4-Phase Contract (Request ➔ Tools ➔ Response ➔ UI &amp; Side Effects)
+              </summary>
+              <div style="margin-top: 4px; padding: 6px 8px; background: var(--bg-2); border-radius: 4px; border: 1px solid var(--border); display: flex; flex-direction: column; gap: 4px;">
+                <div><strong style="color: var(--text-3);">1. Request:</strong> <span style="color: var(--text-2);">${sc.pipeline.request}</span></div>
+                <div><strong style="color: var(--text-3);">2. Tools:</strong> <code style="font-family: var(--font-mono); color: var(--accent-cyan, #58a6ff); font-size: 10px;">${sc.pipeline.tools}</code></div>
+                <div><strong style="color: var(--text-3);">3. Response:</strong> <span style="color: var(--text-2);">${sc.pipeline.response}</span></div>
+                <div><strong style="color: var(--text-3);">4. UI &amp; Side Effects:</strong> <span style="color: var(--text);">${sc.pipeline.uiAndSideEffects}</span></div>
+              </div>
+            </details>`
+          : '';
+
+        const sideEffectBadgeHtml = sc.sideEffects
+          ? `<div style="margin-top: 4px;"><span class="testlab-info-badge" style="font-size: 9px; background: rgba(88,166,255,0.12); color: #58a6ff; display: inline-block;">${sc.sideEffects}</span></div>`
+          : '';
+
         html += `
           <label class="testlab-check-item" data-id="${sc.id}" style="${isLiveOnlyDisabled ? 'opacity: 0.65;' : ''}">
             <input type="checkbox" value="${sc.id}" ${isChecked ? 'checked' : ''} ${isDisabled ? 'disabled' : ''} />
-            <div class="testlab-check-text">
+            <div class="testlab-check-text" style="width: 100%;">
               <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 3px; flex-wrap: wrap;">
                 <span class="testlab-info-badge" style="font-size: 10px; padding: 1px 6px;">${sc.checklistId}</span>
                 <span class="priority-badge ${pClass}">${sc.priority}</span>
-                <span class="testlab-check-title" style="font-size: 12px;">${sc.title.replace(/^[^:]+:\s*/, '')}</span>
+                <span class="testlab-check-title" style="font-size: 12px; font-weight: 600;">${sc.title.replace(/^[^:]+:\s*/, '')}</span>
                 ${badgeHtml}
               </div>
               <span class="testlab-check-desc">${sc.desc}</span>
+              ${meaningHtml}
+              ${sideEffectBadgeHtml}
+              ${pipelineHtml}
               ${keyInputHtml}
             </div>
           </label>`;
@@ -190,7 +225,7 @@ export function initChecklist(state, startTestRunFn) {
       });
     });
 
-    // ── Wire "Run Sheet" inline button ──
+    // ── Wire "Run Module" inline button ──
     checklist.querySelectorAll('.sheet-run-btn').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.preventDefault();
@@ -237,7 +272,12 @@ export function initChecklist(state, startTestRunFn) {
     tab.addEventListener('click', () => {
       categoryTabs.querySelectorAll('.testlab-tab').forEach((t) => t.classList.remove('active'));
       tab.classList.add('active');
-      renderChecklist(tab.dataset.category);
+      const cat = tab.dataset.category;
+      if (quickSheetSelect && runSheetBtn) {
+        quickSheetSelect.value = cat === 'all' ? '' : cat;
+        runSheetBtn.disabled = !quickSheetSelect.value;
+      }
+      renderChecklist(cat);
     });
   });
 
@@ -248,6 +288,24 @@ export function initChecklist(state, startTestRunFn) {
     });
     renderChecklist(state.currentCategory);
   });
+
+  if (presetSlashBtn) {
+    presetSlashBtn.addEventListener('click', () => {
+      state.scenariosData.forEach((sc) => {
+        sc.defaultChecked = sc.sheetName === 'Slash Commands';
+      });
+      renderChecklist('Slash Commands');
+    });
+  }
+
+  if (presetFlowsBtn) {
+    presetFlowsBtn.addEventListener('click', () => {
+      state.scenariosData.forEach((sc) => {
+        sc.defaultChecked = sc.sheetName === 'Workflows, Rules & Skills';
+      });
+      renderChecklist('Workflows, Rules & Skills');
+    });
+  }
 
   presetProvBtn.addEventListener('click', () => {
     state.scenariosData.forEach((sc) => {
@@ -308,6 +366,11 @@ export function initChecklist(state, startTestRunFn) {
             categoryTabs.querySelectorAll('.testlab-tab').forEach((x) => x.classList.remove('active'));
             t.classList.add('active');
           }
+        });
+      } else {
+        renderChecklist('all');
+        categoryTabs.querySelectorAll('.testlab-tab').forEach((t) => {
+          t.classList.toggle('active', t.dataset.category === 'all');
         });
       }
     });
@@ -440,5 +503,66 @@ export function initChecklist(state, startTestRunFn) {
     }
   })();
 
-  return { renderChecklist, setScenarioChecked, liveModelSelect, targetSelect, buildSelect, localPathInput };
+  // ── PostQode Active Config Auto-Detection ─────────────────────────────────
+  async function detectAndAutoFillPostQodeConfig(host = 'vscode-insiders', isExplicitClick = false) {
+    if (!detectedConfigText) return;
+    try {
+      detectedConfigText.textContent = '⚡ Checking PostQode active config...';
+      const res  = await fetch(`/api/postqode-test/active-llm-config?host=${encodeURIComponent(host || 'vscode-insiders')}`);
+      const data = await res.json();
+      if (data.detected) {
+        if (liveProviderInput && (isExplicitClick || !liveProviderInput.dataset.userEdited)) {
+          liveProviderInput.value = data.provider || 'postqode';
+          if (detectedProviderBadge) detectedProviderBadge.style.display = 'inline-flex';
+        }
+        if (liveModelInput && (isExplicitClick || !liveModelInput.dataset.userEdited)) {
+          liveModelInput.value = data.model || 'moonshotai/kimi-k3';
+          if (detectedModelBadge) detectedModelBadge.style.display = 'inline-flex';
+        }
+        detectedConfigText.innerHTML = `⚡ <strong>PostQode active:</strong> <span style="color:var(--accent);font-family:var(--font-mono)">${data.provider}</span> &bull; <code style="color:#a371f7">${data.model}</code>`;
+      } else {
+        detectedConfigText.textContent = '⚡ PostQode active config not detected (using defaults or custom input)';
+        if (detectedProviderBadge) detectedProviderBadge.style.display = 'none';
+        if (detectedModelBadge) detectedModelBadge.style.display = 'none';
+      }
+    } catch (_e) {
+      detectedConfigText.textContent = '⚡ Could not read PostQode config (enter manually above)';
+    }
+  }
+
+  if (liveProviderInput) {
+    liveProviderInput.addEventListener('input', () => {
+      liveProviderInput.dataset.userEdited = 'true';
+      if (detectedProviderBadge) detectedProviderBadge.style.display = 'none';
+    });
+  }
+
+  if (liveModelInput) {
+    liveModelInput.addEventListener('input', () => {
+      liveModelInput.dataset.userEdited = 'true';
+      if (detectedModelBadge) detectedModelBadge.style.display = 'none';
+    });
+  }
+
+  if (syncConfigBtn) {
+    syncConfigBtn.addEventListener('click', () => {
+      syncConfigBtn.disabled = true;
+      syncConfigBtn.textContent = 'Syncing...';
+      if (liveProviderInput) delete liveProviderInput.dataset.userEdited;
+      if (liveModelInput) delete liveModelInput.dataset.userEdited;
+      detectAndAutoFillPostQodeConfig(targetSelect.value, true).finally(() => {
+        syncConfigBtn.disabled = false;
+        syncConfigBtn.textContent = '🔄 Auto-fill';
+      });
+    });
+  }
+
+  targetSelect.addEventListener('change', () => {
+    detectAndAutoFillPostQodeConfig(targetSelect.value, false);
+  });
+
+  // Initial detection
+  detectAndAutoFillPostQodeConfig('vscode-insiders');
+
+  return { renderChecklist, setScenarioChecked, liveProviderInput, liveModelInput, targetSelect, buildSelect, localPathInput };
 }

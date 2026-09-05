@@ -724,7 +724,13 @@ function startProxy(config = {}) {
     }
 
     // Check if there is an active test dynamic mock handler
-    if (dynamicMockHandler && (!dynamicMockHandler.shouldHandle || dynamicMockHandler.shouldHandle({ url, method, host }))) {
+    const isDynamicMatch = dynamicMockHandler && (
+      (typeof dynamicMockHandler.shouldHandle === 'function' && dynamicMockHandler.shouldHandle({ url, method, host })) ||
+      (typeof dynamicMockHandler.match === 'function' && dynamicMockHandler.match({ url, method, host, headers: ctx.clientToProxyRequest.headers })) ||
+      (!dynamicMockHandler.shouldHandle && !dynamicMockHandler.match)
+    );
+
+    if (isDynamicMatch) {
       const requestChunks = [];
       ctx.clientToProxyRequest.on('data', (chunk) => {
         requestChunks.push(chunk);
@@ -735,12 +741,15 @@ function startProxy(config = {}) {
         try {
           await dynamicMockHandler.handle({
             ctx,
+            proxyToClientResponse: ctx.proxyToClientResponse,
+            clientToProxyRequest: ctx.clientToProxyRequest,
+            requestBody,
+            reqBody: requestBody,
             method,
             url,
             host: host.replace(/:\d+$/, ''),
             path: ctx.clientToProxyRequest.url,
             requestHeaders: { ...ctx.clientToProxyRequest.headers },
-            requestBody,
             startTime,
             onComplete: (record) => {
               store.add(record);

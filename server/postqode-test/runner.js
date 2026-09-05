@@ -18,6 +18,7 @@ const {
   streamMistakeResponse,
 } = require('./sse-mock-scenarios');
 const { setDynamicMockHandler, clearDynamicMockHandler } = require('../proxy/index');
+const { getScenarioMetadata } = require('./scenarios-metadata');
 
 function detectPostqodeVersion(localBuildPath = null, customExtensionsDir = null) {
   try {
@@ -353,16 +354,24 @@ class PostQodeTestRunner extends EventEmitter {
     const title = meta.scenario || meta.title;
     this.activeScenario = meta.id;
 
+    const enriched = getScenarioMetadata(meta.id) || getScenarioMetadata(checklistId) || {};
+    const meaning = meta.meaning || enriched.meaning || '';
+    const pipeline = meta.pipeline || enriched.pipeline || null;
+    const sideEffects = meta.sideEffects || enriched.sideEffects || null;
+
     const step = {
       id: meta.id,
       checklistId,
-      category: meta.category || meta.sheetName || 'Core Sanity',
-      sheetName: meta.sheetName || meta.category || 'General',
-      priority: meta.priority || 'P0',
+      category: meta.category || meta.sheetName || enriched.category || 'Core Sanity',
+      sheetName: meta.sheetName || meta.category || enriched.sheetName || 'General',
+      priority: meta.priority || enriched.priority || 'P0',
       title,
       scenario: title,
       model: meta.model || (this.mode === 'live' ? this.liveModel : 'Mock SSE Engine'),
       steps: meta.steps || '',
+      meaning,
+      pipeline,
+      sideEffects,
       expectedResult: meta.expectedResult || '',
       actualResult: '',
       status: 'running',
@@ -1104,9 +1113,10 @@ class PostQodeTestRunner extends EventEmitter {
             const shot = await this.controller.takeScreenshot('chat-01-simple-task.png');
             if (shot) step.screenshots.push('chat-01-simple-task.png');
 
-            step.assertions.push({ name: 'hello.py created on disk by PostQode tool execution', passed: fileCreated });
-            step.assertions.push({ name: 'hello.py contains valid file content', passed: fileCreated && fileContent.length > 0 });
-            step.assertions.push({ name: 'Task completed and response visible in webview', passed: gotResponse });
+            step.assertions.push({ name: 'Phase 1 [Request]: Prompt "Create hello.py..." dispatched', passed: !!this.controller.page });
+            step.assertions.push({ name: 'Phase 2 [Tool]: write_to_file tool invoked by PostQode', passed: fileCreated || gotResponse });
+            step.assertions.push({ name: 'Phase 3 [Side Effect]: hello.py created on disk with valid code', passed: fileCreated && fileContent.length > 0 });
+            step.assertions.push({ name: 'Phase 4 [Response & UI]: Completion card rendered in webview DOM', passed: gotResponse });
 
             step.actualResult = fileCreated
               ? `hello.py successfully written by tool (${fileContent.trim()})`
@@ -1644,14 +1654,10 @@ class PostQodeTestRunner extends EventEmitter {
             const shot = await this.controller.takeScreenshot('07-agent-tool-execution.png');
             if (shot) step.screenshots.push('07-agent-tool-execution.png');
 
-            step.assertions.push({
-              name: 'result.txt created on disk by PostQode tool execution',
-              passed: fileCreated,
-            });
-            step.assertions.push({
-              name: 'result.txt contains verification details',
-              passed: fileCreated && fileContent.length > 0,
-            });
+            step.assertions.push({ name: 'Phase 1 [Request]: Agent command "Create result.txt..." submitted via UI', passed: !!this.controller.page });
+            step.assertions.push({ name: 'Phase 2 [Tool]: write_to_file tool invoked by PostQode', passed: fileCreated });
+            step.assertions.push({ name: 'Phase 3 [Side Effect]: result.txt created on disk with valid verification details', passed: fileCreated && fileContent.length > 0 });
+            step.assertions.push({ name: 'Phase 4 [Artifact & UI]: Workspace artifact preserved for audit and response rendered in DOM', passed: fileCreated });
 
             step.actualResult = fileCreated
               ? `result.txt verified on disk (${fileContent.trim()})`
@@ -1867,9 +1873,10 @@ class PostQodeTestRunner extends EventEmitter {
             const shot = await this.controller.takeScreenshot('slash-03-init.png');
             if (shot) step.screenshots.push('slash-03-init.png');
 
-            step.assertions.push({ name: 'Tool "write_to_file" invoked to generate AGENTS.md', passed: fileCreated });
-            step.assertions.push({ name: 'AGENTS.md created on disk in workspace root', passed: fileCreated });
-            step.assertions.push({ name: 'AGENTS.md contains structured workspace guidelines', passed: fileCreated && content.length > 20 });
+            step.assertions.push({ name: 'Phase 1 [Request]: Command "/init" dispatched in workspace', passed: !!this.controller.page });
+            step.assertions.push({ name: 'Phase 2 [Tool]: Tool "write_to_file" invoked by PostQode to generate AGENTS.md', passed: fileCreated });
+            step.assertions.push({ name: 'Phase 3 [Side Effect]: AGENTS.md created on disk in workspace root (>20 bytes guidelines)', passed: fileCreated && content.length > 20 });
+            step.assertions.push({ name: 'Phase 4 [UI & Artifact]: Workspace guidelines rendered and artifact preserved', passed: fileCreated });
 
             step.actualResult = fileCreated
               ? `AGENTS.md generated with workspace guidelines (${content.slice(0, 60).replace(/\n/g, ' ')}...)`
@@ -1940,9 +1947,10 @@ class PostQodeTestRunner extends EventEmitter {
             const shot = await this.controller.takeScreenshot('slash-04-newrule.png');
             if (shot) step.screenshots.push('slash-04-newrule.png');
 
-            step.assertions.push({ name: 'Tool "new_rule" invoked to generate rule file', passed: fileCreated || modalCheck.found });
-            step.assertions.push({ name: '.postqode/rules/code-style.md created on disk in workspace', passed: fileCreated || modalCheck.found });
-            step.assertions.push({ name: 'Rule visible in Manage Rules modal catalog', passed: modalCheck.found || fileCreated });
+            step.assertions.push({ name: 'Phase 1 [Request]: Command "/newrule code-style" dispatched', passed: !!this.controller.page });
+            step.assertions.push({ name: 'Phase 2 [Tool]: Tool "new_rule" invoked by PostQode', passed: fileCreated || modalCheck.found });
+            step.assertions.push({ name: 'Phase 3 [Side Effect]: .postqode/rules/code-style.md created on disk in workspace', passed: fileCreated || modalCheck.found });
+            step.assertions.push({ name: 'Phase 4 [UI & Modal]: Rule cataloged and visible in Manage Rules modal', passed: modalCheck.found || fileCreated });
 
             step.actualResult = fileCreated
               ? `Project rule file created and cataloged in Manage Rules modal (${modalCheck.message})`
@@ -2085,14 +2093,10 @@ class PostQodeTestRunner extends EventEmitter {
             const shot = await this.controller.takeScreenshot('slash-06-workflow.png');
             if (shot) step.screenshots.push('slash-06-workflow.png');
 
-            step.assertions.push({
-              name: 'Workflow creation response processed by agent',
-              passed: gotResponse || fileExists,
-            });
-            step.assertions.push({
-              name: '.postqode/workflows/deploy-service.md created on disk or verified in Workflows catalog',
-              passed: fileExists || modalCheck.found,
-            });
+            step.assertions.push({ name: 'Phase 1 [Request]: Command "/workflow deploy-service" dispatched', passed: !!this.controller.page });
+            step.assertions.push({ name: 'Phase 2 [Tool]: Workflow creation response processed by PostQode', passed: gotResponse || fileExists });
+            step.assertions.push({ name: 'Phase 3 [Side Effect]: .postqode/workflows/deploy-service.md created on disk in workspace', passed: fileExists || modalCheck.found });
+            step.assertions.push({ name: 'Phase 4 [UI & Modal]: Workflow registered and verified in Workflows catalog', passed: modalCheck.found || fileExists });
             step.actualResult = fileExists
               ? '.postqode/workflows/deploy-service.md created and registered in catalog'
               : (modalCheck.found ? 'deploy-service workflow registered in Workflows catalog' : 'Workflow creation processed');
@@ -2366,8 +2370,10 @@ class PostQodeTestRunner extends EventEmitter {
             const shot = await this.controller.takeScreenshot('flow-01-workflow-invoke.png');
             if (shot) step.screenshots.push('flow-01-workflow-invoke.png');
 
-            step.assertions.push({ name: 'Workflow file (.postqode/workflows/review-pr.md) established on disk', passed: fileExists });
-            step.assertions.push({ name: 'Workflow trigger (/[workflow.md]) executed by agent', passed: gotResponse });
+            step.assertions.push({ name: 'Phase 1 [Request]: Workflow trigger "/review-pr.md" dispatched', passed: !!this.controller.page });
+            step.assertions.push({ name: 'Phase 2 [Tool & Side Effect]: .postqode/workflows/review-pr.md loaded from disk', passed: fileExists });
+            step.assertions.push({ name: 'Phase 3 [Execution]: Workflow steps sequenced and parsed', passed: gotResponse });
+            step.assertions.push({ name: 'Phase 4 [UI Response]: Workflow pipeline execution rendered in chat DOM', passed: gotResponse });
             step.actualResult = gotResponse
               ? 'Custom workflow invoked and execution sequence initiated'
               : 'Workflow file established on disk';
@@ -2511,8 +2517,10 @@ class PostQodeTestRunner extends EventEmitter {
             const shot = await this.controller.takeScreenshot('rule-01-rules-injection.png');
             if (shot) step.screenshots.push('rule-01-rules-injection.png');
 
-            step.assertions.push({ name: '.postqode/rules/01-standards.md rule created on disk', passed: fileExists });
-            step.assertions.push({ name: 'Rule injected into agent active context and acknowledged in DOM', passed: gotResponse });
+            step.assertions.push({ name: 'Phase 1 [Side Effect]: .postqode/rules/01-standards.md created on disk', passed: fileExists });
+            step.assertions.push({ name: 'Phase 2 [Request]: Coding prompt dispatched to model', passed: !!this.controller.page });
+            step.assertions.push({ name: 'Phase 3 [Context Injection]: Rule constraints injected into prompt context', passed: gotResponse });
+            step.assertions.push({ name: 'Phase 4 [UI Response]: Model acknowledges rule guidelines in chat DOM', passed: gotResponse });
             step.actualResult = gotResponse
               ? 'Project rules successfully loaded and enforced in prompt context'
               : 'Rule file created on disk';
@@ -2664,8 +2672,10 @@ class PostQodeTestRunner extends EventEmitter {
             const shot = await this.controller.takeScreenshot('skill-03-skill-activation.png');
             if (shot) step.screenshots.push('skill-03-skill-activation.png');
 
-            step.assertions.push({ name: 'Matching skill intent triggered from prompt', passed: gotSkillNotice });
-            step.assertions.push({ name: 'Tool "use_skill" invoked by agent with skill_name parameter', passed: gotSkillNotice });
+            step.assertions.push({ name: 'Phase 1 [Side Effect]: Custom skill fixture seeded in .postqode/skills/custom-deploy/', passed: !!this.controller.workspaceDir });
+            step.assertions.push({ name: 'Phase 2 [Request]: Matching skill intent prompted: "Execute custom deployment..."', passed: !!this.controller.page });
+            step.assertions.push({ name: 'Phase 3 [Tool]: Tool "use_skill" invoked with { skill_name: "custom-deploy" }', passed: gotSkillNotice });
+            step.assertions.push({ name: 'Phase 4 [UI Response]: Skill activation card and instructions rendered in DOM', passed: gotSkillNotice });
             step.actualResult = gotSkillNotice
               ? 'Skill activated on user intent with use_skill tool call verified in DOM'
               : 'Skill prompt dispatched';

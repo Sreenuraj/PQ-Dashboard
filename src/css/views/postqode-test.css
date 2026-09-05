@@ -4,9 +4,10 @@
   display: flex;
   flex-direction: column;
   gap: 20px;
-  padding: 24px;
-  max-width: 1400px;
-  margin: 0 auto;
+  padding: 0;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .testlab-header {
@@ -81,8 +82,21 @@
 
 .testlab-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
+  width: 100%;
+}
+
+@media (max-width: 1080px) {
+  .testlab-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .testlab-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .testlab-card {
@@ -200,6 +214,8 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
+  flex: 1;
+  min-width: 0;
 }
 
 .testlab-check-title {
@@ -329,6 +345,12 @@
   border-radius: var(--radius-sm);
   margin-top: 10px;
   margin-bottom: 2px;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.sheet-group-heading:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-2);
 }
 
 .sheet-group-title {

@@ -9,6 +9,14 @@ export const guiScenarios = [
     priority: 'P0',
     title: 'GUI-01: Activity-Bar UI Icon & Full Hydration',
     desc: 'Clicks PostQode Activity Bar icon via UI; asserts logo, tasks, prompt box, and status bar hydrate.',
+    meaning: 'Proves sidebar activation contract: clicking the PostQode activity bar icon registers the webview container, mounts the React component tree, and fully hydrates the primary workspace (welcome header, prompt box, bottom status bar).',
+    pipeline: {
+      request: 'Synthetic UI click on PostQode activity bar icon in workbench',
+      tools: 'VS Code view container activation',
+      response: 'Webview iframe mounts and loads React application bundle',
+      uiAndSideEffects: 'PostQode sidebar visible, welcome logo, recent tasks container, prompt input, and bottom status bar fully hydrated',
+    },
+    sideEffects: 'DOM Hydration: Full webview React component tree mounted',
     defaultChecked: true,
   },
   {
@@ -18,6 +26,14 @@ export const guiScenarios = [
     priority: 'P1',
     title: 'GUI-02: View Title Navigation Action Icons',
     desc: 'Inspects view title action buttons (+, History, Settings, MCP, Rules, Account) in header DOM.',
+    meaning: 'Proves header navigation contract: all top header action buttons (+ New Task, History Clock, Settings Gear, MCP Plug, Rules Scales, Account) contributed to view/title render in the DOM and are accessible.',
+    pipeline: {
+      request: 'Inspect header DOM of active PostQode webview container',
+      tools: 'VS Code action contribution registry',
+      response: 'DOM elements returned with accessible labels and click handlers',
+      uiAndSideEffects: 'Action buttons (+, History, Settings, MCP, Rules, Account) rendered and interactive in header',
+    },
+    sideEffects: 'DOM Inspection: View title header navigation buttons verified',
     defaultChecked: true,
   },
   {
@@ -27,6 +43,14 @@ export const guiScenarios = [
     priority: 'P1',
     title: 'GUI-07: Fullscreen Toggle & Dynamic Editor Auto-Resize',
     desc: 'Expands PostQode to fullscreen; opens file in Monaco editor; asserts side-by-side resize and context attachment.',
+    meaning: 'Proves responsive layout contract: PostQode maximizes into fullscreen mode and dynamically yields width side-by-side when Monaco editor opens a workspace file, asserting non-zero side-by-side dimensions.',
+    pipeline: {
+      request: 'Toggle fullscreen secondary sidebar mode and open workspace file in Monaco editor',
+      tools: 'VS Code layout engine & Monaco editor',
+      response: 'Layout split event handled cleanly',
+      uiAndSideEffects: 'Editor and PostQode docked side-by-side with measured non-zero pixel widths; evidence screenshots captured',
+    },
+    sideEffects: 'Layout Resize: Monaco editor and PostQode webview docked side-by-side',
     defaultChecked: true,
   },
   {
@@ -36,6 +60,14 @@ export const guiScenarios = [
     priority: 'P0',
     title: 'UI-03: Bottom Prompt Controls, Mode Dropdown & Model Badge',
     desc: 'Inspects prompt controls, tests Mode dropdown click, dynamically verifies active model badge.',
+    meaning: 'Proves input interface contract: the bottom prompt bar (textarea, @ mentions, + attachments, Send button, Mode dropdown, and dynamic model badge) is active, interactive, and correctly reflects the active proxy status.',
+    pipeline: {
+      request: 'Inspect bottom controls and toggle Mode dropdown via UI click',
+      tools: 'React state management & mode switcher',
+      response: 'Mode selector dropdown renders options (Agent Mode / Plan Mode)',
+      uiAndSideEffects: 'Prompt controls active, mode toggle verified, dynamic model badge and PQ proxy status extracted',
+    },
+    sideEffects: 'UI State: Mode dropdown toggled and model badge extracted',
     defaultChecked: true,
   },
 ];

@@ -13,7 +13,7 @@ export function getTemplate() {
             <span>🧪</span> PostQode Test Lab
             <span class="testlab-info-badge success" id="testlab-host-status">Inspecting Hosts...</span>
           </h1>
-          <p>Automated Release Testing Studio for PostQode Extension &bull; Sheet-by-Sheet Automation &bull; Fullscreen Mode &bull; Clean Teardown</p>
+          <p>Automated Release Testing Studio for PostQode Extension &bull; Module-by-Module Automation &bull; Fullscreen Mode &bull; Clean Teardown</p>
         </div>
         <div class="testlab-header-actions">
           <button id="testlab-pause-btn" class="testlab-btn testlab-btn-warning" style="display: none;">
@@ -97,20 +97,35 @@ export function getTemplate() {
             <button class="testlab-pill" data-mode="live">Live Provider</button>
           </div>
 
-          <!-- Live Model Selector (revealed in Live mode) -->
-          <div id="testlab-live-model-container" style="display: none; margin-top: 4px;">
-            <label style="font-size: 11px; font-weight: 600; color: var(--text-2); display: block; margin-bottom: 4px;">
-              PostQode API Model:
-            </label>
-            <select id="testlab-live-model-select" class="testlab-select">
-              <option value="moonshotai/kimi-k3" selected>moonshotai/kimi-k3 (Default cost-effective coding model)</option>
-              <option value="moonshotai/kimi-k2.6">moonshotai/kimi-k2.6 (Fast coding model)</option>
-              <option value="anthropic/claude-sonnet-4.6">anthropic/claude-sonnet-4.6</option>
-              <option value="openai/gpt-5.4">openai/gpt-5.4</option>
-              <option value="z-ai/glm-5.1">z-ai/glm-5.1</option>
-            </select>
-            <div style="font-size: 10px; color: var(--text-3); margin-top: 3px;">
-              PROV-03 uses this model in Live mode. In Mocked mode, PROV-03 is safely disabled.
+          <!-- Live Provider & Model Inputs (revealed in Live mode) -->
+          <div id="testlab-live-model-container" style="display: none; margin-top: 6px; display: flex; flex-direction: column; gap: 10px;">
+            <!-- Copy instructions -->
+            <div style="font-size: 11px; color: var(--text-2); background: rgba(56, 139, 253, 0.1); border: 1px solid rgba(56, 139, 253, 0.3); border-radius: var(--radius-sm); padding: 8px 10px; line-height: 1.4;">
+              💡 <strong>Live Execution:</strong> Enter the API Provider and Model ID below (or copy them directly from your PostQode extension settings ⚙ in the sidebar).
+            </div>
+
+            <!-- API Provider Input -->
+            <div>
+              <label for="testlab-live-provider-input" style="font-size: 11px; font-weight: 600; color: var(--text-2); display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <span>API Provider:</span>
+                <span id="testlab-detected-provider-badge" class="testlab-info-badge success" style="font-size: 9.5px; padding: 1px 6px; display: none;">From PostQode</span>
+              </label>
+              <input type="text" id="testlab-live-provider-input" class="testlab-input" placeholder="e.g. postqode, anthropic, openai-native, openrouter" value="postqode" style="width: 100%; box-sizing: border-box; padding: 8px 10px; font-size: 12px; font-family: var(--font-mono); background: var(--bg-3); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" />
+            </div>
+
+            <!-- Model Input -->
+            <div>
+              <label for="testlab-live-model-input" style="font-size: 11px; font-weight: 600; color: var(--text-2); display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <span>Model ID:</span>
+                <span id="testlab-detected-model-badge" class="testlab-info-badge success" style="font-size: 9.5px; padding: 1px 6px; display: none;">From PostQode</span>
+              </label>
+              <input type="text" id="testlab-live-model-input" class="testlab-input" placeholder="e.g. moonshotai/kimi-k3, claude-sonnet-4.5, gpt-4o" value="moonshotai/kimi-k3" style="width: 100%; box-sizing: border-box; padding: 8px 10px; font-size: 12px; font-family: var(--font-mono); background: var(--bg-3); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" />
+            </div>
+
+            <!-- Auto-Fill from PostQode & Sync status -->
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 10.5px; color: var(--text-3); background: var(--bg-1); padding: 6px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border);">
+              <span id="testlab-detected-config-text" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">⚡ Detecting PostQode active config...</span>
+              <button id="testlab-sync-config-btn" type="button" class="testlab-btn testlab-btn-secondary" style="padding: 2px 8px; font-size: 10px; flex-shrink: 0;" title="Re-detect and auto-fill current active provider and model from PostQode">🔄 Auto-fill</button>
             </div>
           </div>
 
@@ -124,11 +139,11 @@ export function getTemplate() {
           <div class="testlab-card-title" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
             <span>4. Test Scenarios</span>
             <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-              <!-- Quick Sheet Selector -->
+              <!-- Quick Module Selector -->
               <div style="display: flex; align-items: center; gap: 6px; background: var(--bg-1); padding: 3px 8px; border-radius: var(--radius-sm); border: 1px solid var(--border);">
-                <span style="font-size: 11px; color: var(--text-2); font-weight: 600;">Run Sheet:</span>
+                <span style="font-size: 11px; color: var(--text-2); font-weight: 600;">Run Module:</span>
                 <select id="testlab-quick-sheet-select" class="testlab-select" style="width: auto; padding: 2px 6px; font-size: 11px; border: none; background: transparent; cursor: pointer;">
-                  <option value="">-- Choose a Sheet --</option>
+                  <option value="">-- Choose a Module --</option>
                   <option value="Providers &amp; Models">Providers &amp; Models</option>
                   <option value="GUI &amp; Editor Integration">GUI &amp; Editor Integration</option>
                   <option value="Install &amp; Activation">Install &amp; Activation</option>
@@ -137,14 +152,18 @@ export function getTemplate() {
                   <option value="MCP">MCP</option>
                   <option value="Checkpoints, History &amp; State">Checkpoints, History &amp; State</option>
                   <option value="Files &amp; Terminal Tools">Files &amp; Terminal Tools</option>
+                  <option value="Slash Commands">Slash Commands</option>
+                  <option value="Workflows, Rules &amp; Skills">Workflows, Rules &amp; Skills</option>
                 </select>
                 <button id="testlab-run-sheet-btn" class="testlab-btn testlab-btn-primary" style="padding: 2px 8px; font-size: 10px;" disabled>
-                  ▶ Run Sheet
+                  ▶ Run Module
                 </button>
               </div>
               <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                 <span style="font-size: 11px; color: var(--accent); cursor: pointer;" id="testlab-preset-p0">P0 Sanity</span>
-                <span style="font-size: 11px; color: var(--accent); cursor: pointer;" id="testlab-preset-prov">Providers &amp; Models</span>
+                <span style="font-size: 11px; color: var(--accent); cursor: pointer;" id="testlab-preset-slash">Slash Commands</span>
+                <span style="font-size: 11px; color: var(--accent); cursor: pointer;" id="testlab-preset-flows">Workflows &amp; Skills</span>
+                <span style="font-size: 11px; color: var(--accent); cursor: pointer;" id="testlab-preset-prov">Providers</span>
                 <span style="font-size: 11px; color: var(--accent); cursor: pointer;" id="testlab-preset-chat">Chat &amp; Agent</span>
                 <span style="font-size: 11px; color: var(--text-2); cursor: pointer;" id="testlab-preset-gui">Fullscreen &amp; GUI</span>
                 <span style="font-size: 11px; color: var(--text-2); cursor: pointer;" id="testlab-preset-lifecycle">Lifecycle</span>
@@ -155,7 +174,9 @@ export function getTemplate() {
 
           <!-- Category Navigation Tabs -->
           <div class="testlab-tabs" id="testlab-category-tabs">
-            <button class="testlab-tab active" data-category="all">All Sheets</button>
+            <button class="testlab-tab active" data-category="all">All Modules</button>
+            <button class="testlab-tab" data-category="Slash Commands">Slash Commands</button>
+            <button class="testlab-tab" data-category="Workflows, Rules &amp; Skills">Workflows &amp; Skills</button>
             <button class="testlab-tab" data-category="Providers &amp; Models">Providers &amp; Models</button>
             <button class="testlab-tab" data-category="GUI &amp; Editor Integration">GUI &amp; Editor</button>
             <button class="testlab-tab" data-category="Install &amp; Activation">Install &amp; Activation</button>
@@ -167,7 +188,7 @@ export function getTemplate() {
           </div>
 
           <!-- Checklist Grid Container -->
-          <div class="testlab-checklist" id="testlab-checklist" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px;">
+          <div class="testlab-checklist" id="testlab-checklist" style="display: flex; flex-direction: column; gap: 12px; width: 100%;">
             <div style="color: var(--text-3); font-size: 12px; padding: 12px;">Loading release checklist...</div>
           </div>
         </div>
