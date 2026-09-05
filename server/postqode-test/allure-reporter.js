@@ -743,7 +743,10 @@ function generateAllureHtml(runDir, reportData, options = {}) {
             <div>
               <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px;">Environment & Execution Properties</div>
               <table class="env-table">
+                <tr><td>PostQode Version</td><td style="color: var(--accent); font-weight: 600;">${reportData.environment?.postqodeVersion || reportData.postqodeVersion || 'v3.0.26-beta.2'}</td></tr>
+                <tr><td>Host OS</td><td>${reportData.environment?.os || reportData.os || 'macOS'}</td></tr>
                 <tr><td>Target Host</td><td>${host}</td></tr>
+                <tr><td>Default Model</td><td style="font-family: ui-monospace, monospace; color: #a371f7;">${reportData.environment?.defaultModel || reportData.liveModel || 'moonshotai/kimi-k3'}</td></tr>
                 <tr><td>Build Source</td><td>${buildSource}</td></tr>
                 <tr><td>Execution Mode</td><td>${reportData.mode || 'mocked'}</td></tr>
                 <tr><td>Timestamp</td><td>${timestamp}</td></tr>
@@ -766,6 +769,7 @@ function generateAllureHtml(runDir, reportData, options = {}) {
                 <th style="padding: 8px 10px;">Category</th>
                 <th style="padding: 8px 10px;">Priority</th>
                 <th style="padding: 8px 10px;">Scenario</th>
+                <th style="padding: 8px 10px;">Model</th>
                 <th style="padding: 8px 10px;">Duration</th>
                 <th style="padding: 8px 10px;">Status</th>
               </tr>
@@ -777,6 +781,7 @@ function generateAllureHtml(runDir, reportData, options = {}) {
                   <td style="padding: 8px 10px; color: var(--text-muted);">${s.category || 'Core'}</td>
                   <td style="padding: 8px 10px;"><span class="severity-badge severity-${(s.priority || 'P0').toLowerCase()}">${s.priority || 'P0'}</span></td>
                   <td style="padding: 8px 10px; font-weight: 500;">${s.title}</td>
+                  <td style="padding: 8px 10px; font-family: ui-monospace, monospace; font-size: 11px; color: #a371f7;">${s.model || (reportData.mode === 'live' ? reportData.liveModel : 'Mock SSE')}</td>
                   <td style="padding: 8px 10px; font-family: ui-monospace, monospace; color: var(--text-muted);">${((s.durationMs || 0)/1000).toFixed(1)}s</td>
                   <td style="padding: 8px 10px;"><span class="status-badge ${s.status}">${s.status === 'passed' ? '✔' : '✖'}</span></td>
                 </tr>
@@ -957,6 +962,7 @@ function generateAllureHtml(runDir, reportData, options = {}) {
           </div>
           <div class="detail-meta-row">
             <span>Sheet: <strong>\${step.sheetName || step.category || 'Core'}</strong></span>
+            <span>Model: <strong style="color: #a371f7; font-family: ui-monospace, monospace;">\${step.model || (reportData.mode === 'live' ? reportData.liveModel : 'Mock SSE')}</strong></span>
             <span>Duration: <strong>\${((step.durationMs || 0)/1000).toFixed(2)}s</strong></span>
             <span>Status: <strong style="color:\${isPass ? '#3fb950' : '#f85149'}">\${step.status.toUpperCase()}</strong></span>
           </div>

@@ -189,8 +189,99 @@ async function streamToolCallResponse({
   return sentChunks.join('');
 }
 
+/**
+ * Stream a response with <think>...</think> reasoning blocks followed by final response.
+ * Used to verify CHAT-03 progressive rendering and <think> tag sanitization.
+ */
+async function streamWithThinkTags({
+  res,
+  thinkingText = 'Analyzing requirements and planning execution steps...',
+  responseText = 'I will create the requested file and configure the environment cleanly.',
+  chunkDelayMs = 25,
+  model = 'moonshotai/kimi-k3',
+  onChunk,
+}) {
+  const fullText = `<think>\n${thinkingText}\n</think>\n\n${responseText}`;
+  return streamTextResponse({
+    res,
+    text: fullText,
+    chunkSize: 10,
+    chunkDelayMs,
+    model,
+    onChunk,
+  });
+}
+
+/**
+ * Stream multiple tool calls simultaneously in a single turn.
+ * Used for CHAT-07 (Parallel tool calling batching reads).
+ */
+async function streamParallelToolCalls({
+  res,
+  toolCalls = [],
+  chunkDelayMs = 20,
+  model = 'moonshotai/kimi-k3',
+  onChunk,
+}) {
+  const id = `gen-${Date.now()}`;
+  let sentChunks = [];
+
+  const initComment = ': OPENROUTER PROCESSING\n\n';
+  res.write(initComment);
+  sentChunks.push(initComment);
+
+  const initChunk = buildChunk({
+    id,
+    model,
+    delta: {
+      role: 'assistant',
+      content: null,
+      tool_calls: toolCalls.map((tc, idx) => ({
+        index: idx,
+        id: tc.id || `call-${Date.now()}-${idx}`,
+        type: 'function',
+        function: { name: tc.name, arguments: JSON.stringify(tc.arguments || {}) },
+      })),
+    },
+  });
+  res.write(initChunk);
+  sentChunks.push(initChunk);
+  if (onChunk) onChunk(initChunk);
+
+  if (chunkDelayMs > 0) {
+    await new Promise((r) => setTimeout(r, chunkDelayMs));
+  }
+
+  if (!res.writableEnded && !res.destroyed) {
+    const endChunk = buildChunk({
+      id,
+      model,
+      delta: { content: '', role: 'assistant' },
+      finish_reason: 'tool_calls',
+      usage: {
+        prompt_tokens: 350,
+        completion_tokens: 90,
+        total_tokens: 440,
+        cost: 0,
+      },
+    });
+    res.write(endChunk);
+    sentChunks.push(endChunk);
+    if (onChunk) onChunk(endChunk);
+
+    const doneChunk = 'data: [DONE]\n\n';
+    res.write(doneChunk);
+    sentChunks.push(doneChunk);
+    res.end();
+  }
+
+  return sentChunks.join('');
+}
+
 module.exports = {
   buildChunk,
   streamTextResponse,
   streamToolCallResponse,
+  streamWithThinkTags,
+  streamParallelToolCalls,
 };
