@@ -16,6 +16,7 @@ import { renderDeepCompare } from './views/deep-compare.js';
 import { renderNetwork } from './views/network.js';
 import { renderPromptAnalytics, silentRefreshPromptAnalytics } from './views/prompt-analytics.js';
 import { renderSources } from './views/sources.js';
+import { renderPostQodeTest } from './views/postqode-test.js';
 import { api }            from './api.js';
 import { getDateRange, initDatePicker } from './components/date-picker.js';
 import { applyChartTheme } from './components/charts.js';
@@ -76,6 +77,7 @@ const routes = {
   'baseline-editor': (p) => renderBaselineEditor(container, p.get('id')),
   'baseline-enrich': (p) => renderBaselineEnrich(container, p.get('id')),
   test:        (p) => renderTest(container, p),
+  'postqode-test': (p) => renderPostQodeTest(container),
   deepcompare: (p) => renderDeepCompare(container, p),
   network:     (p) => renderNetwork(container),
   'prompt-analytics': (p) => renderPromptAnalytics(container, p),

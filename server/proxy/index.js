@@ -93,6 +93,19 @@ function decodeBody(buffer, headers) {
 
 const mocksPath = path.resolve('./data/network-mocks.json');
 let mockRules = [];
+let dynamicMockHandler = null;
+
+function setDynamicMockHandler(handler) {
+  dynamicMockHandler = handler;
+}
+
+function clearDynamicMockHandler() {
+  dynamicMockHandler = null;
+}
+
+function getDynamicMockHandler() {
+  return dynamicMockHandler;
+}
 
 function loadMockRules() {
   try {
@@ -710,6 +723,42 @@ function startProxy(config = {}) {
       return; // Don't call callback() here — we call it inside the promise .then()
     }
 
+    // Check if there is an active test dynamic mock handler
+    if (dynamicMockHandler && (!dynamicMockHandler.shouldHandle || dynamicMockHandler.shouldHandle({ url, method, host }))) {
+      const requestChunks = [];
+      ctx.clientToProxyRequest.on('data', (chunk) => {
+        requestChunks.push(chunk);
+      });
+      ctx.clientToProxyRequest.on('end', async () => {
+        const rawReqBody = Buffer.concat(requestChunks);
+        const requestBody = decodeBody(rawReqBody, ctx.clientToProxyRequest.headers);
+        try {
+          await dynamicMockHandler.handle({
+            ctx,
+            method,
+            url,
+            host: host.replace(/:\d+$/, ''),
+            path: ctx.clientToProxyRequest.url,
+            requestHeaders: { ...ctx.clientToProxyRequest.headers },
+            requestBody,
+            startTime,
+            onComplete: (record) => {
+              store.add(record);
+              broadcast(record);
+            },
+          });
+        } catch (err) {
+          console.error('[Dynamic Mock] Error executing handler:', err);
+          if (!ctx.proxyToClientResponse.headersSent) {
+            ctx.proxyToClientResponse.writeHead(500, { 'content-type': 'application/json' });
+            ctx.proxyToClientResponse.end(JSON.stringify({ error: err.message }));
+          }
+        }
+      });
+      ctx.clientToProxyRequest.resume();
+      return;
+    }
+
     // Check if there's a matching mock rule
     const rule = mockRules.find(r => {
       if (!r.enabled) return false;
@@ -956,4 +1005,5 @@ module.exports = {
   startProxy, getProxyStatus, getStore,
   getMockRules, addMockRule, deleteMockRule,
   getInterceptState, setInterceptState, resolveInterceptedRequest, forwardAllPending, getPendingRequests,
+  setDynamicMockHandler, clearDynamicMockHandler, getDynamicMockHandler,
 };
