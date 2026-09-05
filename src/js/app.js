@@ -16,7 +16,7 @@ import { renderDeepCompare } from './views/deep-compare.js';
 import { renderNetwork } from './views/network.js';
 import { renderPromptAnalytics, silentRefreshPromptAnalytics } from './views/prompt-analytics.js';
 import { renderSources } from './views/sources.js';
-import { renderPostQodeTest } from './views/postqode-test.js';
+import { renderPostQodeTest } from './views/postqode-test/index.js';
 import { api }            from './api.js';
 import { getDateRange, initDatePicker } from './components/date-picker.js';
 import { applyChartTheme } from './components/charts.js';
