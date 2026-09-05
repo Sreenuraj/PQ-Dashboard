@@ -82,24 +82,24 @@ export function initChecklist(state, startTestRunFn) {
                            transform: ${isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)'};"
                     class="sheet-chevron">▼</span>
               <span class="sheet-group-title">
-                <span>📋</span> Sheet: <strong>${sheetName}</strong>
+                <strong>${sheetName}</strong>
               </span>
-              <span class="testlab-info-badge" style="font-size: 10px;">${items.length} Scenarios</span>
+              <span class="testlab-info-badge" style="font-size: 10px;">${items.length} tests</span>
             </div>
             <div style="display: flex; gap: 6px; align-items: center;" onclick="event.stopPropagation();">
               <button type="button"
                       class="testlab-btn ${allSelected ? 'testlab-btn-primary' : 'testlab-btn-secondary'} sheet-select-btn"
                       data-sheet="${sheetName}"
                       style="padding: 2px 8px; font-size: 10px;"
-                      title="${allSelected ? 'Deselect all tests in this sheet' : 'Select all tests in this sheet'}">
-                ${allSelected ? '☑ Sheet Selected' : '☐ Select Sheet'}
+                      title="${allSelected ? 'Deselect all in this area' : 'Select all in this area'}">
+                ${allSelected ? '☑ Selected' : '☐ Select All'}
               </button>
               <button type="button"
                       class="testlab-btn testlab-btn-primary sheet-run-btn"
                       data-sheet="${sheetName}"
                       style="padding: 2px 10px; font-size: 10px; font-weight: 600;"
-                      title="Run only tests in this sheet">
-                ▶ Run Sheet
+                      title="Run only tests in this feature area">
+                ▶ Run
               </button>
             </div>
           </div>

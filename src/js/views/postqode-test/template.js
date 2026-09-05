@@ -119,10 +119,10 @@ export function getTemplate() {
           </div>
         </div>
 
-        <!-- 4. Release Checklist Matrix Grouped by Sheet Name -->
+        <!-- 4. Test Scenarios -->
         <div class="testlab-card" style="grid-column: 1 / -1;">
           <div class="testlab-card-title" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
-            <span>4. Release Checklist Matrix (Grouped by Excel Sheet)</span>
+            <span>4. Test Scenarios</span>
             <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
               <!-- Quick Sheet Selector -->
               <div style="display: flex; align-items: center; gap: 6px; background: var(--bg-1); padding: 3px 8px; border-radius: var(--radius-sm); border: 1px solid var(--border);">
@@ -199,29 +199,46 @@ export function getTemplate() {
         </div>
       </div>
 
-      <!-- Execution Report & Artifacts View -->
-      <div id="testlab-report-section" style="display: none;">
-        <div class="testlab-card">
+      <!-- Past Test Runs History -->
+      <div class="testlab-card" id="testlab-runs-card">
+        <div class="testlab-card-title">
+          <span>Recent Test Runs</span>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <span id="testlab-runs-pagination-info" style="font-size: 11px; color: var(--text-3);"></span>
+            <button id="testlab-runs-prev-btn" class="testlab-btn testlab-btn-secondary" style="padding: 3px 8px; font-size: 11px;" disabled>‹ Prev</button>
+            <button id="testlab-runs-next-btn" class="testlab-btn testlab-btn-secondary" style="padding: 3px 8px; font-size: 11px;" disabled>Next ›</button>
+            <button id="testlab-refresh-runs-btn" class="testlab-btn testlab-btn-secondary" style="padding: 4px 10px; font-size: 11px;">↻ Refresh</button>
+          </div>
+        </div>
+        <div id="testlab-runs-table-container">
+          <div style="color: var(--text-3); font-size: 12px;">Loading past test runs...</div>
+        </div>
+      </div>
+
+      <!-- Execution Report (opens inline below Runs History when View is clicked) -->
+      <div id="testlab-report-section" style="display: none; margin-top: 0;">
+        <div class="testlab-card" style="border-top: 2px solid var(--accent);">
           <div class="testlab-card-title" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
             <div style="display: flex; align-items: center; gap: 8px;">
-              <span>5. Release Checklist Execution Report</span>
+              <span>Execution Report</span>
               <span id="testlab-report-badge" class="testlab-info-badge success">PASSED</span>
+              <button id="testlab-close-report-btn" class="testlab-btn testlab-btn-secondary" style="padding: 2px 8px; font-size: 10px;">✕ Close</button>
             </div>
             <div style="display: flex; gap: 8px; flex-wrap: wrap;">
               <button id="testlab-rerun-failed-btn" class="testlab-btn testlab-btn-danger" style="display: none; padding: 4px 10px; font-size: 11px;">
-                🔄 Re-run Failed Tests
+                🔄 Re-run Failed
               </button>
               <a id="testlab-view-allure-btn" href="#" target="_blank" class="testlab-btn testlab-btn-primary" style="padding: 4px 12px; font-size: 11px; text-decoration: none;">
-                📊 View Allure Report
+                📊 Allure Report
               </a>
-              <a id="testlab-download-allure-btn" href="#" download class="testlab-btn testlab-btn-secondary" style="padding: 4px 10px; font-size: 11px; text-decoration: none;" title="Download standalone portable Allure HTML report with embedded screenshots">
+              <a id="testlab-download-allure-btn" href="#" download class="testlab-btn testlab-btn-secondary" style="padding: 4px 10px; font-size: 11px; text-decoration: none;" title="Download Allure HTML">
                 ⬇ Allure HTML
               </a>
-              <a id="testlab-download-bundle-btn" href="#" class="testlab-btn testlab-btn-secondary" style="padding: 4px 10px; font-size: 11px; text-decoration: none;" title="Download complete release evidence zip bundle">
-                📦 Evidence Bundle (ZIP)
+              <a id="testlab-download-bundle-btn" href="#" class="testlab-btn testlab-btn-secondary" style="padding: 4px 10px; font-size: 11px; text-decoration: none;" title="Download full evidence zip">
+                📦 ZIP
               </a>
-              <a id="testlab-download-shots-btn" href="#" class="testlab-btn testlab-btn-secondary" style="padding: 4px 10px; font-size: 11px; text-decoration: none;" title="Download all captured screenshots">
-                📸 Screenshots (ZIP)
+              <a id="testlab-download-shots-btn" href="#" class="testlab-btn testlab-btn-secondary" style="padding: 4px 10px; font-size: 11px; text-decoration: none;" title="Download screenshots">
+                📸 Screenshots
               </a>
               <a id="testlab-export-html-btn" href="#" class="testlab-btn testlab-btn-secondary" style="padding: 4px 10px; font-size: 11px; text-decoration: none;">
                 Export HTML
@@ -252,25 +269,32 @@ export function getTemplate() {
             </div>
             <div class="testlab-kpi-card">
               <span class="testlab-kpi-label">PostQode Version</span>
-              <span class="testlab-kpi-value" id="testlab-kpi-version" style="font-size: 15px; color: var(--accent-cyan, #58a6ff);">v3.0.26-beta.2</span>
+              <span class="testlab-kpi-value" id="testlab-kpi-version" style="font-size: 15px; color: var(--accent-cyan, #58a6ff);">—</span>
             </div>
             <div class="testlab-kpi-card">
               <span class="testlab-kpi-label">Host OS</span>
-              <span class="testlab-kpi-value" id="testlab-kpi-os" style="font-size: 14px;">macOS (arm64)</span>
+              <span class="testlab-kpi-value" id="testlab-kpi-os" style="font-size: 14px;">—</span>
             </div>
             <div class="testlab-kpi-card">
-              <span class="testlab-kpi-label">Active Default Model</span>
-              <span class="testlab-kpi-value" id="testlab-kpi-model" style="font-size: 13px; font-family: monospace; color: #a371f7;">kimi-k3</span>
+              <span class="testlab-kpi-label">Model</span>
+              <span class="testlab-kpi-value" id="testlab-kpi-model" style="font-size: 13px; font-family: monospace; color: #a371f7;">—</span>
             </div>
           </div>
 
-          <!-- Checklist Execution Matrix Table -->
-          <div style="overflow-x: auto; margin-top: 8px;">
+          <!-- Feature Area Filter + Matrix Table -->
+          <div style="display: flex; align-items: center; gap: 10px; margin: 10px 0 6px;">
+            <span style="font-size: 11px; color: var(--text-2); font-weight: 600; white-space: nowrap;">Filter by Feature Area:</span>
+            <select id="testlab-area-filter" class="testlab-select" style="width: auto; padding: 3px 8px; font-size: 11px;">
+              <option value="">All Areas</option>
+            </select>
+            <span id="testlab-area-filter-count" style="font-size: 10px; color: var(--text-3);"></span>
+          </div>
+          <div style="overflow-x: auto;">
             <table class="testlab-report-table" id="testlab-report-matrix-table">
               <thead>
                 <tr>
                   <th style="width: 80px;">Test ID</th>
-                  <th style="width: 130px;">Sheet</th>
+                  <th style="width: 130px;">Feature Area</th>
                   <th>Scenario &amp; Steps</th>
                   <th style="width: 135px;">Model</th>
                   <th>Expected Result</th>
@@ -289,9 +313,9 @@ export function getTemplate() {
         <!-- Visual UI Evidence & Screenshots Gallery -->
         <div class="testlab-card" style="margin-top: 14px;">
           <div class="testlab-card-title" style="display: flex; justify-content: space-between; align-items: center;">
-            <span>Visual UI Evidence &amp; Screenshots</span>
+            <span>Screenshots &amp; Visual Evidence</span>
             <a id="testlab-download-all-shots-link" href="#" target="_blank" class="testlab-btn testlab-btn-secondary" style="padding: 2px 10px; font-size: 11px; text-decoration: none;">
-              ⬇ Download All Screenshots (.zip)
+              ⬇ Download All (.zip)
             </a>
           </div>
           <div class="testlab-evidence-grid" id="testlab-screenshots-grid"></div>
@@ -300,7 +324,7 @@ export function getTemplate() {
         <!-- Preserved Workspace Artifacts -->
         <div class="testlab-card" style="margin-top: 14px;">
           <div class="testlab-card-title">
-            <span>Preserved Workspace Artifacts (Modified by Agent)</span>
+            <span>Preserved Workspace Artifacts</span>
             <span class="testlab-info-badge" id="testlab-artifacts-badge">0 files</span>
           </div>
           <div id="testlab-artifacts-container" style="display: flex; flex-direction: column; gap: 8px;"></div>
@@ -309,20 +333,9 @@ export function getTemplate() {
         <!-- Intercepted Network Evidence -->
         <div class="testlab-card" style="margin-top: 14px;">
           <div class="testlab-card-title">
-            <span>Intercepted HTTP / SSE Network Payloads</span>
+            <span>Intercepted HTTP / SSE Payloads</span>
           </div>
           <div id="testlab-evidence-details" style="display: flex; flex-direction: column; gap: 10px;"></div>
-        </div>
-      </div>
-
-      <!-- Past Test Runs History -->
-      <div class="testlab-card">
-        <div class="testlab-card-title">
-          <span>Recent Test Runs History</span>
-          <button id="testlab-refresh-runs-btn" class="testlab-btn testlab-btn-secondary" style="padding: 4px 10px; font-size: 11px;">Refresh</button>
-        </div>
-        <div id="testlab-runs-table-container">
-          <div style="color: var(--text-3); font-size: 12px;">Loading past test runs...</div>
         </div>
       </div>
     </div>
