@@ -144,10 +144,10 @@ export function getTemplate() {
         </div>
       </div>
 
-      <!-- 4. Test Scenarios -->
+      <!-- Test Scenarios Checklist -->
       <div class="testlab-card">
           <div class="testlab-card-title" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
-            <span>4. Test Scenarios</span>
+            <span style="display: flex; align-items: center; gap: 8px;"><span>📋</span> Test Scenarios</span>
             <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
               <!-- Quick Module Selector -->
               <div style="display: flex; align-items: center; gap: 6px; background: var(--bg-1); padding: 3px 8px; border-radius: var(--radius-sm); border: 1px solid var(--border);">
