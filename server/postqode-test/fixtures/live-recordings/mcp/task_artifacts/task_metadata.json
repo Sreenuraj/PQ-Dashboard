@@ -1,0 +1,22 @@
+{
+  "files_in_context": [],
+  "model_usage": [
+    {
+      "ts": 1788677956416,
+      "model_id": "anthropic/claude-sonnet-5",
+      "model_provider_id": "postqode",
+      "mode": "agent"
+    }
+  ],
+  "environment_history": [
+    {
+      "ts": 1788677956415,
+      "os_name": "darwin",
+      "os_version": "25.5.0",
+      "os_arch": "arm64",
+      "host_name": "VSCode",
+      "host_version": "1.137.0-insider",
+      "postqode_version": "3.0.25"
+    }
+  ]
+}

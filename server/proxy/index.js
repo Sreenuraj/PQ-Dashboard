@@ -93,7 +93,39 @@ function decodeBody(buffer, headers) {
 
 const mocksPath = path.resolve('./data/network-mocks.json');
 let mockRules = [];
+let defaultMockHandler = null;
 let dynamicMockHandler = null;
+let activeLiveRecorder = null;
+
+function startLiveRecording(scenarioId, options = {}) {
+  const targetDir = options.targetDir || path.resolve('./server/postqode-test/fixtures/live-recordings', scenarioId);
+  try { fs.mkdirSync(targetDir, { recursive: true }); } catch (e) {}
+  activeLiveRecorder = {
+    scenarioId,
+    targetDir,
+    streams: [],
+    startTime: Date.now(),
+  };
+  return activeLiveRecorder;
+}
+
+function stopLiveRecording() {
+  const rec = activeLiveRecorder;
+  activeLiveRecorder = null;
+  return rec;
+}
+
+function getActiveLiveRecorder() {
+  return activeLiveRecorder;
+}
+
+function setDefaultMockHandler(handler) {
+  defaultMockHandler = handler;
+}
+
+function clearDefaultMockHandler() {
+  defaultMockHandler = null;
+}
 
 function setDynamicMockHandler(handler) {
   dynamicMockHandler = handler;
@@ -104,7 +136,7 @@ function clearDynamicMockHandler() {
 }
 
 function getDynamicMockHandler() {
-  return dynamicMockHandler;
+  return dynamicMockHandler || defaultMockHandler;
 }
 
 function loadMockRules() {
@@ -723,11 +755,12 @@ function startProxy(config = {}) {
       return; // Don't call callback() here — we call it inside the promise .then()
     }
 
-    // Check if there is an active test dynamic mock handler
-    const isDynamicMatch = dynamicMockHandler && (
-      (typeof dynamicMockHandler.shouldHandle === 'function' && dynamicMockHandler.shouldHandle({ url, method, host })) ||
-      (typeof dynamicMockHandler.match === 'function' && dynamicMockHandler.match({ url, method, host, headers: ctx.clientToProxyRequest.headers })) ||
-      (!dynamicMockHandler.shouldHandle && !dynamicMockHandler.match)
+    // Check if there is an active test dynamic mock handler or default mock handler
+    const activeHandler = dynamicMockHandler || defaultMockHandler;
+    const isDynamicMatch = activeHandler && (
+      (typeof activeHandler.shouldHandle === 'function' && activeHandler.shouldHandle({ url, method, host })) ||
+      (typeof activeHandler.match === 'function' && activeHandler.match({ url, method, host, headers: ctx.clientToProxyRequest.headers })) ||
+      (!activeHandler.shouldHandle && !activeHandler.match)
     );
 
     if (isDynamicMatch) {
@@ -738,13 +771,15 @@ function startProxy(config = {}) {
       ctx.clientToProxyRequest.on('end', async () => {
         const rawReqBody = Buffer.concat(requestChunks);
         const requestBody = decodeBody(rawReqBody, ctx.clientToProxyRequest.headers);
+        let parsedReqBody = {};
+        try { parsedReqBody = JSON.parse(requestBody); } catch (e) {}
         try {
-          await dynamicMockHandler.handle({
+          await activeHandler.handle({
             ctx,
             proxyToClientResponse: ctx.proxyToClientResponse,
             clientToProxyRequest: ctx.clientToProxyRequest,
             requestBody,
-            reqBody: requestBody,
+            reqBody: parsedReqBody,
             method,
             url,
             host: host.replace(/:\d+$/, ''),
@@ -834,8 +869,16 @@ function startProxy(config = {}) {
 
     // Collect response body chunks
     const responseChunks = [];
+    const responseChunksWithTimings = [];
     ctx.onResponseData(function (ctx, chunk, callback) {
       responseChunks.push(chunk);
+      if (activeLiveRecorder) {
+        responseChunksWithTimings.push({
+          timeMs: Date.now() - startTime,
+          data: chunk.toString('utf-8'),
+          length: chunk.length,
+        });
+      }
       return callback(null, chunk);
     });
 
@@ -859,6 +902,35 @@ function startProxy(config = {}) {
         responseBody = decodeBody(rawResBody, ctx.serverToProxyResponse?.headers);
       } catch (e) {
         responseBody = '[binary data]';
+      }
+
+      if (activeLiveRecorder && (url.includes('/chat/completions') || url.includes('/v1/messages') || url.includes('/postqode-provider') || tagForHost(host) !== 'other')) {
+        const streamRecord = {
+          scenarioId: activeLiveRecorder.scenarioId,
+          timestamp: new Date().toISOString(),
+          url,
+          method,
+          host: host.replace(/:\d+$/, ''),
+          requestHeaders: { ...ctx.clientToProxyRequest.headers },
+          requestBody: typeof requestBody === 'string' ? requestBody : JSON.stringify(requestBody),
+          statusCode,
+          responseHeaders: ctx.serverToProxyResponse?.headers ? { ...ctx.serverToProxyResponse.headers } : {},
+          responseBody,
+          duration,
+          ttft: responseChunksWithTimings[0]?.timeMs || duration,
+          chunkCount: responseChunksWithTimings.length,
+          chunks: responseChunksWithTimings,
+        };
+        activeLiveRecorder.streams.push(streamRecord);
+        try {
+          fs.writeFileSync(
+            path.join(activeLiveRecorder.targetDir, 'network_stream.json'),
+            JSON.stringify(activeLiveRecorder.streams, null, 2),
+            'utf8'
+          );
+        } catch (e) {
+          console.error('[LiveRecorder] Error writing network_stream.json:', e.message);
+        }
       }
 
       const responseSize = responseChunks.reduce((sum, c) => sum + c.length, 0);
@@ -1015,4 +1087,6 @@ module.exports = {
   getMockRules, addMockRule, deleteMockRule,
   getInterceptState, setInterceptState, resolveInterceptedRequest, forwardAllPending, getPendingRequests,
   setDynamicMockHandler, clearDynamicMockHandler, getDynamicMockHandler,
+  setDefaultMockHandler, clearDefaultMockHandler,
+  startLiveRecording, stopLiveRecording, getActiveLiveRecorder,
 };

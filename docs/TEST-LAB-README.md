@@ -1,131 +1,343 @@
 # PostQode Test Lab
 
-Automated release-testing studio for the PostQode VS Code extension, built into PQ Dashboard.  
-Covers the full **PostQode Release Test Checklist** sheet-by-sheet — from provider selection and chat streaming to slash commands, workflows, rules, and skills — with both **Mocked** (free, deterministic) and **Live** (real API) execution modes.
+Automated release-testing studio for the PostQode VS Code extension, built directly into PQ Dashboard.  
+Covers the full **PostQode Release Test Checklist** sheet-by-sheet — from provider selection and chat streaming to slash commands, workflows, rules, skills, and MCP — with both **Mocked** (free, deterministic, offline) and **Live** (real model API) execution modes.
 
 ---
 
 ## Core Philosophy: Truth to Existence & Meaningful Tests
 
-> **The Non-Negotiable Standard:**  
-> *"All tests in the suite must have a purpose to prove that PostQode is working in the right way. No dummy or shallow tests. Understand the functionality, do test manually and observe everything — not just execution, but tool invocation, results, and changes in UI. Use a live model, intercept real network and DOM behaviors, and use those details for mocking."*
+> [!IMPORTANT]
+> ### The Non-Negotiable Standard
+> *"All tests in the suite must have a purpose to prove that PostQode is working in the right way. No dummy or shallow tests. Understand the functionality, test manually first and observe everything — not just execution, but tool invocation, results, and changes in UI. Use a live model, intercept real network and DOM behaviors, and use those details for mocking."*
 
-Every single test in this suite is truthful to its existence. A test does not simply pass because an async function finished without throwing; it must explicitly verify the full contract across four rigorous phases:
+Every single test in this suite is truthful to its existence. A test does not simply pass because an async function finished without throwing; it must explicitly verify the full contract across five rigorous phases:
 
 ```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│     PHASE 1     │     │     PHASE 2     │     │     PHASE 3     │     │     PHASE 4     │
-│  Request Sent   │ ──▶ │  Tools Called   │ ──▶ │ Response Stream │ ──▶ │ UI & Side Effects│
-│  Dispatched     │     │  Payload & Args │     │ Markdown/Cards  │     │ Disk/DOM/Secrets│
-└─────────────────┘     └─────────────────┘     └─────────────────┘     └─────────────────┘
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│     PHASE 1     │     │     PHASE 2     │     │     PHASE 3     │     │     PHASE 4     │     │     PHASE 5     │
+│  Request Sent   │ ──▶ │  Tools Called   │ ──▶ │ Response Stream │ ──▶ │ UI & Side Effect│ ──▶ │ Task Parity     │
+│  Dispatched     │     │  Payload & Args │     │ Markdown/Cards  │     │ Disk/DOM/Secrets│     │ History Baseline│
+└─────────────────┘     └─────────────────┘     └─────────────────┘     └─────────────────┘     └─────────────────┘
 ```
 
-### The 4-Phase Verification Contract
+### The 5-Phase Verification Contract
 
 1. **Phase 1 — Request Sent (Dispatched Action)**  
    The scenario dispatches an explicit prompt, slash command, UI button click, or configuration change to the PostQode webview or host IDE. We assert that the input is received and reflected in the active task context.
 2. **Phase 2 — Tools Called (Invocation & Arguments)**  
-   When the agent decides to take action, we verify that the correct PostQode tool is invoked (e.g., `write_to_file`, `replace_in_file`, `execute_command`, `new_rule`, `new_workflow`, `use_skill`, `condense`, `new_task`) with validated argument signatures.
+   When the agent decides to take action, we verify that the correct native PostQode tool is invoked (e.g., `write_to_file`, `replace_in_file`, `execute_command`, `new_rule`, `new_workflow`, `use_skill`, `condense`, `new_task`, `ask_followup_question`) with validated argument signatures.
 3. **Phase 3 — Response Handled (Streaming & Completion)**  
    We verify that PostQode streams and parses incoming chunks: reasoning blocks (`<think>`), tool call approval cards, response markdown, and completion signals without malformed syntax, truncation, or UI lockup.
 4. **Phase 4 — UI Changes & Physical Side Effects**  
-   We do not stop at UI rendering. We verify real, concrete physical side effects:
+   We never stop at UI rendering. We verify real, concrete physical side effects:
    - **Filesystem mutations:** Files created or edited on disk (`hello.py`, `calculator.js`, `.postqode/rules/`, `.postqode/workflows/`) are verified using `fs.existsSync` and `fs.readFileSync`.
    - **Credential boundaries:** Verifying VS Code `SecretStorage` isolation so API keys are never exposed in plaintext configurations or chat DOM.
    - **IDE & Viewport State:** Editor side-by-side splits, fullscreen mode toggles, and input focus shifts.
    - **History & Checkpoints:** Snapshot persistence and rollback recovery.
+5. **Phase 5 — Task File Parity (Golden Baseline Comparison)**  
+   In Mocked mode, the runner automatically compares the generated native task state (`api_conversation_history.json` and `ui_messages.json`) against the golden baseline recorded from a live model run. We assert that turns, tool sequences, and message schemas match with 100% fidelity.
 
 ---
 
-## Quick Start
+## Contribution Guide: Rules to Add a New Test
+
+When adding a new test to the PostQode Test Lab, follow these strict rules to ensure suite integrity and prevent test rot:
+
+### 1. The Checklist: What You Need for Every New Test
+
+Every new test scenario requires updates across five distinct layers:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 1. Metadata Catalog  │ server/postqode-test/scenarios-metadata.js           │
+├──────────────────────┼──────────────────────────────────────────────────────┤
+│ 2. Frontend Catalog  │ src/js/views/postqode-test/scenarios/<module>.js     │
+├──────────────────────┼──────────────────────────────────────────────────────┤
+│ 3. Runner Handler    │ server/postqode-test/runner.js                       │
+├──────────────────────┼──────────────────────────────────────────────────────┤
+│ 4. SSE Mock Engine   │ server/postqode-test/sse-mock-scenarios.js           │
+├──────────────────────┼──────────────────────────────────────────────────────┤
+│ 5. Golden Fixture    │ server/postqode-test/fixtures/live-recordings/<id>/  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Step 1: Register in Backend Metadata (`scenarios-metadata.js`)
+Define the test with full contractual context:
+```js
+{
+  id: 'slash-11',
+  checklistId: 'SLASH-11',
+  sheetName: 'Slash Commands',
+  category: 'Slash Commands',
+  priority: 'P1',
+  title: 'SLASH-11: /custom-command (Action Verification)',
+  meaning: 'Proves the architectural contract of /custom-command: dispatches tool call, renders action button, and executes disk side effect.',
+  pipeline: {
+    request: 'Submit /custom-command in active chat',
+    tools: 'custom_tool called with arguments',
+    response: 'Action card streamed to webview',
+    uiAndSideEffects: 'Action button rendered; clicking it creates expected file on disk',
+  },
+  sideEffects: 'Filesystem Mutation: .postqode/custom.md verified on disk',
+  expectedResult: 'Tool call emitted; action button rendered; clicking action modifies disk state',
+}
+```
+
+#### Step 2: Register in Frontend Scenarios (`src/js/views/postqode-test/scenarios/`)
+Add the scenario to the appropriate module file matching the backend metadata. This ensures the Test Lab dashboard renders the Purpose Callout, 4-Phase Contract drawer, and Side Effect badge.
+
+#### Step 3: Implement Execution Logic in Runner (`runner.js`)
+Use `this.runScenario(...)` with explicit phase assertions, screenshots, and clean teardown:
+```js
+// SLASH-11: /custom-command
+if (!this.isStopped && this.isScenarioSelected('slash-11', 'SLASH-11', 'Slash Commands')) {
+  await this.runScenario(
+    scenarioMetadata,
+    async (step) => {
+      await this.controller.startNewTask();
+      await this.controller.sendPrompt('/custom-command');
+
+      const shot1 = await this.controller.takeScreenshot('slash-11-01-submitted.png');
+      if (shot1) step.screenshots.push('slash-11-01-submitted.png');
+
+      const btnFound = await this.controller.waitForActionButton('Execute Action', 8000);
+      if (btnFound) {
+        await this.controller.clickActionButton('Execute Action');
+      }
+
+      const shot2 = await this.controller.takeScreenshot('slash-11-02-completed.png');
+      if (shot2) step.screenshots.push('slash-11-02-completed.png');
+
+      // Assert each phase explicitly
+      step.assertions.push({ name: 'Phase 1 [Request]: Prompt dispatched', passed: !!this.controller.page });
+      step.assertions.push({ name: 'Phase 2 [Tool]: Model emitted custom_tool', passed: btnFound });
+      step.assertions.push({ name: 'Phase 4 [Side Effect]: File created on disk', passed: fs.existsSync(targetFile) });
+    }
+  );
+}
+```
+
+#### Step 4: Implement Mock SSE Response in Mock Server (`sse-mock-scenarios.js`)
+Implement the realistic tool call or completion response:
+```js
+if (commandType === 'custom_command' || fullLower.startsWith('/custom-command')) {
+  return streamToolCallResponse({
+    res,
+    toolName: 'custom_tool',
+    argsObj: { path: '.postqode/custom.md', action: 'create' },
+    model,
+    onChunk,
+  });
+}
+```
+
+#### Step 5: Capture Golden Live Baseline (`server/postqode-test/fixtures/live-recordings/`)
+Run the test once in Live mode against the real model (`moonshotai/kimi-k3` or Claude) and promote the recording so it is preserved in Git fixtures (see [Live Data & Mock Generation](#live-data--mock-generation-engine)).
+
+---
+
+### 2. Contribution Rules & Best Practices
+
+1. **No Shallow "Ping-Pong" Tests**:
+   - A test that only checks if PostQode responded with text is forbidden.
+   - You must assert what tool was used, what arguments were sent, whether the expected UI card rendered, and what changed on disk or in settings.
+2. **Never Touch User Profile or Active Sessions**:
+   - Tests must run exclusively in temporary sandbox directories (`/var/folders/.../pq-workspace-XXXXXX`).
+   - Use custom CDP profiles (`--user-data-dir=.../pq-profile-XXXXXX`).
+   - Never kill or disrupt PID 81813 or the user's primary IDE instance.
+3. **Parse Incoming `tool_result` Blocks**:
+   - When PostQode finishes executing a tool, it sends a user message containing `{ type: 'tool_result' }`.
+   - Never treat `tool_result` as a new user prompt. Check `isToolResult` and transition to completion turn.
+4. **Guards Against Infinite Loops**:
+   - If assistant history already contains `attempt_completion`, the mock MUST return `finish_reason: 'stop'` immediately.
+   - Do not re-stream tool calls or completions once a task has completed.
+5. **Always Dismiss Modal Overlays**:
+   - When opening modals (Rules, Workflows, Skills), always click the close button (`✕`) before finishing the scenario so subsequent tests do not encounter an obstructed UI.
+6. **Target the Chat Webview, Not Configuration**:
+   - In VS Code, PostQode registers multiple webviews. Always use `frameLocator('iframe.webview').last()` to interact with PostQode Chat (x=1141) rather than the left workspace configuration view (x=48).
+7. **Preserve Test Fixtures in `server/postqode-test/fixtures/`**:
+   - Never store permanent golden fixtures in `data/`. The `data/` folder is git-ignored and cleared routinely by developers. All permanent golden fixtures MUST reside in `server/postqode-test/fixtures/live-recordings/`.
+
+---
+
+## The 6 Dimensions of Validation: What to Validate
+
+When designing test assertions, ensure coverage across these six concrete dimensions:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 1. Webview DOM & Cards      │ Action buttons, dropdowns, syntax blocks, pills│
+├─────────────────────────────┼───────────────────────────────────────────────┤
+│ 2. Tool Calls & Signatures  │ Tool names, required JSON arguments, schemas  │
+├─────────────────────────────┼───────────────────────────────────────────────┤
+│ 3. Physical Filesystem      │ fs.existsSync, content matches, directory tree│
+├─────────────────────────────┼───────────────────────────────────────────────┤
+│ 4. Security & Credentials   │ SecretStorage isolation, zero plaintext keys  │
+├─────────────────────────────┼───────────────────────────────────────────────┤
+│ 5. Processes & Terminal     │ Command execution, subprocess exit codes, stdout│
+├─────────────────────────────┼───────────────────────────────────────────────┤
+│ 6. Task State & Parity      │ api_conversation_history.json & ui_messages   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 1. Webview DOM & Cards
+- **Action Buttons**: Confirm buttons like `"Condense Conversation"`, `"Start New Task with Context"`, `"Run Command"`, and `"Approve"` render in the DOM.
+- **Interactive Options**: For `ask_followup_question`, assert choice buttons appear and can be clicked.
+- **Compaction Banners**: Confirm context truncation notices appear after history pruning.
+- **Thinking Blocks**: Expandable `<think>` blocks render with collapsible reasoning details.
+
+### 2. Tool Calls & Signatures
+Confirm exact native PostQode tool names and argument objects:
+```js
+// Native PostQode Tools Reference:
+- write_to_file({ path, content })
+- replace_in_file({ path, diff })
+- execute_command({ command, requires_approval })
+- new_task({ context })
+- condense({ context })
+- ask_followup_question({ question, options })
+- new_rule({ path, content })
+- new_global_rule({ path, content })
+- new_workflow({ path, content })
+- new_global_workflow({ path, content })
+- use_skill({ skill, parameters })
+- attempt_completion({ result })
+```
+
+### 3. Physical Filesystem Mutations
+Never assume a tool worked just because the UI said so. Verify the disk:
+```js
+const filePath = path.join(this.workspaceDir, 'hello.py');
+const fileExists = fs.existsSync(filePath);
+const fileContent = fileExists ? fs.readFileSync(filePath, 'utf8') : '';
+step.assertions.push({
+  name: 'Phase 4 [Side Effect]: hello.py created with valid print statement',
+  passed: fileExists && fileContent.includes('Hello from PostQode'),
+});
+```
+
+### 4. Security & Credential Boundaries
+Assert that third-party provider keys (Anthropic, OpenRouter, etc.) never leak:
+- `settings.json` must contain 0 plaintext API keys.
+- Chat webview DOM must never expose API keys.
+- Keys must be stored exclusively inside VS Code `SecretStorage`.
+
+### 5. Process & Terminal Execution
+- Commands executed via `execute_command` must create a subprocess, stream stdout to the webview card, and capture exit code 0.
+- Long-running background commands must provide cancellation tokens.
+
+### 6. Task State & Parity
+After task execution, native PostQode task folders in `globalStorage` contain:
+- `api_conversation_history.json`: List of turns, user messages, assistant tool calls, and tool results.
+- `ui_messages.json`: Array of UI message cards, reasoning blocks, and status updates.
+- `task_metadata.json`: Model ID, token counts, cost, and timestamps.
+Assert that the generated task history matches the expected structure.
+
+---
+
+## Live Data & Mock Generation Engine
+
+The PostQode Test Lab features a **Live-to-Mock Capture & Replay Engine** that allows capturing real LLM behaviors and promoting them into permanent, deterministic mocks:
+
+```
+ ┌────────────────────────────────────────────────────────┐
+ │                      LIVE RUN                          │
+ │  Real Model (moonshotai/kimi-k3 / Claude via Proxy)   │
+ └──────────────────────────┬─────────────────────────────┘
+                            │ (Captures SSE stream + Task folder)
+                            ▼
+ ┌────────────────────────────────────────────────────────┐
+ │                 INTERACTIVE PROMOTION                  │
+ │  Dashboard UI: "⚡ Replace Mock Baseline with Live"    │
+ └──────────────────────────┬─────────────────────────────┘
+                            │ (Transfers to Git-tracked Fixtures)
+                            ▼
+ ┌────────────────────────────────────────────────────────┐
+ │                   MOCK FIXTURE STORE                   │
+ │  server/postqode-test/fixtures/live-recordings/<id>/   │
+ │    ├── network_stream.json  (millisecond chunk trace) │
+ │    ├── meta.json            (model, token count, cost)│
+ │    └── task_artifacts/      (api history & UI messages)│
+ └──────────────────────────┬─────────────────────────────┘
+                            │ (Byte-for-byte playback + path adaptation)
+                            ▼
+ ┌────────────────────────────────────────────────────────┐
+ │                      MOCK RUN                          │
+ │  100% Offline, Zero Token Cost, Exact Millisecond Speed│
+ └────────────────────────────────────────────────────────┘
+```
+
+### 1. How to Capture Live Data
+1. Launch Test Lab: `http://localhost:3456/#/postqode-test`
+2. Select **Live** mode in the execution controls.
+3. Choose the target scenario (e.g. `CHAT-01`, `SLASH-02`) or select an entire module.
+4. Click **▶ Run Selected**.
+5. During execution, the MITM proxy (`port 3457`) intercepts:
+   - Full SSE chunks with accurate TTFT (Time-To-First-Token) and chunk intervals (`timeMs`).
+   - Native task storage files (`api_conversation_history.json`, `ui_messages.json`, `task_metadata.json`).
+   - Saved under `data/postqode-test-runs/<runId>/live-captures/<scenarioId>/`.
+
+### 2. How to Promote Live Data to Mock Baseline
+- In the Test Lab Dashboard, look for the **"⚡ Replace All Mocks with Live"** button or click **"⚡ Replace Mock"** on individual scenarios.
+- Or call the API directly:
+  ```bash
+  curl -X POST http://localhost:3456/api/postqode-test/promote-recording \
+    -H "Content-Type: application/json" \
+    -d '{"runId": "pq-run-XXXXX", "all": true}'
+  ```
+- Promoting transfers the recording into **`server/postqode-test/fixtures/live-recordings/<scenarioId>/`**.
+
+### 3. Dynamic Path Adaptation during Mock Replay
+Real model streams record tool calls with the session's workspace path (e.g. `write_to_file({ path: "/var/folders/.../pq-workspace-OLD/hello.py" })`).  
+When replaying in Mocked mode, `replayLiveStreamIfExists` dynamically inspects the current run's sandbox workspace path and rewrites file paths on the fly:
+```js
+// sse-mock-scenarios.js automatically adapts paths:
+replayedChunk = rawChunk.replace(new RegExp(recordedWorkspacePath, 'g'), currentSandboxWorkspacePath);
+```
+This guarantees that mock replays create physical files in the active sandbox without file not found errors!
+
+### 4. Why Fixtures Are Preserved in `server/postqode-test/fixtures/`
+- The root `.gitignore` contains `data/`.
+- Developers frequently clean up disk space by clearing `data/` (`rm -rf data/*`).
+- By keeping all 50 golden recordings in `server/postqode-test/fixtures/live-recordings/`, all baselines are tracked in Git and **never lost when `data/` is wiped**.
+- The test runner checks `server/postqode-test/fixtures/live-recordings/` first, and gracefully falls back to `data/live-recordings/`.
+
+---
+
+## Quick Start & Execution
 
 ```bash
-# 1. Start the PQ Dashboard (Server & Web Client)
+# 1. Start the PQ Dashboard Server & Proxy
 npm start            # Backend server on http://localhost:3456 & Proxy on 3457
-npm run dev          # Or Vite dev client on http://localhost:5173
 
 # 2. Open Test Lab in your browser
 # Navigate to: http://localhost:3456/#/postqode-test
+
+# 3. Trigger Test Runs via CLI:
+# Run full suite (48 scenarios in mocked mode):
+curl -s -X POST http://localhost:3456/api/postqode-test/run \
+  -H "Content-Type: application/json" \
+  -d '{"scenarios": ["all"], "mode": "mocked"}'
+
+# Run targeted scenarios (e.g. slash commands):
+curl -s -X POST http://localhost:3456/api/postqode-test/run \
+  -H "Content-Type: application/json" \
+  -d '{"scenarios": ["slash-01", "slash-02", "slash-08"], "mode": "mocked"}'
 ```
 
 ---
 
-## Architecture & File Map
+## Comprehensive Suite Catalog (48 Scenarios Across 10 Modules)
 
-```
-server/postqode-test/
-  runner.js              ← Orchestrates scenario execution (sandbox setup → run → teardown)
-  scenarios-metadata.js  ← Central catalog of all 50 scenarios (Purpose, 4-Phase Contract, Side Effects)
-  cdp-controller.js      ← CDP (Chrome DevTools Protocol) — drives VS Code webviews & DOM
-  sse-mock-scenarios.js  ← Mock SSE server for deterministic AI response & tool call simulation
-  allure-reporter.js     ← Generates the standalone Allure HTML report with 4-phase contract cards
+Every test in the 48-test suite is cataloged below with its architectural purpose, 4-phase contract, and verified side effect:
 
-src/js/views/postqode-test/
-  index.js               ← Main frontend orchestrator
-  template.js            ← HTML scaffold for Test Lab (Checklist, Terminal, KPIs, Report Table)
-  checklist.js           ← Accordion rendering, Purpose callouts, 4-phase expandable details, badges
-  runner.js              ← SSE event stream consumer, execution state machine, pause/resume/stop
-  report.js              ← Release matrix table, KPI computation, 4-phase contract details, gallery
-  scenarios/             ← Scenario definitions enriched with meaning, pipeline, and side effects
-    providers-models.js  ← PROV-01 to PROV-10 (10 scenarios)
-    gui-editor.js        ← GUI-01, GUI-02, GUI-07, UI-03 (4 scenarios)
-    install-activation.js← INS-01, INS-02, INS-07 (3 scenarios)
-    settings-flags.js    ← SET-01 (1 scenario)
-    mcp.js               ← MCP-01 (1 scenario)
-    history-state.js     ← HIST-01, HIST-02 (2 scenarios)
-    chat-agent.js        ← CHAT-01 to CHAT-12 (12 scenarios; CHAT-13 is manual)
-    files-tools.js       ← FILE-01 (1 scenario)
-    slash-commands.js    ← SLASH-01 to SLASH-10 (10 scenarios)
-    workflows-rules-skills.js ← FLOW-01..03, RULE-01..02, SKILL-01..03 (7 scenarios)
-```
-
----
-
-## Methodology: Live-Capture-Then-Mock
-
-To ensure deterministic mocks never drift from reality:
-1. **Live Interception:** We run the feature live against `postqode:moonshotai/kimi-k3` or Claude via PostQode Cloud with our MITM proxy (port 3457).
-2. **Observability Capture:** We record the exact SSE events, tool call names, tool parameters, thinking chunks, and resulting webview DOM mutations.
-3. **Deterministic Mock Creation:** We copy the observed structure into `sse-mock-scenarios.js`.
-4. **Contract Verification:** The test asserts that PostQode handles the exact streaming payload, creates physical disk artifacts, and renders the expected UI cards.
-
----
-
-## PostQode Tool Names (Source of Truth)
-
-Directly confirmed from the compiled PostQode extension source (`dist/github-review-bot.js`):
-
-| Tool Enum | SSE / Extension Tool Name | Purpose & Verification |
-|-----------|---------------------------|------------------------|
-| `FILE_NEW` | `write_to_file` | Creates a new file on disk with given content |
-| `FILE_EDIT` | `replace_in_file` | Performs targeted search-and-replace on file |
-| `BASH` | `execute_command` | Executes terminal commands in the workspace |
-| `NEW_TASK` | `new_task` | Spawns a fresh task / context thread |
-| `CONDENSE` | `condense` | Summarizes and compacts long conversation history |
-| `NEW_RULE` | `new_rule` | Creates a project-specific rule in `.postqode/rules/` |
-| `NEW_GLOBAL_RULE` | `new_global_rule` | Creates a global user rule in global storage |
-| `NEW_WORKFLOW` | `new_workflow` | Generates a multi-step workflow in `.postqode/workflows/` |
-| `NEW_GLOBAL_WORKFLOW` | `new_global_workflow`| Generates a global reusable workflow |
-| `USE_SKILL` | `use_skill` | Ingests and executes a specialized skill definition |
-| `ASK` | `ask_followup_question` | Halts execution to solicit structured user input |
-| `REPORT_BUG` | `report_bug` | Bundles diagnostics and pre-fills an issue template |
-
----
-
-## Comprehensive Suite Catalog (50 Scenarios)
-
-Every test in the 50-test suite is cataloged below with its architectural purpose, 4-phase contract, and verified side effect:
-
-### 1. Providers & Models (10 Scenarios)
+### 1. Providers & Models (6 Scenarios)
 | ID | Scenario | Architectural Purpose / Meaning | Verified Side Effect |
 |----|----------|---------------------------------|----------------------|
 | **PROV-01** | PostQode Provider & Default Model Selection | Validates that selecting PostQode provider correctly defaults to `kimi-k3` and persists across reloads. | Config State & Model Dropdown |
-| **PROV-02** | Switching Models within PostQode Provider | Proves provider model selector updates context window limit indicators and chat tags. | Context Window & Model Badge |
-| **PROV-03** | Live PostQode Model Verification | Tests genuine outbound API handshake and live token generation via PostQode Cloud. | Live Network Handshake |
-| **PROV-04** | Third-Party Provider (Anthropic) Setup | Verifies third-party provider activation and API key validation flow. | SecretStorage Credential Boundary |
-| **PROV-05** | OpenRouter Provider Setup | Verifies OpenRouter model directory discovery and routing configuration. | SecretStorage Credential Boundary |
-| **PROV-06** | Ollama Local Provider Setup | Ensures local Ollama instance URL configuration and model listing work offline. | Local Endpoint Handshake |
-| **PROV-07** | LM Studio Local Provider Setup | Tests local OpenAI-compatible endpoint handshake without external egress. | Local Endpoint Handshake |
+| **PROV-02** | API Keys Stored as Secrets | Verifies that API keys are stored in VS Code `SecretStorage` and never in plaintext `settings.json`. | SecretStorage Credential Boundary |
+| **PROV-03** | Live PostQode Model Verification | Tests genuine outbound API handshake and live token generation via PostQode Cloud *(Live Mode only)*. | Live Network Handshake |
 | **PROV-08** | Plan vs Agent Mode Toggle | Proves switching between Plan and Agent mode changes permission level and tool access. | Mode Pill & System Instruction State |
 | **PROV-09** | Error Handling for Invalid API Key | Verifies graceful error cards when upstream returns 401 Unauthorized without crashing IDE. | DOM Error Card & Retry Button |
 | **PROV-10** | Context Window Limit Warning | Proves extension warns user when approaching model context window threshold. | Context Token Meter & Alert DOM |
@@ -133,7 +345,7 @@ Every test in the 50-test suite is cataloged below with its architectural purpos
 ### 2. GUI & Editor Integration (4 Scenarios)
 | ID | Scenario | Architectural Purpose / Meaning | Verified Side Effect |
 |----|----------|---------------------------------|----------------------|
-| **GUI-01** | PostQode Activity Bar & Webview Activation | Proves extension registers custom activity container and webview boots without blank screen. | VS Code Container & Webview Mount |
+| **GUI-01** | PostQode Activity Bar & Webview Mount | Proves extension registers custom activity container and secondary webview mounts cleanly. | VS Code Container & Webview Mount |
 | **GUI-02** | Side-by-Side Editor & Chat Split | Validates that PostQode operates correctly alongside an active text editor in split view. | Workbench Multi-Column Layout |
 | **GUI-07** | Fullscreen / Expand Chat Panel | Proves expanding chat into full workbench tab resizes message layout and responsive cards. | Fullscreen Tab Resize & Layout Reset |
 | **UI-03** | Mode Dropdown & Quick Actions | Verifies quick action pills (Agent, Plan, Ask) immediately switch prompt routing context. | Active Mode Selector State |
@@ -185,18 +397,18 @@ Every test in the 50-test suite is cataloged below with its architectural purpos
 ### 9. Slash Commands (10 Scenarios)
 | ID | Scenario | Architectural Purpose / Meaning | Verified Side Effect |
 |----|----------|---------------------------------|----------------------|
-| **SLASH-01** | `/newtask` Command | Proves `/newtask` dispatches `new_task` tool, clears chat DOM, and initializes new session. | Session Reset & New Task DOM |
-| **SLASH-02** | `/compact` Command | Proves `/compact` dispatches `condense` tool, condenses tokens, and frees context memory. | Context Compaction & Token Drop |
-| **SLASH-03** | `/init` Workspace Configuration | Proves `/init` scans workspace, invokes `write_to_file`, and generates `.postqoderules` configuration. | Filesystem Mutation: `.postqoderules` |
+| **SLASH-01** | `/newtask` Command | Proves `/newtask` dispatches `new_task` tool, clears chat DOM, and initializes new session with distilled context. | Session Reset & New Task DOM |
+| **SLASH-02** | `/compact` Command | Proves `/compact` dispatches `condense` tool, renders "Condense Conversation" action button, and prunes context. | Context Compaction & Banner DOM |
+| **SLASH-03** | `/init` Workspace Configuration | Proves `/init` scans workspace, invokes `write_to_file`, and generates `AGENTS.md` configuration. | Filesystem Mutation: `AGENTS.md` |
 | **SLASH-04** | `/newrule` Workspace Rule Creation | Proves `/newrule` creates structured, project-scoped instruction in `.postqode/rules/`. | Filesystem Mutation: `.postqode/rules/` |
 | **SLASH-05** | `/globalrule` Global Rule Creation | Proves `/globalrule` creates user-wide persistent instruction in global settings. | Global User Rule Storage |
 | **SLASH-06** | `/workflow` Workspace Workflow Creation | Proves `/workflow` generates multi-step automated workflow definition in `.postqode/workflows/`. | Filesystem Mutation: `.postqode/workflows/` |
 | **SLASH-07** | `/globalworkflow` Global Workflow Creation | Proves `/globalworkflow` creates global reusable workflow accessible across projects. | Global Workflow Catalog |
-| **SLASH-08** | `/reportbug` Diagnostic Collector | Proves `/reportbug` gathers environment telemetry, active model, and VS Code logs safely. | Bug Diagnostic Report DOM |
-| **SLASH-09** | `/deep-planning` Architecture Breakdown | Proves `/deep-planning` forces structured breakdown, architecture requirements, and milestone steps. | Deep Plan Phase Matrix |
+| **SLASH-08** | `/reportbug` Diagnostic Collector | Proves `/reportbug` emits `ask_followup_question` with interactive options, gathers telemetry, and drafts bug report. | Interactive Options & Issue Draft |
+| **SLASH-09** | `/deep-planning` Architecture Blueprint | Proves `/deep-planning` forces structured breakdown, architecture requirements, and milestone steps. | Deep Plan Phase Matrix |
 | **SLASH-10** | `/explain-changes` Diff Inspection | Proves `/explain-changes` inspects git diff and explains all workspace modifications. | Git Diff Analysis Card |
 
-### 10. Workflows, Rules & Skills (7 Scenarios)
+### 10. Workflows, Rules & Skills (8 Scenarios)
 | ID | Scenario | Architectural Purpose / Meaning | Verified Side Effect |
 |----|----------|---------------------------------|----------------------|
 | **FLOW-01** | Workspace Workflow Execution | Proves executing workspace workflow runs defined steps sequentially and verifies disk outputs. | Sequential Step Disk Mutation |
@@ -210,55 +422,28 @@ Every test in the 50-test suite is cataloged below with its architectural purpos
 
 ---
 
-## Test Lab UI Integration
-
-### 1. Checklist Panel
-- **Sheet Accordion**: All 10 sheets collapsed cleanly by default.
-- **Purpose Callout**: Every test card displays a prominent blue callout explaining **Why this test exists**.
-- **4-Phase Contract Details**: Expandable `🔍 4-Phase Contract` drawer detailing Request, Tools, Response, and UI/Side Effects.
-- **Side Effects Badge**: Cyan badge indicating the exact concrete side effect verified (e.g. `Filesystem Mutation`, `SecretStorage Boundary`, `Modal Interaction`).
-- **Sheet Controls**: Dedicated `Run Sheet` and `Select Sheet` toggles per sheet.
-
-### 2. Execution Panel
-- **Live State Stream**: Real-time pass/fail/running indicators with micro-second timers.
-- **Terminal Log Stream**: Real-time console logs and CDP telemetry.
-- **Interactive Controls**: `⏸ Pause`, `▶ Resume`, and `⏹ Stop & Teardown`.
-
-### 3. Report Panel & Release Matrix Table
-- **Matrix Table Rows**:
-  - **ID & Sheet Area**
-  - **Title with Side Effect Badge**
-  - **Architectural Purpose Note**
-  - **Collapsible 4-Phase Contract Breakdown**
-  - **Model Pill (DOM / Live / Mock SSE)**
-  - **Individual Verification Assertions**
-  - **Duration & Pass/Fail Status Badge**
-  - **Visual Screenshot Gallery**
-  - **▶ Re-run Button**
-- **Allure-Style Standalone Report**:
-  - Full-screen dashboard with dedicated **Architectural Purpose & 4-Phase Contract** section card.
-  - Interactive test tree, visual lightbox gallery, and artifact inspector.
-
----
-
 ## Troubleshooting & FAQ
 
-| Problem | Root Cause | Solution |
-|---------|------------|----------|
-| **Many VS Code windows opening and none closing** | Orphan processes not killed on test abort | Runner now issues `pkill -9 -f pq-profile` in `afterAll` and scenario teardown. Manual cleanup: `pkill -9 -f pq-profile` |
-| **INS-01 / INS-07 ETIMEDOUT** | CLI `execSync --install-extension` hanging | Verified via direct filesystem extension manifest inspection instead of blocking CLI |
-| **Button not found in `/newtask` or `/compact`** | DOM race condition before LLM finishes streaming | Tests now poll with a 3s grace period + 15s CDP wait loop until tool execution finishes |
-| **`waitForMessageContaining is not a function`** | CDP controller missing helper | Method implemented in `server/postqode-test/cdp-controller.js` |
-| **Extension tool names not triggering** | Incorrect tool casing | Use confirmed source tool names (`write_to_file`, `replace_in_file`, `new_rule`, `new_workflow`, `new_global_rule`, `new_global_workflow`) |
+| Problem | Root Cause | Permanent Solution |
+| :--- | :--- | :--- |
+| **Many VS Code windows opening and none closing** | Orphan processes not killed on test abort | Runner issues `pkill -9 -f pq-profile` in `afterAll` and sandbox teardown. Clean manual command: `pkill -9 -f pq-profile`. |
+| **`tool_result` infinite card looping** | Extension returns `{ type: 'tool_result' }`, mock mistook it for new prompt | `parsePostQodeUserMessage` extracts tool results and `hasAttemptCompletionInHistory` terminates loop cleanly with `finish_reason: 'stop'`. |
+| **Chat input not found or clicking wrong panel** | VS Code has multiple webviews (left config view at x=48 vs chat at x=1141) | `cdp-controller.js` uses `frameLocator('iframe.webview').last()` to reliably target PostQode Chat. |
+| **Slash commands stuck unsubmitted** | Auto-complete suggestion popup trapped Enter key | `sendPrompt` focuses input, dispatches keyboard Enter, and verifies submission via container send button click. |
+| **Modal overlay traps next test** | Rules/Workflows modal was left open | `startNewTask` and `openChatView` automatically detect and dismiss any open `✕` close button. |
+| **Lost recordings when clearing `data/`** | Fixtures were stored in git-ignored `data/` | All permanent fixtures moved to `server/postqode-test/fixtures/live-recordings/`. Safe to run `rm -rf data/*` at any time! |
 
 ---
 
 ## Verification Commands
 
 ```bash
-# Verify backend server syntax & scenarios metadata
+# 1. Verify backend server syntax & scenarios metadata
 node -e "require('./server/postqode-test/runner'); require('./server/postqode-test/scenarios-metadata'); console.log('Backend OK');"
 
-# Verify frontend bundle build
+# 2. Verify frontend bundle build
 npm run build
+
+# 3. Check live baselines in permanent fixtures
+curl -s http://localhost:3456/api/postqode-test/live-baselines | jq '{count: (.baselines | length)}'
 ```

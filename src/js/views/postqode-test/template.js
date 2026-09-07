@@ -279,6 +279,27 @@ export function getTemplate() {
             </div>
           </div>
 
+          <!-- Live Capture & Promotion Callout Banner -->
+          <div id="testlab-live-promo-banner" style="display: none; margin-bottom: 16px; background: linear-gradient(135deg, rgba(56, 139, 253, 0.12), rgba(163, 113, 247, 0.12)); border: 1px solid rgba(56, 139, 253, 0.35); border-radius: var(--radius-md); padding: 12px 16px; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;">
+            <div style="display: flex; align-items: center; gap: 12px; flex: 1; min-width: 280px;">
+              <div style="font-size: 20px; background: rgba(56, 139, 253, 0.2); width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">⚡</div>
+              <div>
+                <div style="font-size: 13px; font-weight: 700; color: #f0f6fc; display: flex; align-items: center; gap: 6px;">
+                  <span>Live Model Execution Captured</span>
+                  <span id="testlab-live-promo-count" class="testlab-info-badge" style="background: rgba(56, 139, 253, 0.25); color: #58a6ff; font-size: 10px;">0 Scenarios</span>
+                </div>
+                <div id="testlab-live-promo-desc" style="font-size: 11.5px; color: var(--text-2); margin-top: 2px; line-height: 1.4;">
+                  Real model SSE network streams &amp; PostQode task sessions were captured. Would you like to replace the current mock baselines with these live recordings?
+                </div>
+              </div>
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <button id="testlab-promote-all-btn" type="button" class="testlab-btn testlab-btn-primary" style="padding: 6px 14px; font-size: 11px; font-weight: 600; white-space: nowrap; box-shadow: 0 0 12px rgba(56, 139, 253, 0.35);">
+                ⚡ Replace All Mocks with Live
+              </button>
+            </div>
+          </div>
+
           <!-- KPI Summary -->
           <div class="testlab-kpi-grid">
             <div class="testlab-kpi-card">

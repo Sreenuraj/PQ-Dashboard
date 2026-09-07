@@ -1,0 +1,79 @@
+{
+  "files_in_context": [
+    {
+      "path": "calculator.js",
+      "record_state": "stale",
+      "record_source": "read_tool",
+      "postqode_read_date": 1788678140249,
+      "postQode_edit_date": null,
+      "user_edit_date": null
+    },
+    {
+      "path": "example.js",
+      "record_state": "stale",
+      "record_source": "read_tool",
+      "postqode_read_date": 1788678140252,
+      "postQode_edit_date": null,
+      "user_edit_date": null
+    },
+    {
+      "path": "sample.txt",
+      "record_state": "stale",
+      "record_source": "read_tool",
+      "postqode_read_date": 1788678140253,
+      "postQode_edit_date": null,
+      "user_edit_date": null
+    },
+    {
+      "path": "/var/folders/qw/gyck4xv90z35bm4dr63h9xpc0000gp/T/pq-workspace-WOIYfM/.postqode/rules/code-style.md",
+      "record_state": "active",
+      "record_source": "postqode_edited",
+      "postqode_read_date": 1788678181840,
+      "postQode_edit_date": 1788678181840,
+      "user_edit_date": null
+    },
+    {
+      "path": "calculator.js",
+      "record_state": "active",
+      "record_source": "read_tool",
+      "postqode_read_date": 1788678229320,
+      "postQode_edit_date": null,
+      "user_edit_date": null
+    },
+    {
+      "path": "example.js",
+      "record_state": "active",
+      "record_source": "read_tool",
+      "postqode_read_date": 1788678229320,
+      "postQode_edit_date": null,
+      "user_edit_date": null
+    },
+    {
+      "path": "sample.txt",
+      "record_state": "active",
+      "record_source": "read_tool",
+      "postqode_read_date": 1788678229321,
+      "postQode_edit_date": null,
+      "user_edit_date": null
+    }
+  ],
+  "model_usage": [
+    {
+      "ts": 1788678105631,
+      "model_id": "anthropic/claude-sonnet-5",
+      "model_provider_id": "postqode",
+      "mode": "agent"
+    }
+  ],
+  "environment_history": [
+    {
+      "ts": 1788678105630,
+      "os_name": "darwin",
+      "os_version": "25.5.0",
+      "os_arch": "arm64",
+      "host_name": "VSCode",
+      "host_version": "1.137.0-insider",
+      "postqode_version": "3.0.25"
+    }
+  ]
+}

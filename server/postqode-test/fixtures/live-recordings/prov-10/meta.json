@@ -1,0 +1,13 @@
+{
+  "scenarioId": "prov-10",
+  "promotedAt": "2026-09-06T07:04:45.552Z",
+  "sourceRunId": "pq-run-1788677926313",
+  "sourceTaskId": "1788677956410",
+  "provider": "postqode",
+  "model": "moonshotai/kimi-k3",
+  "chunksCount": 265,
+  "durationMs": 0,
+  "hasStream": true,
+  "hasTask": true,
+  "activeAsMock": true
+}

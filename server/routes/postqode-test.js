@@ -405,7 +405,7 @@ module.exports = () => {
       liveProvider = 'postqode',
       liveModel = 'moonshotai/kimi-k3',
       providerApiKeys = {},
-      scenarios,
+      scenarios = (req.body && (req.body.scenarios || req.body.selectedScenarios)),
     } = req.body || {};
 
     const runId = `pq-run-${Date.now()}`;
@@ -547,6 +547,8 @@ module.exports = () => {
             buildSource: content.buildSource || 'installed',
             summary: content.summary,
             artifactsCount: (content.artifacts || []).length,
+            hasLiveRecordings: !!content.hasLiveRecordings,
+            capturedScenariosCount: (content.capturedScenarios || []).length,
           });
         } catch (e) {}
       }
@@ -775,6 +777,235 @@ module.exports = () => {
       });
     } catch (err) {
       res.status(500).send('Error creating screenshots zip: ' + err.message);
+    }
+  });
+
+  // POST /api/postqode-test/promote-recording — replace current mock with captured live result
+  router.post('/postqode-test/promote-recording', (req, res) => {
+    const { runId, scenarioId, all = false } = req.body || {};
+    if (!runId) {
+      return res.status(400).json({ error: 'Missing required parameter: runId' });
+    }
+
+    const runDir = path.join(runsBaseDir, runId);
+    const reportFile = path.join(runDir, 'report.json');
+    if (!fs.existsSync(reportFile)) {
+      return res.status(404).json({ error: `Run report not found for runId: ${runId}` });
+    }
+
+    try {
+      const reportData = JSON.parse(fs.readFileSync(reportFile, 'utf8'));
+      const scenariosToPromote = [];
+
+      if (all) {
+        // Collect all scenarios that have live recordings or live captures
+        for (const step of reportData.steps || []) {
+          if (step.hasLiveRecording || (step.liveCapture && step.liveCapture.hasRecording)) {
+            scenariosToPromote.push(step.id);
+          }
+        }
+        const liveCapturesDir = path.join(runDir, 'live-captures');
+        if (fs.existsSync(liveCapturesDir)) {
+          for (const ent of fs.readdirSync(liveCapturesDir)) {
+            if (!scenariosToPromote.includes(ent)) scenariosToPromote.push(ent);
+          }
+        }
+        const taskArtifactsDir = path.join(runDir, 'task-artifacts');
+        if (fs.existsSync(taskArtifactsDir)) {
+          for (const ent of fs.readdirSync(taskArtifactsDir)) {
+            if (!scenariosToPromote.includes(ent)) scenariosToPromote.push(ent);
+          }
+        }
+      } else if (scenarioId) {
+        scenariosToPromote.push(scenarioId);
+      } else {
+        return res.status(400).json({ error: 'Specify scenarioId or all: true' });
+      }
+
+      if (scenariosToPromote.length === 0) {
+        return res.status(400).json({ error: 'No live recordings found to promote in this test run.' });
+      }
+
+      const promoted = [];
+      const baseLiveDir = path.resolve('./server/postqode-test/fixtures/live-recordings');
+      fs.mkdirSync(baseLiveDir, { recursive: true });
+
+      for (const scId of scenariosToPromote) {
+        const targetDir = path.join(baseLiveDir, scId);
+        fs.mkdirSync(targetDir, { recursive: true });
+
+        // 1. Copy network_stream.json
+        const srcStream = path.join(runDir, 'live-captures', scId, 'network_stream.json');
+        let chunksCount = 0;
+        let durationMs = 0;
+        let hasStream = false;
+
+        if (fs.existsSync(srcStream)) {
+          fs.copyFileSync(srcStream, path.join(targetDir, 'network_stream.json'));
+          hasStream = true;
+          try {
+            const rawStream = JSON.parse(fs.readFileSync(srcStream, 'utf8'));
+            chunksCount = rawStream.reduce((sum, s) => sum + (Array.isArray(s.chunks) ? s.chunks.length : 0), 0);
+            durationMs = rawStream.reduce((max, s) => Math.max(max, s.durationMs || 0), 0);
+          } catch (e) {}
+        }
+
+        // 2. Copy task artifacts
+        const srcTaskBase = path.join(runDir, 'task-artifacts', scId);
+        let srcTaskId = null;
+        let hasTask = false;
+
+        if (fs.existsSync(srcTaskBase)) {
+          const targetTaskDir = path.join(targetDir, 'task_artifacts');
+          fs.mkdirSync(targetTaskDir, { recursive: true });
+
+          const taskDirs = fs.readdirSync(srcTaskBase).filter((d) => {
+            try { return fs.statSync(path.join(srcTaskBase, d)).isDirectory(); } catch (e) { return false; }
+          });
+
+          if (taskDirs.length > 0) {
+            const latestTask = taskDirs[taskDirs.length - 1];
+            srcTaskId = latestTask;
+            const latestTaskDir = path.join(srcTaskBase, latestTask);
+            for (const item of fs.readdirSync(latestTaskDir)) {
+              const srcF = path.join(latestTaskDir, item);
+              const dstF = path.join(targetTaskDir, item);
+              if (fs.statSync(srcF).isFile()) {
+                fs.copyFileSync(srcF, dstF);
+                hasTask = true;
+              }
+            }
+          }
+        }
+
+        // 3. Write metadata file
+        const meta = {
+          scenarioId: scId,
+          promotedAt: new Date().toISOString(),
+          sourceRunId: runId,
+          sourceTaskId: srcTaskId,
+          provider: reportData.liveProvider || reportData.environment?.liveProvider || 'postqode',
+          model: reportData.liveModel || reportData.environment?.defaultModel || 'moonshotai/kimi-k3',
+          chunksCount,
+          durationMs,
+          hasStream,
+          hasTask,
+          activeAsMock: true,
+        };
+        fs.writeFileSync(path.join(targetDir, 'meta.json'), JSON.stringify(meta, null, 2), 'utf8');
+        promoted.push({ scenarioId: scId, meta });
+
+        // Mirror alias between agent-tools and file-01
+        if (scId === 'agent-tools' || scId === 'file-01') {
+          const altId = scId === 'agent-tools' ? 'file-01' : 'agent-tools';
+          const altDir = path.join(baseLiveDir, altId);
+          try {
+            fs.mkdirSync(altDir, { recursive: true });
+            fs.cpSync(targetDir, altDir, { recursive: true });
+          } catch (e) {}
+        }
+
+        // Update step state in report.json
+        for (const step of reportData.steps || []) {
+          if (step.id === scId || (scId === 'agent-tools' && step.checklistId === 'FILE-01')) {
+            step.isPromoted = true;
+            step.baselineMeta = meta;
+          }
+        }
+      }
+
+      fs.writeFileSync(reportFile, JSON.stringify(reportData, null, 2), 'utf8');
+
+      res.json({
+        success: true,
+        count: promoted.length,
+        promoted,
+        message: `Successfully replaced mock baseline for ${promoted.length} scenario(s) with live model recording.`,
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // GET /api/postqode-test/live-baselines — list all active and archived live baselines
+  router.get('/postqode-test/live-baselines', (req, res) => {
+    const fixtureLiveDir = path.resolve('./server/postqode-test/fixtures/live-recordings');
+    const legacyLiveDir = path.resolve('./data/live-recordings');
+
+    try {
+      const baselinesMap = new Map();
+      const dirsToScan = [fixtureLiveDir, legacyLiveDir];
+
+      for (const baseLiveDir of dirsToScan) {
+        if (!fs.existsSync(baseLiveDir)) continue;
+
+        for (const sc of fs.readdirSync(baseLiveDir)) {
+          if (baselinesMap.has(sc)) continue; // fixtures take precedence
+          const scDir = path.join(baseLiveDir, sc);
+          if (!fs.statSync(scDir).isDirectory()) continue;
+
+          const metaFile = path.join(scDir, 'meta.json');
+          const streamFile = path.join(scDir, 'network_stream.json');
+          const taskDir = path.join(scDir, 'task_artifacts');
+
+          let meta = {};
+          if (fs.existsSync(metaFile)) {
+            try { meta = JSON.parse(fs.readFileSync(metaFile, 'utf8')); } catch (e) {}
+          }
+
+          baselinesMap.set(sc, {
+            scenarioId: sc,
+            hasStream: fs.existsSync(streamFile),
+            hasTask: fs.existsSync(taskDir) && fs.readdirSync(taskDir).length > 0,
+            promotedAt: meta.promotedAt || null,
+            sourceRunId: meta.sourceRunId || null,
+            sourceTaskId: meta.sourceTaskId || null,
+            provider: meta.provider || 'postqode',
+            model: meta.model || 'moonshotai/kimi-k3',
+            chunksCount: meta.chunksCount || 0,
+            durationMs: meta.durationMs || 0,
+            activeAsMock: meta.activeAsMock !== false,
+          });
+        }
+      }
+
+      res.json({ baselines: Array.from(baselinesMap.values()) });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/postqode-test/toggle-baseline — toggle activeAsMock state or revert to synthetic generator
+  router.post('/postqode-test/toggle-baseline', (req, res) => {
+    const { scenarioId, active } = req.body || {};
+    if (!scenarioId) {
+      return res.status(400).json({ error: 'Missing required parameter: scenarioId' });
+    }
+
+    let metaFile = path.resolve('./server/postqode-test/fixtures/live-recordings', scenarioId, 'meta.json');
+    if (!fs.existsSync(metaFile)) {
+      metaFile = path.resolve('./data/live-recordings', scenarioId, 'meta.json');
+    }
+    if (!fs.existsSync(metaFile)) {
+      return res.status(404).json({ error: `No baseline metadata found for scenario: ${scenarioId}` });
+    }
+
+    try {
+      const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
+      meta.activeAsMock = typeof active === 'boolean' ? active : !meta.activeAsMock;
+      meta.updatedAt = new Date().toISOString();
+      fs.writeFileSync(metaFile, JSON.stringify(meta, null, 2), 'utf8');
+
+      res.json({
+        success: true,
+        scenarioId,
+        activeAsMock: meta.activeAsMock,
+        message: meta.activeAsMock
+          ? `Live recording for ${scenarioId} is now ACTIVE as mock baseline.`
+          : `Live recording for ${scenarioId} is DEACTIVATED (using synthetic mock generator).`,
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
     }
   });
 

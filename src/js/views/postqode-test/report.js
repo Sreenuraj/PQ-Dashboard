@@ -61,6 +61,55 @@ export function initReport(state, renderChecklist, startTestRun) {
   const modalDownloadBtn = document.getElementById('testlab-modal-download-btn');
   const modalCloseBtn    = document.getElementById('testlab-modal-close-btn');
 
+  const livePromoBanner   = document.getElementById('testlab-live-promo-banner');
+  const livePromoCount    = document.getElementById('testlab-live-promo-count');
+  const livePromoDesc     = document.getElementById('testlab-live-promo-desc');
+  const promoteAllBtn     = document.getElementById('testlab-promote-all-btn');
+
+  function showToast(msg, type = 'success') {
+    let toast = document.getElementById('testlab-toast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'testlab-toast';
+      toast.style.cssText = `
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        z-index: 99999;
+        background: #161b22;
+        color: #f0f6fc;
+        border: 1px solid #30363d;
+        border-radius: 8px;
+        padding: 12px 18px;
+        font-size: 12px;
+        font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
+        box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        transition: opacity 0.25s ease, transform 0.25s ease;
+        transform: translateY(10px);
+        opacity: 0;
+        pointer-events: none;
+      `;
+      document.body.appendChild(toast);
+    }
+    const icon = type === 'success' ? '✔' : (type === 'error' ? '✖' : '⚡');
+    const color = type === 'success' ? '#3fb950' : (type === 'error' ? '#f85149' : '#58a6ff');
+    toast.innerHTML = `<span style="color:${color};font-weight:bold;font-size:14px;">${icon}</span> <span style="line-height:1.4;">${msg}</span>`;
+    toast.style.display = 'flex';
+    requestAnimationFrame(() => {
+      toast.style.opacity = '1';
+      toast.style.transform = 'translateY(0)';
+    });
+    clearTimeout(toast._timer);
+    toast._timer = setTimeout(() => {
+      toast.style.opacity = '0';
+      toast.style.transform = 'translateY(10px)';
+      setTimeout(() => { toast.style.display = 'none'; }, 250);
+    }, 4000);
+  }
+
   // Pagination state
   let allRuns     = [];
   let currentPage = 0;
@@ -182,13 +231,21 @@ export function initReport(state, renderChecklist, startTestRun) {
       const version = (run.environment?.postqodeVersion) || run.postqodeVersion || '—';
       const os      = (run.environment?.os) || run.os || '—';
 
+      const modeBadge = run.mode === 'live'
+        ? `<span class="testlab-info-badge" style="background:rgba(56,139,253,0.15);color:#58a6ff;font-size:10px;">Live</span>`
+        : `<span class="testlab-info-badge" style="background:rgba(139,148,158,0.15);color:#8b949e;font-size:10px;">Mocked</span>`;
+
+      const recBadge = (run.hasLiveRecordings || (run.capturedScenariosCount || 0) > 0)
+        ? `<span class="testlab-info-badge" style="background:rgba(163,113,247,0.15);color:#bc8cff;font-size:9.5px;margin-left:4px;" title="Captured live recordings available to promote">⚡ ${run.capturedScenariosCount || ''} rec</span>`
+        : '';
+
       html += `
         <tr style="border-bottom: 1px solid var(--border);">
           <td style="padding: 8px 10px; font-family: var(--font-mono); font-size: 10px; color: var(--text-2);">${run.runId}</td>
           <td style="padding: 8px 10px; color: var(--text-2);">${new Date(run.timestamp).toLocaleString()}</td>
           <td style="padding: 8px 10px;">${run.host}</td>
           <td style="padding: 8px 10px;"><span class="testlab-info-badge" style="font-size: 10px;">${run.buildSource || 'installed'}</span></td>
-          <td style="padding: 8px 10px;"><code style="font-family:var(--font-mono);">${run.mode}</code></td>
+          <td style="padding: 8px 10px;">${modeBadge}${recBadge}</td>
           <td style="padding: 8px 10px; font-family:var(--font-mono); color:var(--accent-cyan,#58a6ff); font-size:11px;">${version}</td>
           <td style="padding: 8px 10px; color: var(--text-3); font-size: 11px;">${os}</td>
           <td style="padding: 8px 10px;">${statusBadge}</td>
@@ -287,6 +344,63 @@ export function initReport(state, renderChecklist, startTestRun) {
     // Populate area filter dropdown
     populateAreaFilter(report.steps);
 
+    // ── Live Capture & Promotion Banner ──────────────────────────────────
+    const capturedSteps = (report.steps || []).filter((s) => s.hasLiveRecording || (s.liveCapture && s.liveCapture.hasRecording));
+    const capturedCount = capturedSteps.length || (report.capturedScenarios || []).length;
+    const isLiveMode = report.mode === 'live' || !!report.hasLiveRecordings;
+
+    if (livePromoBanner) {
+      if (isLiveMode && (capturedCount > 0 || (report.steps && report.steps.length > 0))) {
+        livePromoBanner.style.display = 'flex';
+        const countToShow = capturedCount || report.steps.length;
+        if (livePromoCount) livePromoCount.textContent = `${countToShow} Scenario${countToShow !== 1 ? 's' : ''}`;
+        if (livePromoDesc) {
+          const modelName = report.liveModel || report.environment?.defaultModel || 'moonshotai/kimi-k3';
+          livePromoDesc.innerHTML = `Real model SSE network streams &amp; PostQode task sessions were captured from <code style="color:#a371f7;font-family:var(--font-mono);">${escapeHtml(modelName)}</code>. Would you like to replace the current mock baselines with these live recordings?`;
+        }
+        if (promoteAllBtn) {
+          promoteAllBtn.textContent = `⚡ Replace All Mocks with Live (${countToShow})`;
+          promoteAllBtn.disabled = false;
+          promoteAllBtn.onclick = async () => {
+            promoteAllBtn.disabled = true;
+            promoteAllBtn.textContent = '⏳ Promoting to Mock Baselines...';
+            try {
+              const res = await fetch('/api/postqode-test/promote-recording', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ runId: report.runId, all: true }),
+              });
+              const json = await res.json();
+              if (json.success) {
+                showToast(`✔ Successfully replaced ${json.count} mock baseline(s) with live model recordings!`, 'success');
+                promoteAllBtn.textContent = '✔ All Mocks Replaced with Live';
+                promoteAllBtn.classList.remove('testlab-btn-primary');
+                promoteAllBtn.classList.add('testlab-btn-secondary');
+                // Update table badges
+                matrixTbody.querySelectorAll('.promote-recording-btn').forEach((btn) => {
+                  const badge = document.createElement('span');
+                  badge.className = 'testlab-info-badge success';
+                  badge.style.cssText = 'font-size:9px;padding:2px 6px;white-space:nowrap;';
+                  badge.textContent = '✔ Live Mock Active';
+                  btn.replaceWith(badge);
+                });
+              } else {
+                showToast(`Error: ${json.error || 'Failed to promote recordings'}`, 'error');
+                promoteAllBtn.disabled = false;
+                promoteAllBtn.textContent = `⚡ Replace All Mocks with Live (${countToShow})`;
+              }
+            } catch (err) {
+              showToast(`Network error: ${err.message}`, 'error');
+              promoteAllBtn.disabled = false;
+              promoteAllBtn.textContent = `⚡ Replace All Mocks with Live (${countToShow})`;
+            }
+          };
+        }
+      } else {
+        livePromoBanner.style.display = 'none';
+      }
+    }
+
     // ── Matrix table ──────────────────────────────────────────────────────
     matrixTbody.innerHTML = '';
     for (const step of report.steps || []) {
@@ -353,6 +467,32 @@ export function initReport(state, renderChecklist, startTestRun) {
       const sideEffectsBadge = step.sideEffects ? `
         <span class="testlab-info-badge" style="background:rgba(56,189,248,0.15);color:#38bdf8;font-size:9px;font-weight:600;margin-left:6px;vertical-align:middle;">${escapeHtml(step.sideEffects)}</span>` : '';
 
+      // Live Promotion button / badge
+      let promoteBtnHtml = '';
+      const isPromoted = step.isPromoted || (step.baselineMeta && step.baselineMeta.activeAsMock !== false && step.baselineMeta.sourceRunId === report.runId);
+      const isBaselineActive = step.baselineMeta && step.baselineMeta.activeAsMock !== false;
+
+      if (isPromoted) {
+        promoteBtnHtml = `
+          <span class="testlab-info-badge success" style="font-size:9px;padding:2px 6px;white-space:nowrap;" title="Live recording active as mock baseline (${step.baselineMeta?.chunksCount || 0} chunks)">
+            ✔ Live Mock Active
+          </span>`;
+      } else if (step.hasLiveRecording || (step.liveCapture && step.liveCapture.hasRecording) || report.mode === 'live') {
+        const chunksLabel = step.liveCapture?.chunksCount ? ` (${step.liveCapture.chunksCount} chunks)` : '';
+        promoteBtnHtml = `
+          <button class="testlab-btn testlab-btn-secondary promote-recording-btn"
+                  data-id="${step.id}"
+                  style="padding:2px 8px;font-size:9.5px;white-space:nowrap;color:#58a6ff;border-color:rgba(56,139,253,0.4);"
+                  title="Replace mock baseline with this live recording${chunksLabel}">
+            ⚡ Replace Mock
+          </button>`;
+      } else if (isBaselineActive) {
+        promoteBtnHtml = `
+          <span class="testlab-info-badge success" style="font-size:9px;padding:2px 6px;white-space:nowrap;" title="Replaying promoted live baseline from ${step.baselineMeta?.model || 'live model'}">
+            ⚡ Promoted Live
+          </span>`;
+      }
+
       row.innerHTML = `
         <td style="font-family:var(--font-mono);color:var(--accent);font-weight:700;">${step.checklistId || step.id}</td>
         <td style="color:var(--text-3);font-size:11px;">${area}</td>
@@ -374,15 +514,52 @@ export function initReport(state, renderChecklist, startTestRun) {
         <td>${statusHtml}</td>
         <td><div style="display:flex;gap:4px;">${evidenceHtml}</div></td>
         <td>
-          <button class="testlab-btn ${step.status === 'failed' ? 'testlab-btn-danger' : 'testlab-btn-secondary'} rerun-single-test-btn"
-                  data-id="${step.id}" data-checklist="${step.checklistId || ''}"
-                  style="padding:3px 8px;font-size:10px;white-space:nowrap;"
-                  title="Run only [${step.checklistId || step.id}]">
-            ▶ Re-run
-          </button>
+          <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;">
+            <button class="testlab-btn ${step.status === 'failed' ? 'testlab-btn-danger' : 'testlab-btn-secondary'} rerun-single-test-btn"
+                    data-id="${step.id}" data-checklist="${step.checklistId || ''}"
+                    style="padding:3px 8px;font-size:10px;white-space:nowrap;"
+                    title="Run only [${step.checklistId || step.id}]">
+              ▶ Re-run
+            </button>
+            ${promoteBtnHtml}
+          </div>
         </td>`;
       matrixTbody.appendChild(row);
     }
+
+    // Individual Replace Mock button clicks
+    matrixTbody.querySelectorAll('.promote-recording-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const scenarioId = btn.dataset.id;
+        btn.disabled = true;
+        btn.textContent = '⏳ Replacing...';
+        try {
+          const res = await fetch('/api/postqode-test/promote-recording', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ runId: report.runId, scenarioId }),
+          });
+          const json = await res.json();
+          if (json.success) {
+            showToast(`✔ Replaced mock baseline for ${scenarioId} with live model recording!`, 'success');
+            const badge = document.createElement('span');
+            badge.className = 'testlab-info-badge success';
+            badge.style.cssText = 'font-size:9px;padding:2px 6px;white-space:nowrap;';
+            badge.textContent = '✔ Live Mock Active';
+            badge.title = 'Live recording is active as mock baseline';
+            btn.replaceWith(badge);
+          } else {
+            showToast(`Failed to promote ${scenarioId}: ${json.error}`, 'error');
+            btn.disabled = false;
+            btn.textContent = '⚡ Replace Mock';
+          }
+        } catch (err) {
+          showToast(`Network error: ${err.message}`, 'error');
+          btn.disabled = false;
+          btn.textContent = '⚡ Replace Mock';
+        }
+      });
+    });
 
     // Re-run single test
     matrixTbody.querySelectorAll('.rerun-single-test-btn').forEach((btn) => {

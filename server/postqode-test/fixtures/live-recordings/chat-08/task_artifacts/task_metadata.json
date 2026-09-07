@@ -1,0 +1,31 @@
+{
+  "files_in_context": [
+    {
+      "path": "example.js",
+      "record_state": "active",
+      "record_source": "read_tool",
+      "postqode_read_date": 1788678042111,
+      "postQode_edit_date": null,
+      "user_edit_date": null
+    }
+  ],
+  "model_usage": [
+    {
+      "ts": 1788678037260,
+      "model_id": "anthropic/claude-sonnet-5",
+      "model_provider_id": "postqode",
+      "mode": "agent"
+    }
+  ],
+  "environment_history": [
+    {
+      "ts": 1788678037259,
+      "os_name": "darwin",
+      "os_version": "25.5.0",
+      "os_arch": "arm64",
+      "host_name": "VSCode",
+      "host_version": "1.137.0-insider",
+      "postqode_version": "3.0.25"
+    }
+  ]
+}
