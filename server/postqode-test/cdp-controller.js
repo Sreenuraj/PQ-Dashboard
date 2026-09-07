@@ -115,6 +115,224 @@ class CDPController {
     throw new Error(`No supported IDE (VS Code, VS Code Insiders, Cursor, Windsurf) found on system.`);
   }
 
+  resolveCliExecutable() {
+    const host = (this.host || 'vscode-insiders').toLowerCase();
+    const isMac = process.platform === 'darwin';
+    const isWin = process.platform === 'win32';
+
+    const candidates = [];
+
+    if (host === 'vscode-insiders') {
+      if (isMac) {
+        candidates.push('/Applications/Visual Studio Code - Insiders.app/Contents/Resources/app/bin/code');
+        candidates.push('/usr/local/bin/code-insiders');
+      } else if (isWin) {
+        const localApp = process.env.LOCALAPPDATA || '';
+        const progFiles = process.env.ProgramFiles || 'C:\\Program Files';
+        candidates.push(path.join(localApp, 'Programs', 'Microsoft VS Code Insiders', 'bin', 'code-insiders.cmd'));
+        candidates.push(path.join(progFiles, 'Microsoft VS Code Insiders', 'bin', 'code-insiders.cmd'));
+      }
+      candidates.push('code-insiders');
+    } else if (host === 'vscode') {
+      if (isMac) {
+        candidates.push('/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code');
+        candidates.push('/usr/local/bin/code');
+      } else if (isWin) {
+        const localApp = process.env.LOCALAPPDATA || '';
+        const progFiles = process.env.ProgramFiles || 'C:\\Program Files';
+        candidates.push(path.join(localApp, 'Programs', 'Microsoft VS Code', 'bin', 'code.cmd'));
+        candidates.push(path.join(progFiles, 'Microsoft VS Code', 'bin', 'code.cmd'));
+      }
+      candidates.push('code');
+    } else if (host === 'cursor') {
+      if (isMac) {
+        candidates.push('/Applications/Cursor.app/Contents/Resources/app/bin/cursor');
+        candidates.push('/Applications/Cursor.app/Contents/Resources/app/bin/code');
+        candidates.push('/usr/local/bin/cursor');
+      } else if (isWin) {
+        const localApp = process.env.LOCALAPPDATA || '';
+        candidates.push(path.join(localApp, 'Programs', 'cursor', 'bin', 'cursor.cmd'));
+      }
+      candidates.push('cursor');
+    } else if (host === 'windsurf') {
+      if (isMac) {
+        candidates.push('/Applications/Windsurf.app/Contents/Resources/app/bin/windsurf');
+        candidates.push('/Applications/Windsurf.app/Contents/Resources/app/bin/code');
+        candidates.push('/usr/local/bin/windsurf');
+      } else if (isWin) {
+        const localApp = process.env.LOCALAPPDATA || '';
+        candidates.push(path.join(localApp, 'Programs', 'Windsurf', 'bin', 'windsurf.cmd'));
+      }
+      candidates.push('windsurf');
+    }
+
+    for (const p of candidates) {
+      if (fs.existsSync(p)) return p;
+      if (!p.includes('/') && !p.includes('\\')) {
+        try {
+          const cmd = isWin ? `where ${p} 2>nul` : `which ${p} 2>/dev/null`;
+          const resolved = execSync(cmd, { encoding: 'utf8' }).split('\n')[0].trim();
+          if (resolved && fs.existsSync(resolved)) return resolved;
+        } catch (e) {}
+      }
+    }
+
+    for (const fallback of ['code-insiders', 'code', 'cursor', 'windsurf']) {
+      try {
+        const cmd = isWin ? `where ${fallback} 2>nul` : `which ${fallback} 2>/dev/null`;
+        const resolved = execSync(cmd, { encoding: 'utf8' }).split('\n')[0].trim();
+        if (resolved && fs.existsSync(resolved)) return resolved;
+      } catch (e) {}
+    }
+
+    return null;
+  }
+
+  unpackVsixDirectly(vsixPath, targetExtensionsDir) {
+    if (!fs.existsSync(vsixPath)) {
+      return { success: false, error: `VSIX file not found: ${vsixPath}` };
+    }
+    const tempUnpack = fs.mkdtempSync(path.join(os.tmpdir(), 'pq-unpack-'));
+    try {
+      execSync(`unzip -q -o "${vsixPath}" "extension/*" -d "${tempUnpack}"`, {
+        timeout: 15000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      const pkgPath = path.join(tempUnpack, 'extension', 'package.json');
+      if (!fs.existsSync(pkgPath)) {
+        return { success: false, error: 'package.json missing from VSIX extension archive' };
+      }
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+      const pub = (pkg.publisher || 'postqode').toLowerCase();
+      const name = (pkg.name || 'postqode').toLowerCase();
+      const version = pkg.version || 'unknown';
+      const destDirName = `${pub}.${name}-${version}`;
+      const destDir = path.join(targetExtensionsDir, destDirName);
+
+      if (fs.existsSync(destDir)) {
+        try { fs.rmSync(destDir, { recursive: true, force: true }); } catch (e) {}
+      }
+      fs.renameSync(path.join(tempUnpack, 'extension'), destDir);
+
+      const extJsonPath = path.join(targetExtensionsDir, 'extensions.json');
+      let extList = [];
+      if (fs.existsSync(extJsonPath)) {
+        try { extList = JSON.parse(fs.readFileSync(extJsonPath, 'utf8')); } catch (e) {}
+      }
+      extList = extList.filter((item) => item?.identifier?.id !== `${pub}.${name}`);
+      extList.push({
+        identifier: { id: `${pub}.${name}` },
+        version,
+        location: { $mid: 1, path: destDir },
+      });
+      fs.writeFileSync(extJsonPath, JSON.stringify(extList, null, 2), 'utf8');
+
+      return { success: true, version, extensionDir: destDir };
+    } catch (err) {
+      return { success: false, error: err.message };
+    } finally {
+      try { fs.rmSync(tempUnpack, { recursive: true, force: true }); } catch (e) {}
+    }
+  }
+
+  async installExtension(buildSource, localPath = null) {
+    if (buildSource === 'installed') {
+      const extDir = this.resolveHostExtensionsDir();
+      const matches = (extDir && fs.existsSync(extDir))
+        ? fs.readdirSync(extDir).filter((d) => d.startsWith('postqode.postqode'))
+        : [];
+      let version = 'unknown';
+      if (matches.length > 0) {
+        try {
+          const pkg = JSON.parse(fs.readFileSync(path.join(extDir, matches[0], 'package.json'), 'utf8'));
+          version = pkg.version || 'unknown';
+        } catch (e) {}
+      }
+      return { passed: matches.length > 0, version, message: `Host extension verified (v${version})` };
+    }
+
+    if (!this.customExtensionsDir) {
+      this.customExtensionsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pq-ext-'));
+    }
+    if (!this.userDataDir) {
+      this.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pq-profile-'));
+    }
+
+    const targetPath = localPath || this.localBuildPath;
+    const cli = this.resolveCliExecutable();
+    let installSucceeded = false;
+    let installError = null;
+
+    if (cli) {
+      try {
+        const installTarget = buildSource === 'local' ? `"${targetPath}"` : 'postqode.postqode';
+        const cmd = `"${cli}" --user-data-dir="${this.userDataDir}" --extensions-dir="${this.customExtensionsDir}" --install-extension ${installTarget} --force`;
+        this.log(`Installing ${buildSource} extension via CLI: ${cmd}`);
+        const out = execSync(cmd, {
+          encoding: 'utf8',
+          timeout: 45000,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        this.log(`CLI install succeeded: ${out ? out.trim() : 'done'}`);
+        installSucceeded = true;
+      } catch (err) {
+        installError = err;
+        this.log(`CLI install failed: ${err.message}`);
+      }
+    } else {
+      this.log(`Notice: No CLI executable found for host "${this.host}". Will use direct archive unpack.`);
+    }
+
+    // Direct VSIX fallback if CLI install did not succeed
+    if (!installSucceeded && buildSource === 'local' && targetPath && fs.existsSync(targetPath)) {
+      this.log(`Attempting direct VSIX unpack fallback for: ${targetPath}`);
+      const unpackRes = this.unpackVsixDirectly(targetPath, this.customExtensionsDir);
+      if (unpackRes.success) {
+        installSucceeded = true;
+        this.log(`Direct VSIX unpack succeeded (v${unpackRes.version}).`);
+      } else {
+        this.log(`Direct VSIX unpack failed: ${unpackRes.error}`);
+        if (!installError) installError = new Error(unpackRes.error);
+      }
+    }
+
+    // Verify presence in this.customExtensionsDir
+    const extDir = this.customExtensionsDir;
+    const matches = (extDir && fs.existsSync(extDir))
+      ? fs.readdirSync(extDir).filter((d) => d.startsWith('postqode.postqode'))
+      : [];
+
+    if (matches.length === 0) {
+      const msg = installError
+        ? `Failed to install PostQode extension: ${installError.message}`
+        : 'PostQode extension not found in sandbox extensions directory after installation';
+      this.log(`[Lifecycle Test] Installation FAILED: ${msg}`);
+      return {
+        passed: false,
+        version: 'unknown',
+        message: msg,
+      };
+    }
+
+    const installedFolder = path.join(extDir, matches[0]);
+    const pkgPath = path.join(installedFolder, 'package.json');
+    let version = 'unknown';
+    if (fs.existsSync(pkgPath)) {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+        version = pkg.version || 'unknown';
+      } catch (e) {}
+    }
+
+    this.log(`[Lifecycle Test] Extension successfully installed & verified on disk: postqode v${version} at ${installedFolder}`);
+    return {
+      passed: true,
+      version,
+      message: `PostQode extension verified on disk (v${version})`,
+    };
+  }
+
+
   resolveHostExtensionsDir() {
     const host = (this.host || 'vscode-insiders').toLowerCase();
     const home = os.homedir();
@@ -256,33 +474,9 @@ class CDPController {
     }
 
     // Handle Build Source: installed vs local vs marketplace
-    if (this.buildSource === 'local' && this.localBuildPath) {
-      this.log(`Configuring isolated extensions dir for local build: ${this.localBuildPath}`);
-      this.customExtensionsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pq-ext-'));
-      try {
-        const bin = this.resolveExecutable();
-        this.log(`Installing local VSIX: ${this.localBuildPath}`);
-        execSync(`"${bin}" --user-data-dir="${this.userDataDir}" --extensions-dir="${this.customExtensionsDir}" --install-extension "${this.localBuildPath}" --force`, {
-          stdio: 'pipe',
-          timeout: 30000,
-        });
-        this.log('Local build installed successfully.');
-      } catch (err) {
-        this.log(`Warning: Failed installing local build: ${err.message}`);
-      }
-    } else if (this.buildSource === 'marketplace') {
-      this.log('Fetching/updating PostQode from Marketplace for test...');
-      this.customExtensionsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pq-ext-'));
-      try {
-        const bin = this.resolveExecutable();
-        execSync(`"${bin}" --user-data-dir="${this.userDataDir}" --extensions-dir="${this.customExtensionsDir}" --install-extension postqode.postqode --force`, {
-          stdio: 'pipe',
-          timeout: 45000,
-        });
-        this.log('Marketplace version installed successfully.');
-      } catch (err) {
-        this.log(`Warning: Failed installing marketplace extension: ${err.message}`);
-      }
+    if (this.buildSource === 'local' || this.buildSource === 'marketplace') {
+      this.log(`Configuring isolated extensions dir for ${this.buildSource} build...`);
+      await this.installExtension(this.buildSource, this.localBuildPath);
     }
   }
 
@@ -440,44 +634,59 @@ class CDPController {
   }
 
   // Lifecycle Test: Clean Install (INS-01)
-  // Verifies the PostQode extension is present on disk — the meaningful proof of installation.
-  // We do NOT run 'code --install-extension' here because it blocks the Node.js event loop
-  // via spawnSync and causes ETIMEDOUT errors in the test runner.
+  // Verifies the PostQode extension is installed and present in the sandbox profile extensions directory.
   async testInstallExtension(buildSource, localPath = null) {
     const start = Date.now();
     this.log(`[Lifecycle Test] Verifying PostQode extension installation (${buildSource})...`);
 
-    const extDir = this.resolveHostExtensionsDir();
-    const matches = (extDir && fs.existsSync(extDir))
-      ? fs.readdirSync(extDir).filter((d) => d.startsWith('postqode.postqode'))
-      : [];
-
-    if (matches.length === 0) {
-      return {
-        passed: false,
-        message: 'PostQode extension not found in extensions directory',
-        durationMs: Date.now() - start,
-      };
-    }
-
-    const installedFolder = path.join(extDir, matches[0]);
-    const pkgPath = path.join(installedFolder, 'package.json');
-    let version = 'unknown';
-    if (fs.existsSync(pkgPath)) {
+    let res;
+    if (buildSource === 'installed') {
+      const extDir = this.resolveHostExtensionsDir();
+      const matches = (extDir && fs.existsSync(extDir))
+        ? fs.readdirSync(extDir).filter((d) => d.startsWith('postqode.postqode'))
+        : [];
+      if (matches.length === 0) {
+        return {
+          passed: false,
+          version: 'unknown',
+          message: 'PostQode extension not found in host extensions directory',
+          durationMs: Date.now() - start,
+        };
+      }
+      let version = 'unknown';
       try {
-        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+        const pkg = JSON.parse(fs.readFileSync(path.join(extDir, matches[0], 'package.json'), 'utf8'));
         version = pkg.version || 'unknown';
       } catch (e) {}
+      res = {
+        passed: true,
+        version,
+        message: `PostQode extension verified on disk (v${version})`,
+      };
+    } else {
+      // For local or marketplace: check if already in customExtensionsDir, else install now!
+      const extDir = this.customExtensionsDir;
+      const matches = (extDir && fs.existsSync(extDir))
+        ? fs.readdirSync(extDir).filter((d) => d.startsWith('postqode.postqode'))
+        : [];
+      if (matches.length > 0) {
+        let version = 'unknown';
+        try {
+          const pkg = JSON.parse(fs.readFileSync(path.join(extDir, matches[0], 'package.json'), 'utf8'));
+          version = pkg.version || 'unknown';
+        } catch (e) {}
+        res = {
+          passed: true,
+          version,
+          message: `PostQode extension verified on disk (v${version})`,
+        };
+      } else {
+        res = await this.installExtension(buildSource, localPath);
+      }
     }
 
-    const durationMs = Date.now() - start;
-    this.log(`[Lifecycle Test] Extension verified on disk: postqode v${version} in ${durationMs}ms.`);
-    return {
-      passed: true,
-      version,
-      message: `PostQode extension verified on disk (v${version})`,
-      durationMs,
-    };
+    res.durationMs = Date.now() - start;
+    return res;
   }
 
   // Pure UI Action: Open PostQode View

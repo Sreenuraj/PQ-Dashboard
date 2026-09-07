@@ -88,15 +88,63 @@ function compareTaskParity(mockTask, liveBaselineTask) {
   };
 }
 
-function detectPostqodeVersion(localBuildPath = null, customExtensionsDir = null) {
+function detectPostqodeVersion(localBuildPath = null, customExtensionsDir = null, host = null) {
   try {
-    const candidateDirs = [];
-    if (customExtensionsDir && fs.existsSync(customExtensionsDir)) {
-      candidateDirs.push(customExtensionsDir);
+    // 1. If local build is explicitly given, inspect it first!
+    if (localBuildPath && typeof localBuildPath === 'string' && fs.existsSync(localBuildPath)) {
+      const stat = fs.statSync(localBuildPath);
+      if (stat.isFile() && (localBuildPath.endsWith('.vsix') || localBuildPath.toLowerCase().includes('.vsix'))) {
+        try {
+          const stdout = execSync(`unzip -p "${localBuildPath}" "extension/package.json"`, {
+            encoding: 'utf8',
+            timeout: 5000,
+            stdio: ['ignore', 'pipe', 'ignore'],
+          });
+          const pkg = JSON.parse(stdout);
+          if (pkg.version) return `v${pkg.version}`;
+        } catch (e) {
+          const match = path.basename(localBuildPath).match(/(\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?)/);
+          if (match) return `v${match[1]}`;
+        }
+      } else if (stat.isDirectory()) {
+        const pkgPath = path.join(localBuildPath, 'package.json');
+        if (fs.existsSync(pkgPath)) {
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+          if (pkg.version) return `v${pkg.version}`;
+        }
+      }
     }
+
+    // 2. If an isolated custom extensions directory is provided, check it next
+    if (customExtensionsDir && fs.existsSync(customExtensionsDir)) {
+      const entries = fs.readdirSync(customExtensionsDir);
+      const pqDir = entries.find((e) => e.startsWith('postqode.postqode') && !e.endsWith('.vsix'));
+      if (pqDir) {
+        const pkgPath = path.join(customExtensionsDir, pqDir, 'package.json');
+        if (fs.existsSync(pkgPath)) {
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+          if (pkg.version) return `v${pkg.version}`;
+        }
+      }
+    }
+
+    // 3. Check target host's installed extension directory
     const home = os.homedir();
-    candidateDirs.push(path.join(home, '.vscode-insiders', 'extensions'));
-    candidateDirs.push(path.join(home, '.vscode', 'extensions'));
+    const candidateDirs = [];
+    const normalizedHost = (host || '').toLowerCase();
+    if (normalizedHost === 'vscode-insiders') {
+      candidateDirs.push(path.join(home, '.vscode-insiders', 'extensions'));
+    } else if (normalizedHost === 'vscode') {
+      candidateDirs.push(path.join(home, '.vscode', 'extensions'));
+    } else if (normalizedHost === 'cursor') {
+      candidateDirs.push(path.join(home, '.cursor', 'extensions'));
+    } else if (normalizedHost === 'windsurf') {
+      candidateDirs.push(path.join(home, '.windsurf', 'extensions'));
+    } else {
+      candidateDirs.push(path.join(home, '.vscode-insiders', 'extensions'));
+      candidateDirs.push(path.join(home, '.vscode', 'extensions'));
+      candidateDirs.push(path.join(home, '.cursor', 'extensions'));
+    }
 
     for (const dir of candidateDirs) {
       if (!fs.existsSync(dir)) continue;
@@ -145,7 +193,9 @@ class PostQodeTestRunner extends EventEmitter {
     this.activeScenario = null;
     this.capturedEvidence = [];
 
-    this.postqodeVersion = detectPostqodeVersion(this.localBuildPath);
+    this.postqodeVersion = this.buildSource === 'local' && this.localBuildPath
+      ? detectPostqodeVersion(this.localBuildPath, null, this.host)
+      : detectPostqodeVersion(null, null, this.host);
     this.hostOS = detectHostOS();
     this.activeModel = this.mode === 'live' ? `${this.liveProvider}:${this.liveModel}` : `Mock Engine (${this.liveModel || 'kimi-k3'})`;
 
@@ -646,6 +696,9 @@ class PostQodeTestRunner extends EventEmitter {
             step.assertions.push({ name: res.message, passed: res.passed });
             if (!res.passed) throw new Error(res.message);
             step.actualResult = `Installed successfully (Version: v${res.version})`;
+            this.postqodeVersion = `v${res.version}`;
+            this.report.postqodeVersion = this.postqodeVersion;
+            if (this.report.environment) this.report.environment.postqodeVersion = this.postqodeVersion;
           }
         );
       }
