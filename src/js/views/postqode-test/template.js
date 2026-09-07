@@ -154,16 +154,16 @@ export function getTemplate() {
                 <span style="font-size: 11px; color: var(--text-2); font-weight: 600;">Run Module:</span>
                 <select id="testlab-quick-sheet-select" class="testlab-select" style="width: auto; padding: 2px 6px; font-size: 11px; border: none; background: transparent; cursor: pointer;">
                   <option value="">-- Choose a Module --</option>
-                  <option value="Providers &amp; Models">Providers &amp; Models</option>
-                  <option value="GUI &amp; Editor Integration">GUI &amp; Editor Integration</option>
                   <option value="Install &amp; Activation">Install &amp; Activation</option>
+                  <option value="GUI &amp; Editor Integration">GUI &amp; Editor Integration</option>
                   <option value="Chat &amp; Agent Mode">Chat &amp; Agent Mode</option>
-                  <option value="Settings &amp; Feature Flags">Settings &amp; Feature Flags</option>
-                  <option value="MCP">MCP</option>
-                  <option value="Checkpoints, History &amp; State">Checkpoints, History &amp; State</option>
-                  <option value="Files &amp; Terminal Tools">Files &amp; Terminal Tools</option>
                   <option value="Slash Commands">Slash Commands</option>
                   <option value="Workflows, Rules &amp; Skills">Workflows, Rules &amp; Skills</option>
+                  <option value="Providers &amp; Models">Providers &amp; Models</option>
+                  <option value="Files &amp; Terminal Tools">Files &amp; Terminal Tools</option>
+                  <option value="Checkpoints, History &amp; State">Checkpoints, History &amp; State</option>
+                  <option value="Settings &amp; Feature Flags">Settings &amp; Feature Flags</option>
+                  <option value="MCP">MCP</option>
                 </select>
                 <button id="testlab-run-sheet-btn" class="testlab-btn testlab-btn-primary" style="padding: 2px 8px; font-size: 10px;" disabled>
                   ▶ Run Module
@@ -185,16 +185,16 @@ export function getTemplate() {
           <!-- Category Navigation Tabs -->
           <div class="testlab-tabs" id="testlab-category-tabs">
             <button class="testlab-tab active" data-category="all">All Modules</button>
+            <button class="testlab-tab" data-category="Install &amp; Activation">Install &amp; Activation</button>
+            <button class="testlab-tab" data-category="GUI &amp; Editor Integration">GUI &amp; Editor</button>
+            <button class="testlab-tab" data-category="Chat &amp; Agent Mode">Chat &amp; Agent Mode</button>
             <button class="testlab-tab" data-category="Slash Commands">Slash Commands</button>
             <button class="testlab-tab" data-category="Workflows, Rules &amp; Skills">Workflows &amp; Skills</button>
             <button class="testlab-tab" data-category="Providers &amp; Models">Providers &amp; Models</button>
-            <button class="testlab-tab" data-category="GUI &amp; Editor Integration">GUI &amp; Editor</button>
-            <button class="testlab-tab" data-category="Install &amp; Activation">Install &amp; Activation</button>
-            <button class="testlab-tab" data-category="Chat &amp; Agent Mode">Chat &amp; Agent Mode</button>
+            <button class="testlab-tab" data-category="Files &amp; Terminal Tools">Files &amp; Tools</button>
+            <button class="testlab-tab" data-category="Checkpoints, History &amp; State">History &amp; State</button>
             <button class="testlab-tab" data-category="Settings &amp; Feature Flags">Settings &amp; Flags</button>
             <button class="testlab-tab" data-category="MCP">MCP</button>
-            <button class="testlab-tab" data-category="Checkpoints, History &amp; State">History &amp; State</button>
-            <button class="testlab-tab" data-category="Files &amp; Terminal Tools">Files &amp; Tools</button>
           </div>
 
           <!-- Checklist Grid Container -->

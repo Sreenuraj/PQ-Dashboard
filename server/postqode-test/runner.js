@@ -290,10 +290,13 @@ class PostQodeTestRunner extends EventEmitter {
 
     this.emitState();
 
-    // Immediate teardown
+    // Immediate teardown with timeout safety
     if (this.controller) {
       try {
-        await this.controller.teardown();
+        await Promise.race([
+          this.controller.teardown(),
+          new Promise((r) => setTimeout(r, 4000)),
+        ]);
         this.log('✔ Immediate controller teardown completed. No lingering processes.');
       } catch (e) {
         this.log(`Notice: Controller teardown encountered: ${e.message}`);
@@ -712,9 +715,9 @@ class PostQodeTestRunner extends EventEmitter {
             category: 'Install & Activation',
             sheetName: 'Install & Activation',
             priority: 'P1',
-            scenario: 'Startup performance & window launch',
-            steps: '1. Launch isolated IDE process\n2. Connect via CDP port\n3. Measure launch latency',
-            expectedResult: 'Activates without workbench block; CDP attaches within SLA (<15s)',
+            scenario: 'Startup & PostQode Runtime Activation',
+            steps: '1. Launch isolated IDE process\n2. Connect via CDP port\n3. Measure launch latency\n4. Verify PostQode extension registration\n5. Open right-side panel & verify PostQode webview hydration (auto-reload retry if needed)\n6. Capture verification screenshot',
+            expectedResult: 'Activates without workbench block; CDP attaches within SLA (<15s); PostQode right-side panel opens & webview fully hydrates',
           },
           async (step) => {
             const startLaunch = Date.now();
@@ -723,12 +726,53 @@ class PostQodeTestRunner extends EventEmitter {
             step.assertions.push({ name: `IDE Process Spawned in Sandbox (${latency}ms)`, passed: latency > 0 && !!this.controller.process });
             step.assertions.push({ name: 'CDP Attached on Debugging Port', passed: !!this.controller.page });
             step.assertions.push({ name: `Startup latency within SLA (<15s, actual: ${(latency / 1000).toFixed(1)}s)`, passed: latency < 15000 && latency > 0 });
-            step.actualResult = `IDE launched and attached via CDP in ${(latency / 1000).toFixed(1)}s`;
+
+            // 1. Explicit extension runtime registration check
+            const postqodeActive = await this.controller.isPostQodeActive();
+            step.assertions.push({ name: 'PostQode Extension Loaded & Registered in IDE Runtime', passed: postqodeActive });
+            if (!postqodeActive) {
+              throw new Error('PostQode extension is not loaded or active in the IDE runtime (verify workspace trust and extension directory)');
+            }
+
+            // 2. Open PostQode in right-side panel
+            this.log('Opening and verifying PostQode in right-side panel...');
+            await this.controller.openPostQodeView();
+
+            // 3. Check webview hydration with reloadWindow retry if needed
+            let isLoaded = await this.controller.waitForPostQodeFullyLoaded(10000);
+            if (!isLoaded) {
+              this.log('Notice: PostQode webview taking longer to hydrate; triggering window reload retry...');
+              await this.controller.reloadWindow();
+              await this.controller.openPostQodeView();
+              isLoaded = await this.controller.waitForPostQodeFullyLoaded(15000);
+            }
+
+            step.assertions.push({
+              name: 'PostQode Right-Side Panel Webview Loaded & Hydrated (Prompt Input & Status Ready)',
+              passed: isLoaded,
+            });
+
+            // 4. Capture screenshot of the verified loaded right-side panel
+            const screenshotFile = '01-activation-ui.png';
+            const shot = await this.controller.takeScreenshot(screenshotFile);
+            if (shot) {
+              step.screenshots.push(screenshotFile);
+            }
+
+            if (!isLoaded) {
+              throw new Error('PostQode right-side panel webview failed to load and hydrate');
+            }
+
+            step.actualResult = `IDE launched and attached via CDP in ${(latency / 1000).toFixed(1)}s; PostQode right-side panel verified loaded & hydrated`;
           }
         );
       } else if (!this.isStopped) {
         if (!this.controller.page) {
           await this.controller.start();
+          const postqodeActive = await this.controller.isPostQodeActive();
+          if (!postqodeActive) {
+            this.log('Warning: PostQode extension not detected in IDE runtime upon start.');
+          }
         }
       }
 

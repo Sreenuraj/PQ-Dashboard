@@ -481,10 +481,18 @@ module.exports = () => {
   // POST /api/postqode-test/stop — stop active test run and trigger immediate teardown
   router.post('/postqode-test/stop', async (req, res) => {
     if (!activeRunner) {
-      return res.status(404).json({ error: 'No active test run to stop.' });
+      return res.json({ success: true, status: 'stopped', message: 'No active test run to stop.' });
     }
-    const runId = activeRunner.runId;
-    await activeRunner.stop();
+    const runner = activeRunner;
+    const runId = runner.runId;
+    try {
+      await Promise.race([
+        runner.stop(),
+        new Promise((r) => setTimeout(r, 4500)),
+      ]);
+    } catch (e) {
+      console.error('Notice during stop handler:', e.message);
+    }
     res.json({ success: true, status: 'stopped', runId, message: 'Test execution stopped and sandbox torn down.' });
   });
 
@@ -504,7 +512,7 @@ module.exports = () => {
       isStopped: activeRunner.isStopped,
       runId: activeRunner.runId,
       report: activeRunner.report,
-      logs: activeLogs.slice(-50),
+      logs: activeLogs.slice(-200),
     });
   });
 

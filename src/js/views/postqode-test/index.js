@@ -49,6 +49,9 @@ export async function renderPostQodeTest(container) {
   // 7. Initial checklist render
   renderChecklist('all');
 
+  // 8. Restore active test execution if one is running in background
+  runner.checkActiveRun();
+
   // 8. Re-run from Allure report deep-link (e.g. /#/postqode-test?rerun=CHAT-01)
   const currentHash = window.location.hash || '';
   if (currentHash.includes('rerun=')) {

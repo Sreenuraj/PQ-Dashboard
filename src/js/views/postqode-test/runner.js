@@ -85,6 +85,11 @@ export function initRunner(state, renderChecklist) {
                : step.status === 'skipped' ? '↷'
                : step.status === 'stopped' ? '⏹' : '✖';
 
+    const assertionsText = step.status === 'skipped' ? (step.actualResult || 'Skipped')
+      : step.status === 'stopped' ? 'Stopped by user'
+      : (step.assertions?.length > 0) ? `${step.assertions.filter((a) => a.passed).length}/${step.assertions.length} assertions passed`
+      : (step.actualResult || 'Starting scenario...');
+
     if (!card) {
       card = document.createElement('div');
       card.id        = `step-card-${step.id}`;
@@ -94,7 +99,7 @@ export function initRunner(state, renderChecklist) {
           <div class="testlab-step-icon">${icon}</div>
           <div class="testlab-step-info">
             <h4>${step.checklistId ? `[${step.checklistId}] ` : ''}${step.title}</h4>
-            <span id="step-assertions-${step.id}">${step.status === 'skipped' ? step.actualResult : 'Starting scenario...'}</span>
+            <span id="step-assertions-${step.id}">${assertionsText}</span>
           </div>
         </div>
         <div class="testlab-step-duration" id="step-duration-${step.id}">
@@ -125,12 +130,7 @@ export function initRunner(state, renderChecklist) {
 
       const assertionsEl = document.getElementById(`step-assertions-${step.id}`);
       if (assertionsEl) {
-        if (step.status === 'skipped')       assertionsEl.textContent = step.actualResult || 'Skipped';
-        else if (step.status === 'stopped')  assertionsEl.textContent = 'Stopped by user';
-        else if (step.assertions?.length > 0) {
-          const passed = step.assertions.filter((a) => a.passed).length;
-          assertionsEl.textContent = `${passed}/${step.assertions.length} assertions passed`;
-        }
+        assertionsEl.textContent = assertionsText;
       }
     }
   }
@@ -281,7 +281,48 @@ export function initRunner(state, renderChecklist) {
     }
   }
 
+  // ── Restore active execution on refresh / initial load ─────────────────────
+  async function checkActiveRun() {
+    try {
+      const res = await fetch('/api/postqode-test/active');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.active && (data.state === 'running' || data.state === 'paused')) {
+        state.activeRunId = data.runId;
+        updateExecutionState(data.state);
+        executionSection.style.display = 'block';
+
+        const reportSection = document.getElementById('testlab-report-section');
+        if (reportSection) reportSection.style.display = 'none';
+
+        terminalLogs.innerHTML = '';
+        if (Array.isArray(data.logs)) {
+          for (const msg of data.logs) {
+            const div = document.createElement('div');
+            div.className = 'log-entry';
+            div.textContent = msg;
+            terminalLogs.appendChild(div);
+          }
+          terminalLogs.scrollTop = terminalLogs.scrollHeight;
+          logCount.textContent = `${terminalLogs.children.length} lines`;
+        }
+
+        stepsContainer.innerHTML = '';
+        if (data.report && Array.isArray(data.report.steps)) {
+          for (const step of data.report.steps) {
+            updateStepCard(step);
+          }
+        }
+
+        executionTitle.textContent = `Active Run: ${data.runId}`;
+        connectStream();
+      }
+    } catch (e) {
+      console.warn('Failed to check active test run:', e);
+    }
+  }
+
   runBtn.addEventListener('click', () => startTestRun());
 
-  return { startTestRun, setDisplayReport, setLoadRuns, updateExecutionState };
+  return { startTestRun, setDisplayReport, setLoadRuns, updateExecutionState, checkActiveRun };
 }

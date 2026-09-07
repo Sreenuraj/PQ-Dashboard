@@ -15,16 +15,16 @@ import { slashScenarios } from './slash-commands.js';
 import { workflowRuleSkillScenarios } from './workflows-rules-skills.js';
 
 export const allScenarios = [
-  ...providerScenarios,
-  ...guiScenarios,
   ...installScenarios,
+  ...guiScenarios,
+  ...chatScenarios,
+  ...slashScenarios,
+  ...workflowRuleSkillScenarios,
+  ...providerScenarios,
+  ...filesScenarios,
   ...historyScenarios,
   ...settingsScenarios,
   ...mcpScenarios,
-  ...chatScenarios,
-  ...filesScenarios,
-  ...slashScenarios,
-  ...workflowRuleSkillScenarios,
 ];
 
 // Named re-exports for direct use in preset logic

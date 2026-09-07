@@ -190,8 +190,64 @@ class CDPController {
 
   unpackVsixDirectly(vsixPath, targetExtensionsDir) {
     if (!fs.existsSync(vsixPath)) {
-      return { success: false, error: `VSIX file not found: ${vsixPath}` };
+      return { success: false, error: `Build path not found: ${vsixPath}` };
     }
+
+    // 1. Support directory paths (e.g. local build directory or unzipped extension folder)
+    if (fs.statSync(vsixPath).isDirectory()) {
+      try {
+        let pkgPath = path.join(vsixPath, 'package.json');
+        let srcDir = vsixPath;
+        if (!fs.existsSync(pkgPath) && fs.existsSync(path.join(vsixPath, 'extension', 'package.json'))) {
+          pkgPath = path.join(vsixPath, 'extension', 'package.json');
+          srcDir = path.join(vsixPath, 'extension');
+        }
+        if (!fs.existsSync(pkgPath)) {
+          return { success: false, error: 'package.json missing from local build folder' };
+        }
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+        const pub = (pkg.publisher || 'postqode').toLowerCase();
+        const name = (pkg.name || 'postqode').toLowerCase();
+        const version = pkg.version || 'unknown';
+        const destDirName = `${pub}.${name}-${version}`;
+        const destDir = path.join(targetExtensionsDir, destDirName);
+
+        if (fs.existsSync(destDir)) {
+          try { fs.rmSync(destDir, { recursive: true, force: true }); } catch (e) {}
+        }
+        fs.cpSync(srcDir, destDir, { recursive: true });
+
+        const extJsonPath = path.join(targetExtensionsDir, 'extensions.json');
+        let extList = [];
+        if (fs.existsSync(extJsonPath)) {
+          try { extList = JSON.parse(fs.readFileSync(extJsonPath, 'utf8')); } catch (e) {}
+        }
+        extList = extList.filter((item) => item?.identifier?.id?.toLowerCase() !== `${pub}.${name}`.toLowerCase());
+        extList.push({
+          identifier: { id: `${pub}.${name}` },
+          version,
+          relativeLocation: destDirName,
+          location: {
+            $mid: 1,
+            fsPath: destDir,
+            scheme: 'file',
+            path: destDir,
+          },
+          metadata: {
+            installedTimestamp: Date.now(),
+            pinned: true,
+            source: 'vsix',
+          },
+        });
+        fs.writeFileSync(extJsonPath, JSON.stringify(extList, null, 2), 'utf8');
+
+        return { success: true, version, extensionDir: destDir };
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
+    }
+
+    // 2. Support VSIX archive files (.vsix or .zip)
     const tempUnpack = fs.mkdtempSync(path.join(os.tmpdir(), 'pq-unpack-'));
     try {
       execSync(`unzip -q -o "${vsixPath}" "extension/*" -d "${tempUnpack}"`, {
@@ -219,11 +275,22 @@ class CDPController {
       if (fs.existsSync(extJsonPath)) {
         try { extList = JSON.parse(fs.readFileSync(extJsonPath, 'utf8')); } catch (e) {}
       }
-      extList = extList.filter((item) => item?.identifier?.id !== `${pub}.${name}`);
+      extList = extList.filter((item) => item?.identifier?.id?.toLowerCase() !== `${pub}.${name}`.toLowerCase());
       extList.push({
         identifier: { id: `${pub}.${name}` },
         version,
-        location: { $mid: 1, path: destDir },
+        relativeLocation: destDirName,
+        location: {
+          $mid: 1,
+          fsPath: destDir,
+          scheme: 'file',
+          path: destDir,
+        },
+        metadata: {
+          installedTimestamp: Date.now(),
+          pinned: true,
+          source: 'vsix',
+        },
       });
       fs.writeFileSync(extJsonPath, JSON.stringify(extList, null, 2), 'utf8');
 
@@ -404,8 +471,12 @@ class CDPController {
   }
 
   async setupProfile() {
-    this.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pq-profile-'));
-    this.workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pq-workspace-'));
+    if (!this.userDataDir) {
+      this.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pq-profile-'));
+    }
+    if (!this.workspaceDir) {
+      this.workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pq-workspace-'));
+    }
     fs.mkdirSync(this.screenshotsDir, { recursive: true });
     fs.mkdirSync(this.artifactsDir, { recursive: true });
     this.cleanupGeneratedTestFiles();
@@ -431,8 +502,11 @@ class CDPController {
       'http.proxy': `http://127.0.0.1:${this.proxyPort}`,
       'http.proxyStrictSSL': false,
       'security.workspace.trust.enabled': false,
+      'security.workspace.trust.startupPrompt': 'never',
+      'security.workspace.trust.emptyWindow': true,
       'workbench.startupEditor': 'none',
       'window.restoreWindows': 'none',
+      'window.newWindowDimensions': 'maximized',
       'telemetry.telemetryLevel': 'off',
       'update.mode': 'none',
       'extensions.autoUpdate': false,
@@ -520,6 +594,8 @@ class CDPController {
     const args = [
       `--user-data-dir=${this.userDataDir}`,
       `--remote-debugging-port=${this.port}`,
+      '--start-maximized',
+      '--disable-workspace-trust',
       '--disable-telemetry',
       '--no-sandbox',
       '--disable-gpu',
@@ -689,17 +765,62 @@ class CDPController {
     return res;
   }
 
+  // Check if PostQode extension is active in IDE runtime
+  async isPostQodeActive() {
+    if (!this.page || this.page.isClosed()) return false;
+    try {
+      // 1. Check if PostQode activity bar icon exists
+      const activityIcon = this.page.locator(
+        '.activitybar [aria-label*="PostQode" i], .composite.bar [aria-label*="PostQode" i]'
+      ).first();
+      if (await activityIcon.isVisible({ timeout: 1500 }).catch(() => false)) {
+        return true;
+      }
+      // 2. Check if webview frame exists
+      const frame = this.getPostQodeWebviewFrame();
+      if (frame) {
+        const body = frame.locator('body');
+        if (await body.isVisible({ timeout: 1500 }).catch(() => false)) {
+          return true;
+        }
+      }
+      // 3. Check for any element with postqode id, class, title, or label
+      const anyPostQode = this.page.locator(
+        '[aria-label*="PostQode" i], [title*="PostQode" i], [id*="postqode" i]'
+      ).first();
+      if (await anyPostQode.isVisible({ timeout: 1500 }).catch(() => false)) {
+        return true;
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
   // Pure UI Action: Open PostQode View
   async openPostQodeView() {
-    this.log('Checking/Opening PostQode Chat view in Secondary Side Bar...');
-    // 1. Wait for PostQode chat to hydrate
-    const hydrated = await this.waitForPostQodeFullyLoaded(10000);
+    this.log('Checking/Opening PostQode Chat view...');
+    // 1. Wait for PostQode chat to hydrate if already open
+    const hydrated = await this.waitForPostQodeFullyLoaded(3000);
     if (hydrated) {
-      this.log('PostQode Chat view is open and ready in Secondary Side Bar.');
+      this.log('PostQode Chat view is open and ready.');
       return true;
     }
 
-    // 2. Check if Secondary Side Bar toggle button is present to reveal it
+    // 2. Check and click PostQode Activity Bar icon
+    const activityIcon = this.page.locator(
+      '.activitybar [aria-label*="PostQode" i], .composite.bar [aria-label*="PostQode" i]'
+    ).first();
+    if (await activityIcon.isVisible({ timeout: 1500 }).catch(() => false)) {
+      await activityIcon.click({ force: true });
+      this.log('Clicked PostQode Activity Bar icon.');
+      await new Promise((r) => setTimeout(r, 1500));
+      if (await this.waitForPostQodeFullyLoaded(10000)) {
+        return true;
+      }
+    }
+
+    // 3. Check if Secondary Side Bar toggle button is present to reveal it
     const toggleSecondary = this.page.locator(
       'a.action-label[aria-label*="Toggle Secondary Side Bar"]:not(.checked), a.action-label[title*="Toggle Secondary Side Bar"]:not(.checked)'
     ).first();
@@ -710,7 +831,7 @@ class CDPController {
       return await this.waitForPostQodeFullyLoaded(10000);
     }
 
-    return true;
+    return await this.waitForPostQodeFullyLoaded(5000);
   }
 
   getPostQodeWebviewFrame() {
@@ -749,6 +870,31 @@ class CDPController {
       await new Promise((r) => setTimeout(r, 400));
     }
     return false;
+  }
+
+  async reloadWindow() {
+    this.log('Triggering Developer: Reload Window in IDE...');
+    if (!this.page || this.page.isClosed()) return false;
+    try {
+      await this.page.keyboard.press('F1');
+      await new Promise((r) => setTimeout(r, 400));
+      await this.page.keyboard.type('Developer: Reload Window');
+      await new Promise((r) => setTimeout(r, 400));
+      await this.page.keyboard.press('Enter');
+      await new Promise((r) => setTimeout(r, 2500));
+      await this.page.waitForLoadState('domcontentloaded').catch(() => {});
+      this.log('Developer: Reload Window completed.');
+      return true;
+    } catch (e) {
+      this.log(`Notice: Reload window fallback: ${e.message}`);
+      try {
+        await this.page.reload({ timeout: 5000 }).catch(() => {});
+        await new Promise((r) => setTimeout(r, 2000));
+        return true;
+      } catch (err) {
+        return false;
+      }
+    }
   }
 
   // Dynamic Inspection: Recent Tasks (Middle Part) - Zero hardcoding
@@ -2408,17 +2554,7 @@ class CDPController {
     // 2. Teardown all generated test files (rules, workflows, skills, agents)
     this.cleanupGeneratedTestFiles();
 
-    // 2. Close page & browser connection
-    if (this.page) {
-      try { await this.page.close(); } catch (e) {}
-      this.page = null;
-    }
-    if (this.browser) {
-      try { await this.browser.close(); } catch (e) {}
-      this.browser = null;
-    }
-
-    // 3. Cleanly kill entire process tree for this profile
+    // 3. Cleanly kill entire process tree for this profile FIRST (prevents hanging on page.close())
     if (this.userDataDir) {
       try {
         execSync(`pkill -9 -f "${this.userDataDir}" 2>/dev/null || true`);
@@ -2438,6 +2574,26 @@ class CDPController {
       try {
         execSync(`pkill -9 -f "remote-debugging-port=${this.port}" 2>/dev/null || true`);
       } catch (e) {}
+    }
+
+    // 4. Safely close page & browser connection with short timeout guarantee
+    if (this.page) {
+      try {
+        await Promise.race([
+          this.page.close().catch(() => {}),
+          new Promise((r) => setTimeout(r, 400)),
+        ]);
+      } catch (e) {}
+      this.page = null;
+    }
+    if (this.browser) {
+      try {
+        await Promise.race([
+          this.browser.close().catch(() => {}),
+          new Promise((r) => setTimeout(r, 400)),
+        ]);
+      } catch (e) {}
+      this.browser = null;
     }
 
     // 4. Delete temp profile directory and custom extensions dir (saves disk space)

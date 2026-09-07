@@ -55,16 +55,16 @@ const scenariosMetadata = {
     sheetName: 'Install & Activation',
     category: 'Install & Activation',
     priority: 'P1',
-    title: 'INS-02: Startup Performance & Window Launch',
-    desc: 'Measures time from window launch to CDP attachment and sidebar readiness (<15s SLA).',
-    meaning: 'Proves startup SLA contract: launching VS Code with PostQode installed does not block workbench initialization, CDP attaches within <15s SLA, and sidebar view container is immediately responsive.',
+    title: 'INS-02: Startup & PostQode Runtime Activation',
+    desc: 'Measures time from window launch to CDP attachment (<15s SLA) and asserts PostQode is loaded, registered, and active in the IDE runtime.',
+    meaning: 'Proves startup and activation contract: launching VS Code with PostQode does not block workbench initialization, CDP attaches within <15s SLA, and PostQode extension is verified loaded and active in the IDE runtime.',
     pipeline: {
       request: 'Spawn isolated VS Code instance with CDP debugging port',
       tools: 'Process launcher & CDP connection adapter',
       response: 'CDP port responds with active page target',
-      uiAndSideEffects: 'Startup latency measured under 15s SLA, workbench UI responsive on debugging port',
+      uiAndSideEffects: 'Startup latency measured under 15s SLA, PostQode extension verified active in runtime',
     },
-    sideEffects: 'Process Lifecycle: Sandbox spawned and attached via CDP',
+    sideEffects: 'Process Lifecycle & Verification: Sandbox spawned, attached via CDP, and PostQode verified active',
   },
 
   // ==========================================
