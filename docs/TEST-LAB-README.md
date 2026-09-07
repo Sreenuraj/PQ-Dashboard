@@ -446,4 +446,7 @@ npm run build
 
 # 3. Check live baselines in permanent fixtures
 curl -s http://localhost:3456/api/postqode-test/live-baselines | jq '{count: (.baselines | length)}'
+
+# 4. Package complete standalone VSIX extension with all 48 test scenarios & fixtures
+npm run extension:package
 ```

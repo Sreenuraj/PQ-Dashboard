@@ -114,6 +114,23 @@ windsurf --install-extension pq-dashboard-1.0.0.vsix
 ```
 *Or via VS Code GUI: Extensions view (`Cmd+Shift+X`) → Click `...` menu at top-right → select **"Install from VSIX..."**.*
 
+### Building the VSIX from Source
+To package the extension into a standalone `.vsix` installer for distribution:
+
+```bash
+# Recommended: Builds Vite UI and packages VSIX (only if files changed)
+npm run extension:package
+
+# Force clean rebuild & package VSIX regardless of timestamps
+npm run extension:package:force
+
+# Alternative direct build & package command
+npm run package
+```
+
+> [!NOTE]
+> Packaging automatically triggers `vscode:prepublish` (`npm run build`), compiling the frontend dashboard into `dist/`. The output file `pq-dashboard-<version>.vsix` bundles the dashboard webview, the complete 48-scenario Behavioral Test Lab, mock replay fixtures, and server runtime.
+
 ### How to Access the Dashboard
 1. **Editor Tab**: Click **`PQ: 🟢 3456`** in the bottom-right status bar or run `Cmd+Shift+P` → `PostQode: Open Full Dashboard` to open all 18 pages in a full-width editor tab.
 2. **🌐 Open in External Browser**:
