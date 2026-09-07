@@ -65,10 +65,9 @@ function initSchema(db) {
       ts INTEGER
     );
 
-    -- Stores system prompts captured from the proxy for each task.
+    -- Stores system prompts captured from the proxy for each task (main agent, subagents, and custom agents).
     -- The system prompt is generated in-memory by the extension and is NEVER
     -- written to any task file on disk — this is the only way to persist it.
-    -- One canonical row per task (INSERT OR IGNORE on first capture).
     CREATE TABLE IF NOT EXISTS task_system_prompts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       task_id TEXT NOT NULL,
@@ -76,9 +75,32 @@ function initSchema(db) {
       model_id TEXT,
       system_text TEXT,
       approx_tokens INTEGER,
-      source TEXT DEFAULT 'proxy'
+      source TEXT DEFAULT 'proxy',
+      agent_role TEXT DEFAULT 'main',
+      subagent_index INTEGER DEFAULT NULL,
+      agent_name TEXT DEFAULT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_task_sysprompt ON task_system_prompts(task_id);
+
+    -- Timeline of physical system RAM, process heap, and token context per turn/worker
+    CREATE TABLE IF NOT EXISTS task_memory_timeline (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id TEXT NOT NULL,
+      turn INTEGER DEFAULT 0,
+      ts INTEGER NOT NULL,
+      agent_role TEXT DEFAULT 'main',
+      subagent_index INTEGER DEFAULT NULL,
+      system_ram_used_bytes INTEGER,
+      system_ram_total_bytes INTEGER,
+      system_ram_pct REAL,
+      process_rss_bytes INTEGER,
+      process_heap_bytes INTEGER,
+      context_tokens INTEGER,
+      context_window INTEGER,
+      context_pct REAL,
+      active_threads INTEGER DEFAULT 1
+    );
+    CREATE INDEX IF NOT EXISTS idx_mem_task ON task_memory_timeline(task_id, ts);
 
     CREATE TABLE IF NOT EXISTS events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -231,12 +253,22 @@ function initSchema(db) {
     'ALTER TABLE events ADD COLUMN parallel_index INTEGER DEFAULT 1',
     'ALTER TABLE events ADD COLUMN parallel_group_id TEXT',
     'ALTER TABLE events ADD COLUMN parallel_tools_json TEXT',
+    // Subagents & Custom Agents System Prompt columns
+    'ALTER TABLE task_system_prompts ADD COLUMN agent_role TEXT DEFAULT \'main\'',
+    'ALTER TABLE task_system_prompts ADD COLUMN subagent_index INTEGER DEFAULT NULL',
+    'ALTER TABLE task_system_prompts ADD COLUMN agent_name TEXT DEFAULT NULL',
   ];
   for (const sql of migrations) {
     try { db.exec(sql); } catch (e) {
       // Column already exists — ignore
     }
   }
+
+  // Create composite index for role/worker lookups if missing
+  try {
+    db.exec('CREATE INDEX IF NOT EXISTS idx_task_sysprompt_role ON task_system_prompts(task_id, agent_role, subagent_index)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_mem_task ON task_memory_timeline(task_id, ts)');
+  } catch (e) {}
 
   // Shell commands frequency table
   db.exec(`
@@ -488,4 +520,59 @@ function deriveStatus(events, summary) {
   return 'unknown';
 }
 
-module.exports = { getDB, isTaskCached, saveTask, markParsed };
+function recordMemorySnapshot(db, s = {}) {
+  try {
+    const stmt = db.prepare(`
+      INSERT INTO task_memory_timeline (
+        task_id, turn, ts, agent_role, subagent_index,
+        system_ram_used_bytes, system_ram_total_bytes, system_ram_pct,
+        process_rss_bytes, process_heap_bytes,
+        context_tokens, context_window, context_pct, active_threads
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    return stmt.run(
+      s.taskId || 'unknown',
+      s.turn || 0,
+      s.ts || Date.now(),
+      s.agentRole || 'main',
+      s.subagentIndex || null,
+      s.systemRamUsedBytes || null,
+      s.systemRamTotalBytes || null,
+      s.systemRamPct != null ? s.systemRamPct : null,
+      s.processRssBytes || null,
+      s.processHeapBytes || null,
+      s.contextTokens || null,
+      s.contextWindow || null,
+      s.contextPct != null ? s.contextPct : null,
+      s.activeThreads || 1
+    );
+  } catch (e) {
+    console.warn('[db] recordMemorySnapshot error:', e.message);
+  }
+}
+
+function getMemoryTimeline(db, taskId) {
+  try {
+    return db.prepare('SELECT * FROM task_memory_timeline WHERE task_id = ? ORDER BY ts ASC').all(taskId);
+  } catch (e) {
+    return [];
+  }
+}
+
+function getTaskSystemPrompts(db, taskId) {
+  try {
+    return db.prepare('SELECT * FROM task_system_prompts WHERE task_id = ? ORDER BY id ASC').all(taskId);
+  } catch (e) {
+    return [];
+  }
+}
+
+module.exports = {
+  getDB,
+  isTaskCached,
+  saveTask,
+  markParsed,
+  recordMemorySnapshot,
+  getMemoryTimeline,
+  getTaskSystemPrompts,
+};

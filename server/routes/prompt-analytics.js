@@ -9,6 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { getModelInfo } = require('../model-registry');
+const { getMemoryTimeline, getTaskSystemPrompts } = require('../cache/db');
 
 function resolvePath(p) {
   return p.replace(/^~/, os.homedir());
@@ -326,7 +327,17 @@ module.exports = (db, config, getStore) => {
         best = r;
       }
     }
-    if (!best) return null;
+    if (!best) {
+      try {
+        const row = db.prepare(
+          'SELECT system_text, approx_tokens, model_id, captured_at_ts, agent_role FROM task_system_prompts ORDER BY ABS(captured_at_ts - ?) ASC LIMIT 1'
+        ).get(callTs);
+        if (row && Math.abs(row.captured_at_ts - callTs) <= 15 * 60 * 1000) {
+          return { text: row.system_text, source: 'sqlite_task_system_prompts', modelId: row.model_id, driftMs: Math.abs(row.captured_at_ts - callTs) };
+        }
+      } catch (e) {}
+      return null;
+    }
 
     try {
       const parsed = JSON.parse(best.requestBody);
@@ -469,22 +480,27 @@ module.exports = (db, config, getStore) => {
 
     const openrouterCache = loadOpenRouterModelsCache();
 
-    // ── Load persisted system prompt for this task (captured by proxy) ──
+    // ── Load persisted system prompts for this task (captured by proxy) ──
+    let allSystemPrompts = [];
     let systemPromptCapture = null;
     try {
-      const spRow = db.prepare(
-        'SELECT system_text, approx_tokens, model_id, captured_at_ts FROM task_system_prompts WHERE task_id = ? LIMIT 1'
-      ).get(taskId);
-      if (spRow) {
-        systemPromptCapture = spRow;
-      } else {
+      allSystemPrompts = getTaskSystemPrompts(db, taskId);
+      systemPromptCapture = allSystemPrompts.find(p => p.agent_role === 'main' || !p.agent_role) || allSystemPrompts[0] || null;
+
+      if (!systemPromptCapture) {
         // Fallback to latest system prompt captured in DB
         const latestRow = db.prepare(
-          'SELECT system_text, approx_tokens, model_id, captured_at_ts FROM task_system_prompts ORDER BY id DESC LIMIT 1'
+          'SELECT system_text, approx_tokens, model_id, captured_at_ts, agent_role, agent_name FROM task_system_prompts ORDER BY id DESC LIMIT 1'
         ).get();
         if (latestRow) systemPromptCapture = latestRow;
       }
     } catch (e) { /* table may not exist on older DBs — safe to ignore */ }
+
+    // Load physical memory timeline for this task
+    let memoryTimeline = [];
+    try {
+      memoryTimeline = getMemoryTimeline(db, taskId);
+    } catch (e) {}
 
     const systemPromptTokens = systemPromptCapture?.approx_tokens || 0;
     const systemPromptAvailable = !!systemPromptCapture;
@@ -644,6 +660,24 @@ module.exports = (db, config, getStore) => {
             if (!it.prompt && initialPrompts[idx]) {
               it.prompt = initialPrompts[idx];
             }
+            const workerNum = it.index || (idx + 1);
+            // Look for matching captured subagent system prompt from proxy
+            const exactSubPrompt = allSystemPrompts.find(p => 
+              (p.agent_role === 'subagent' || p.agent_role === 'custom_agent') &&
+              (p.subagent_index === workerNum || p.subagent_index === idx)
+            );
+            const genericSubPrompt = allSystemPrompts.find(p => p.agent_role === 'subagent' && p.subagent_index == null);
+            const matchedPrompt = exactSubPrompt || genericSubPrompt;
+
+            if (matchedPrompt) {
+              it.systemPrompt = matchedPrompt.system_text;
+              it.systemPromptTokens = matchedPrompt.approx_tokens;
+            }
+            if (exactSubPrompt && exactSubPrompt.agent_name) {
+              it.agentName = exactSubPrompt.agent_name;
+            } else {
+              it.agentName = `Worker #${workerNum}`;
+            }
           });
           subagentRun.totalInputTokens = subagentRun.inputTokens != null ? subagentRun.inputTokens : subagentRun.items.reduce((s, it) => s + (it.inputTokens || 0), 0);
           subagentRun.totalOutputTokens = subagentRun.outputTokens != null ? subagentRun.outputTokens : subagentRun.items.reduce((s, it) => s + (it.outputTokens || 0), 0);
@@ -673,6 +707,20 @@ module.exports = (db, config, getStore) => {
       const contextUtilizationPct = contextWindowSize
         ? Math.min(100, (totalTokensInContext / contextWindowSize) * 100)
         : null;
+
+      // Find closest memory snapshot within 5 minutes of this API call
+      let closestMem = null;
+      if (memoryTimeline && memoryTimeline.length > 0) {
+        let minDrift = Infinity;
+        for (const m of memoryTimeline) {
+          const drift = Math.abs(m.ts - msg.ts);
+          if (drift < minDrift) {
+            minDrift = drift;
+            closestMem = m;
+          }
+        }
+        if (minDrift > 300000) closestMem = null;
+      }
 
       apiCalls.push({
         index: apiCalls.length,
@@ -711,6 +759,11 @@ module.exports = (db, config, getStore) => {
         systemPromptTokens,
         totalTokensInContext,
         contextUtilizationPct,
+        // Physical Host RAM and process memory snapshot
+        systemRamPct: closestMem?.system_ram_pct != null ? closestMem.system_ram_pct : null,
+        systemRamUsedGB: closestMem?.system_ram_used_bytes ? parseFloat((closestMem.system_ram_used_bytes / (1024 ** 3)).toFixed(2)) : null,
+        systemRamTotalGB: closestMem?.system_ram_total_bytes ? parseFloat((closestMem.system_ram_total_bytes / (1024 ** 3)).toFixed(2)) : null,
+        processHeapMB: closestMem?.process_heap_bytes ? parseFloat((closestMem.process_heap_bytes / (1024 ** 2)).toFixed(1)) : null,
       });
 
       if (requestSize > 0) prevRequestSize = requestSize;
@@ -1423,6 +1476,9 @@ module.exports = (db, config, getStore) => {
       subagentSummary,
       totalMessages: apiHistory.length,
       systemPromptCapture, // null if proxy never captured it for this task
+      allSystemPrompts,
+      memoryTimeline,
+      systemMemorySnapshot: memoryTimeline.length > 0 ? memoryTimeline[memoryTimeline.length - 1] : null,
       systemPromptNote: systemPromptAvailable
         ? `System prompt captured by the Network Inspector proxy (${systemPromptCapture.approx_tokens?.toLocaleString() || '?'} est. tokens). Included in context window utilization calculation.`
         : 'The system prompt (tool definitions, core instructions) is generated in-memory by the extension at request time and is not persisted to any task file, so it cannot be shown here. Only user/assistant turns from api_conversation_history.json are reconstructed. Enable and use the Network Inspector proxy to capture and persist it.',

@@ -35,6 +35,7 @@ let chartSeries = {
   cacheReads: true,
   cacheWrites: true,
   contextWindow: true,
+  systemMemory: true,
   cumulativeCost: true,
   cacheHitPct: true,
   stepLatency: false,
@@ -65,6 +66,9 @@ function renderLegendFilterMarkup(extraControlsHtml = '') {
       </button>
       <button class="pa-legend-chip ${chartSeries.contextWindow ? 'active' : ''}" data-series="contextWindow" title="Toggle Context Window Utilization %">
         <span class="pa-legend-color" style="background:#a78bfa"></span> Context %
+      </button>
+      <button class="pa-legend-chip ${chartSeries.systemMemory ? 'active' : ''}" data-series="systemMemory" title="Toggle Physical Host RAM % Timeline">
+        <span class="pa-legend-color" style="background:#14b8a6"></span> 💻 Host RAM %
       </button>
       <button class="pa-legend-chip ${chartSeries.cumulativeCost ? 'active' : ''}" data-series="cumulativeCost" title="Toggle Cumulative Step Cost ($)">
         <span class="pa-legend-color" style="background:#ec4899"></span> Cumulative Cost ($)
@@ -2390,48 +2394,56 @@ function renderSubagentWorkerCardsMarkup(subagentData, callIdx) {
   const cardId = `subagent-deck-${callIdx}`;
 
   return `
-    <div id="${cardId}" class="pa-subagent-deck" style="padding:14px;background:var(--bg-2)">
+    <div id="${cardId}" class="pa-subagent-deck" style="padding:4px 0;background:transparent">
       <!-- Top Aggregate Subagent Banner -->
-      <div style="background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.3);border-radius:var(--radius-sm);padding:12px;margin-bottom:12px">
-        <div style="font-weight:bold;font-size:12px;color:#818cf8;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-          <span style="display:flex;align-items:center;gap:8px">
-            <span style="font-size:14px">🤖</span>
-            <span>PARALLEL SUBAGENTS EXECUTED ON CALL #${callIdx + 1}</span>
-            <span class="mono" style="background:rgba(99,102,241,0.2);color:#c7d2fe;padding:2px 8px;border-radius:8px;font-size:10.5px;font-weight:bold">
+      <div style="background:linear-gradient(135deg, rgba(99,102,241,0.12), rgba(56,189,248,0.06));border:1px solid rgba(99,102,241,0.35);border-radius:10px;padding:16px 20px;margin-bottom:18px;box-shadow:0 4px 16px rgba(0,0,0,0.12)">
+        <div style="font-weight:bold;font-size:13px;color:#a5b4fc;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="font-size:16px">🤖</span>
+            <span style="letter-spacing:0.5px">PARALLEL SUBAGENTS EXECUTED ON CALL #${callIdx + 1}</span>
+            <span class="mono" style="background:rgba(99,102,241,0.25);color:#c7d2fe;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:bold;border:1px solid rgba(99,102,241,0.4)">
               ${escHtml(primaryModel)}
             </span>
-          </span>
-          <div style="display:flex;align-items:center;gap:12px">
-            <span class="mono" style="color:var(--green);font-size:12px;font-weight:bold">Total Cost: ${fmtCost(totalCost)}</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:14px">
+            <span class="mono" style="color:var(--green);font-size:13px;font-weight:bold;background:rgba(34,197,94,0.12);padding:3px 10px;border-radius:8px;border:1px solid rgba(34,197,94,0.3)">
+              Total Cost: ${fmtCost(totalCost)}
+            </span>
           </div>
         </div>
 
-        <!-- 5-Column Summary Metrics -->
-        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(130px, 1fr));gap:8px;font-size:11px">
-          <div style="background:var(--bg-2);padding:6px 10px;border-radius:4px;border:1px solid var(--border)">
-            <div style="color:var(--text-3);font-size:10px;margin-bottom:2px">Parallel Workers</div>
-            <div class="mono" style="font-weight:bold;color:var(--text)">${workerCount} Workers</div>
+        <!-- 5-6 Column Summary Metrics Grid -->
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(130px, 1fr));gap:10px;font-size:11px">
+          <div style="background:var(--bg-1);padding:10px 12px;border-radius:8px;border:1px solid var(--border)">
+            <div style="color:var(--text-3);font-size:10.5px;margin-bottom:4px">Parallel Workers</div>
+            <div class="mono" style="font-weight:bold;font-size:13px;color:var(--text)">${workerCount} Workers</div>
           </div>
-          <div style="background:var(--bg-2);padding:6px 10px;border-radius:4px;border:1px solid var(--border)">
-            <div style="color:var(--text-3);font-size:10px;margin-bottom:2px">Input Tokens</div>
-            <div class="mono" style="font-weight:bold;color:#38bdf8">↑${fmtTokens(totalIn)}</div>
+          <div style="background:var(--bg-1);padding:10px 12px;border-radius:8px;border:1px solid var(--border)">
+            <div style="color:var(--text-3);font-size:10.5px;margin-bottom:4px">Input Tokens</div>
+            <div class="mono" style="font-weight:bold;font-size:13px;color:#38bdf8">↑${fmtTokens(totalIn)}</div>
           </div>
-          <div style="background:var(--bg-2);padding:6px 10px;border-radius:4px;border:1px solid var(--border)">
-            <div style="color:var(--text-3);font-size:10px;margin-bottom:2px">Output Tokens</div>
-            <div class="mono" style="font-weight:bold;color:#e879f9">↓${fmtTokens(totalOut)}</div>
+          <div style="background:var(--bg-1);padding:10px 12px;border-radius:8px;border:1px solid var(--border)">
+            <div style="color:var(--text-3);font-size:10.5px;margin-bottom:4px">Output Tokens</div>
+            <div class="mono" style="font-weight:bold;font-size:13px;color:#e879f9">↓${fmtTokens(totalOut)}</div>
           </div>
-          <div style="background:var(--bg-2);padding:6px 10px;border-radius:4px;border:1px solid var(--border)">
-            <div style="color:var(--text-3);font-size:10px;margin-bottom:2px">Tools Executed</div>
-            <div class="mono" style="font-weight:bold;color:#818cf8">🔧 ${totalTools} calls</div>
+          <div style="background:var(--bg-1);padding:10px 12px;border-radius:8px;border:1px solid var(--border)">
+            <div style="color:var(--text-3);font-size:10.5px;margin-bottom:4px">Tools Executed</div>
+            <div class="mono" style="font-weight:bold;font-size:13px;color:#818cf8">🔧 ${totalTools} calls</div>
           </div>
-          <div style="background:var(--bg-2);padding:6px 10px;border-radius:4px;border:1px solid var(--border)">
-            <div style="color:var(--text-3);font-size:10px;margin-bottom:2px">Peak Context Used</div>
-            <div class="mono" style="font-weight:bold;color:${peakContextPct >= 80 ? '#ef4444' : peakContextPct >= 50 ? '#f59e0b' : '#10b981'}">🪟 ${peakContextPct.toFixed(1)}%</div>
+          <div style="background:var(--bg-1);padding:10px 12px;border-radius:8px;border:1px solid var(--border)">
+            <div style="color:var(--text-3);font-size:10.5px;margin-bottom:4px">Peak Context Used</div>
+            <div class="mono" style="font-weight:bold;font-size:13px;color:${peakContextPct >= 80 ? '#ef4444' : peakContextPct >= 50 ? '#f59e0b' : '#10b981'}">🪟 ${peakContextPct.toFixed(1)}%</div>
           </div>
+          ${(subagentData.systemRamPct != null) ? `
+          <div style="background:var(--bg-1);padding:10px 12px;border-radius:8px;border:1px solid var(--border)">
+            <div style="color:var(--text-3);font-size:10.5px;margin-bottom:4px">Host RAM Pressure</div>
+            <div class="mono" style="font-weight:bold;font-size:13px;color:#14b8a6">💻 ${subagentData.systemRamPct}%</div>
+          </div>
+          ` : ''}
         </div>
 
         ${(subagentData.isFalseFailure || (subagentData.status === 'failed' && (subagentData.successes || 0) > 0 && (subagentData.failures || 0) === 0)) ? `
-          <div style="background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.35);padding:10px 12px;border-radius:6px;margin-top:10px;font-size:11.5px;color:#fca5a5;display:flex;align-items:flex-start;gap:8px">
+          <div style="background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.35);padding:10px 14px;border-radius:8px;margin-top:12px;font-size:11.5px;color:#fca5a5;display:flex;align-items:flex-start;gap:10px">
             <span style="font-size:16px;line-height:1">⚠️</span>
             <div>
               <strong style="color:#ef4444">PostQode False Failure Anomaly:</strong> PostQode reported <code>status: "failed"</code> in the UI banner (<em>"Subagent execution failed: (${subagentData.completed || workerCount}/${subagentData.total || workerCount} agents)"</em>), but <strong>all ${subagentData.successes || workerCount} subagent workers completed successfully with 0 failures</strong> and ${totalTools} tool calls.
@@ -2440,11 +2452,11 @@ function renderSubagentWorkerCardsMarkup(subagentData, callIdx) {
         ` : ''}
 
         ${(subagentData.scratchOffloaded || subagentData.scratchFile) ? `
-          <div style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.35);padding:10px 12px;border-radius:6px;margin-top:10px;font-size:11.5px;color:#fde68a;display:flex;align-items:flex-start;gap:8px">
+          <div style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.35);padding:10px 14px;border-radius:8px;margin-top:12px;font-size:11.5px;color:#fde68a;display:flex;align-items:flex-start;gap:10px">
             <span style="font-size:16px;line-height:1">📦</span>
             <div>
               <strong style="color:#f59e0b">Subagent Output Truncated & Offloaded to Scratch:</strong> The ${workerCount} subagents generated <strong>${fmtBytes(subagentData.rawBytes || 25970)}</strong> of architectural findings. PostQode offloaded this to <code>scratch/${escHtml(subagentData.scratchFile || 'tool_use_subagents_*.log')}</code> and only kept a <strong>${fmtBytes(subagentData.promptBytes || 1221)}</strong> preview in the prompt history (saving ${fmtBytes(subagentData.bytesSaved || 24749)}).
-              <div style="margin-top:6px;color:var(--text-2);font-size:10.5px;line-height:1.4">
+              <div style="margin-top:6px;color:var(--text-2);font-size:11px;line-height:1.45">
                 ℹ️ <strong>Why the main agent re-explored:</strong> When resumed after being interrupted, the main agent read the truncated prompt log (<em>"106 lines offloaded to scratch file"</em>), assumed sections were missing, and redundantly ran <code>listFilesRecursive</code> and <code>searchFiles</code> across the directories the subagents had already explored.
               </div>
             </div>
@@ -2454,21 +2466,27 @@ function renderSubagentWorkerCardsMarkup(subagentData, callIdx) {
 
       <!-- Worker Selector Sub-Tabs (if multiple workers) -->
       ${items.length > 1 ? `
-        <div style="display:flex;align-items:center;gap:6px;margin-bottom:12px;overflow-x:auto;padding-bottom:4px">
-          <span style="font-size:11px;font-weight:bold;color:var(--text-3);margin-right:4px">View:</span>
-          <button class="action-btn primary pa-sub-tab-btn" data-target="all" style="padding:3px 10px;font-size:10.5px;cursor:pointer;border-radius:12px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:18px;overflow-x:auto;padding:6px 8px;background:var(--bg-1);border-radius:12px;border:1px solid var(--border)">
+          <span style="font-size:11px;font-weight:bold;color:var(--text-3);margin-left:4px;margin-right:6px">View:</span>
+          <button class="action-btn primary pa-sub-tab-btn" data-target="all" style="padding:5px 14px;font-size:11px;cursor:pointer;border-radius:14px;font-weight:600">
             👥 All Workers (${items.length})
           </button>
-          ${items.map((it, idx) => `
-            <button class="action-btn secondary pa-sub-tab-btn" data-target="worker-${it.index || idx + 1}" style="padding:3px 10px;font-size:10.5px;cursor:pointer;border-radius:12px">
-              🤖 Worker #${it.index || idx + 1} (${escHtml((it.modelId || primaryModel).split('/').pop())})
+          ${items.map((it, idx) => {
+            const num = it.index || idx + 1;
+            const wLabel = (it.agentName && !it.agentName.startsWith('Worker') && it.agentName !== `Subagent ${num}`)
+              ? `Worker #${num} (${escHtml(it.agentName.split(' ')[0])})`
+              : `Worker #${num} (${escHtml((it.modelId || primaryModel).split('/').pop())})`;
+            return `
+            <button class="action-btn secondary pa-sub-tab-btn" data-target="worker-${num}" style="padding:5px 14px;font-size:11px;cursor:pointer;border-radius:14px;font-weight:600">
+              🤖 ${wLabel}
             </button>
-          `).join('')}
+            `;
+          }).join('')}
         </div>
       ` : ''}
 
       <!-- Subagent Workers List -->
-      <div class="pa-workers-list" style="display:flex;flex-direction:column;gap:14px">
+      <div class="pa-workers-list" style="display:flex;flex-direction:column;gap:18px">
         ${items.map((it, idx) => {
           const wNum = it.index || idx + 1;
           const wModel = it.modelId || primaryModel || 'subagent';
@@ -2477,44 +2495,47 @@ function renderSubagentWorkerCardsMarkup(subagentData, callIdx) {
           const promptChars = (it.prompt || '').length;
           const promptTokensEst = Math.round(promptChars / 4);
           const resultChars = (it.result || '').length;
+          const workerTitle = (it.agentName && !it.agentName.startsWith('Worker #') && it.agentName !== `Subagent ${wNum}`)
+            ? `Worker #${wNum} · ${escHtml(it.agentName)}`
+            : `Worker #${wNum}`;
 
           return `
-            <div class="pa-worker-card" data-worker-id="worker-${wNum}" style="background:var(--bg-3);border:1px solid rgba(99,102,241,0.35);border-radius:var(--radius-sm);overflow:hidden;box-shadow:var(--shadow-sm)">
+            <div class="pa-worker-card" data-worker-id="worker-${wNum}" style="background:var(--bg-1);border:1px solid rgba(99,102,241,0.35);border-radius:10px;overflow:hidden;box-shadow:0 4px 14px rgba(0,0,0,0.15)">
               <!-- Worker Header Bar -->
-              <div style="background:rgba(99,102,241,0.1);padding:10px 14px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(99,102,241,0.25);flex-wrap:wrap;gap:8px">
+              <div style="background:linear-gradient(90deg, rgba(99,102,241,0.14), rgba(99,102,241,0.04));padding:12px 18px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(99,102,241,0.25);flex-wrap:wrap;gap:10px">
                 <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-                  <span style="font-weight:bold;color:#818cf8;font-size:12.5px;display:flex;align-items:center;gap:4px">
-                    <span>🤖</span> Worker #${wNum}
+                  <span style="font-weight:bold;color:#a5b4fc;font-size:13.5px;display:flex;align-items:center;gap:6px">
+                    <span>🤖</span> ${workerTitle}
                   </span>
-                  <span class="mono" style="font-size:10.5px;color:var(--text-2);background:var(--bg-2);border:1px solid var(--border);padding:2px 8px;border-radius:8px">
+                  <span class="mono" style="font-size:11px;color:var(--text-2);background:var(--bg-2);border:1px solid var(--border);padding:3px 10px;border-radius:10px">
                     ${escHtml(wModel)}
                   </span>
-                  <span style="font-size:10.5px;padding:2px 8px;border-radius:8px;font-weight:bold;background:${it.status === 'completed' ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)'};color:${it.status === 'completed' ? 'var(--green)' : '#f59e0b'}">
+                  <span style="font-size:11px;padding:3px 10px;border-radius:10px;font-weight:bold;background:${it.status === 'completed' ? 'rgba(34,197,94,0.18)' : 'rgba(245,158,11,0.18)'};color:${it.status === 'completed' ? 'var(--green)' : '#f59e0b'};border:1px solid ${it.status === 'completed' ? 'rgba(34,197,94,0.35)' : 'rgba(245,158,11,0.35)'}">
                     ${it.status === 'completed' ? '✓ Completed' : '⏸ ' + (it.status || 'Running')}
                   </span>
                 </div>
-                <div style="display:flex;align-items:center;gap:12px;font-size:11px" class="mono">
+                <div style="display:flex;align-items:center;gap:14px;font-size:11.5px" class="mono">
                   <span style="color:var(--text-2)">🔧 <strong>${it.toolCalls || 0}</strong> tool calls</span>
-                  <span style="color:var(--green);font-weight:bold">${fmtCost(it.totalCost || 0)}</span>
+                  <span style="color:var(--green);font-weight:bold;font-size:12px">${fmtCost(it.totalCost || 0)}</span>
                 </div>
               </div>
 
               <!-- Worker Token & Context Metrics Grid -->
-              <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(130px, 1fr));gap:8px;padding:10px 14px;background:var(--bg-2);border-bottom:1px solid var(--border)">
-                <div>
+              <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(135px, 1fr));gap:10px;padding:12px 18px;background:var(--bg-2);border-bottom:1px solid var(--border)">
+                <div style="background:var(--bg-1);padding:8px 12px;border-radius:6px;border:1px solid var(--border)">
                   <div style="font-size:10px;color:var(--text-3);margin-bottom:2px">📥 Input Tokens</div>
-                  <div class="mono" style="font-weight:bold;font-size:12px;color:var(--text)">${fmtTokens(it.inputTokens || 0)}</div>
+                  <div class="mono" style="font-weight:bold;font-size:12.5px;color:var(--text)">${fmtTokens(it.inputTokens || 0)}</div>
                 </div>
-                <div>
+                <div style="background:var(--bg-1);padding:8px 12px;border-radius:6px;border:1px solid var(--border)">
                   <div style="font-size:10px;color:var(--text-3);margin-bottom:2px">📤 Output Tokens</div>
-                  <div class="mono" style="font-weight:bold;font-size:12px;color:#e879f9">${fmtTokens(it.outputTokens || 0)}</div>
+                  <div class="mono" style="font-weight:bold;font-size:12.5px;color:#e879f9">${fmtTokens(it.outputTokens || 0)}</div>
                 </div>
-                <div>
+                <div style="background:var(--bg-1);padding:8px 12px;border-radius:6px;border:1px solid var(--border)">
                   <div style="font-size:10px;color:var(--text-3);margin-bottom:2px">💵 Worker Cost</div>
-                  <div class="mono" style="font-weight:bold;font-size:12px;color:var(--green)">${fmtCost(it.totalCost || 0)}</div>
+                  <div class="mono" style="font-weight:bold;font-size:12.5px;color:var(--green)">${fmtCost(it.totalCost || 0)}</div>
                 </div>
-                <div style="grid-column:span 2">
-                  <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-3);margin-bottom:3px">
+                <div style="grid-column:span 2;background:var(--bg-1);padding:8px 12px;border-radius:6px;border:1px solid var(--border)">
+                  <div style="display:flex;justify-content:space-between;font-size:10.5px;color:var(--text-3);margin-bottom:4px">
                     <span>🪟 Context Window Utilization</span>
                     <span class="mono" style="color:${ctxBarColor};font-weight:bold">${wCtxPct.toFixed(1)}% (${fmtTokens(it.contextTokens || 0)} / ${fmtTokens(it.contextWindow || 200000)})</span>
                   </div>
@@ -2525,43 +2546,66 @@ function renderSubagentWorkerCardsMarkup(subagentData, callIdx) {
               </div>
 
               <!-- Worker Prompt & Findings Body -->
-              <div style="padding:12px 14px;font-size:11px">
-                <!-- Delegated Prompt / Goal Section -->
-                <div style="margin-bottom:12px">
-                  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-                    <div style="font-weight:bold;color:#818cf8;font-size:11px;display:flex;align-items:center;gap:6px">
-                      <span>🎯 Delegated Goal & Full Request Prompt</span>
-                      <span class="mono" style="color:var(--text-3);font-size:9.5px;font-weight:normal">(${promptChars.toLocaleString()} chars · ~${promptTokensEst.toLocaleString()} tok)</span>
+              <div style="padding:16px 18px;font-size:11.5px;display:flex;flex-direction:column;gap:14px">
+                <!-- Subagent System Prompt Section -->
+                ${it.systemPrompt ? `
+                  <div style="background:rgba(16,185,129,0.04);border:1px solid rgba(16,185,129,0.25);border-radius:8px;padding:12px 14px">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                      <div style="font-weight:bold;color:#10b981;font-size:11.5px;display:flex;align-items:center;gap:6px">
+                        <span>🛡️ Subagent System Prompt</span>
+                        <span class="mono" style="color:var(--text-3);font-size:10px;font-weight:normal">(${it.systemPrompt.length.toLocaleString()} chars · ~${(it.systemPromptTokens || Math.round(it.systemPrompt.length / 4)).toLocaleString()} tok)</span>
+                        <span style="background:rgba(16,185,129,0.15);color:#10b981;padding:1px 8px;border-radius:10px;font-size:10px;font-weight:bold;border:1px solid rgba(16,185,129,0.3)">Captured by Proxy</span>
+                      </div>
+                      <button class="action-btn secondary" style="padding:3px 10px;font-size:10.5px;color:#10b981;cursor:pointer;border-radius:4px" onclick="navigator.clipboard.writeText(this.closest('.pa-worker-card').querySelector('.pa-subagent-sysprompt-content').innerText); this.innerText = '✓ Copied'; setTimeout(() => this.innerText = '📋 Copy System Prompt', 1500);">
+                        📋 Copy System Prompt
+                      </button>
                     </div>
-                    <button class="action-btn secondary" style="padding:2px 8px;font-size:10px;color:#818cf8;cursor:pointer" onclick="navigator.clipboard.writeText(this.closest('.pa-worker-card').querySelector('.pa-prompt-content').innerText); this.innerText = '✓ Copied'; setTimeout(() => this.innerText = '📋 Copy Prompt', 1500);">
+                    <div class="pa-subagent-sysprompt-content mono" style="background:var(--bg-1);padding:12px 14px;border-radius:6px;border:1px solid var(--border);color:var(--text);font-size:11px;max-height:240px;overflow-y:auto;white-space:pre-wrap;line-height:1.55">
+                      ${escHtml(it.systemPrompt)}
+                    </div>
+                  </div>
+                ` : `
+                  <div style="padding:10px 14px;background:rgba(99,102,241,0.06);border:1px dashed rgba(99,102,241,0.3);border-radius:8px;font-size:10.5px;color:var(--text-3);display:flex;justify-content:space-between;align-items:center">
+                    <span>🛡️ <strong>Subagent System Prompt:</strong> In-memory ephemeral prompt (not captured in this historical run; enabled for live & future tasks via proxy interception).</span>
+                  </div>
+                `}
+
+                <!-- Delegated Prompt / Goal Section -->
+                <div style="background:rgba(99,102,241,0.04);border:1px solid rgba(99,102,241,0.22);border-radius:8px;padding:12px 14px">
+                  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                    <div style="font-weight:bold;color:#818cf8;font-size:11.5px;display:flex;align-items:center;gap:6px">
+                      <span>🎯 Delegated Goal & Full Request Prompt</span>
+                      <span class="mono" style="color:var(--text-3);font-size:10px;font-weight:normal">(${promptChars.toLocaleString()} chars · ~${promptTokensEst.toLocaleString()} tok)</span>
+                    </div>
+                    <button class="action-btn secondary" style="padding:3px 10px;font-size:10.5px;color:#818cf8;cursor:pointer;border-radius:4px" onclick="navigator.clipboard.writeText(this.closest('.pa-worker-card').querySelector('.pa-prompt-content').innerText); this.innerText = '✓ Copied'; setTimeout(() => this.innerText = '📋 Copy Prompt', 1500);">
                       📋 Copy Prompt
                     </button>
                   </div>
-                  <div class="pa-prompt-content" style="background:var(--bg-1);padding:10px 12px;border-radius:4px;border:1px solid rgba(99,102,241,0.25);color:var(--text);font-size:11px;max-height:220px;overflow-y:auto;white-space:pre-wrap;line-height:1.45;font-family:inherit">
+                  <div class="pa-prompt-content" style="background:var(--bg-1);padding:12px 14px;border-radius:6px;border:1px solid var(--border);color:var(--text);font-size:11px;max-height:240px;overflow-y:auto;white-space:pre-wrap;line-height:1.55">
                     ${escHtml(it.prompt || '(No prompt provided)')}
                   </div>
                 </div>
 
                 <!-- Returned Findings & Output Results -->
                 ${it.result ? `
-                  <div>
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-                      <div style="font-weight:bold;color:var(--green);font-size:11px;display:flex;align-items:center;gap:6px">
+                  <div style="background:rgba(34,197,94,0.04);border:1px solid rgba(34,197,94,0.22);border-radius:8px;padding:12px 14px">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                      <div style="font-weight:bold;color:var(--green);font-size:11.5px;display:flex;align-items:center;gap:6px">
                         <span>📋 Findings & Returned Result Output</span>
-                        <span class="mono" style="color:var(--text-3);font-size:9.5px;font-weight:normal">(${resultChars.toLocaleString()} chars)</span>
+                        <span class="mono" style="color:var(--text-3);font-size:10px;font-weight:normal">(${resultChars.toLocaleString()} chars)</span>
                       </div>
-                      <button class="action-btn secondary" style="padding:2px 8px;font-size:10px;color:var(--green);cursor:pointer" onclick="navigator.clipboard.writeText(this.closest('.pa-worker-card').querySelector('.pa-result-content').innerText); this.innerText = '✓ Copied'; setTimeout(() => this.innerText = '📋 Copy Result', 1500);">
+                      <button class="action-btn secondary" style="padding:3px 10px;font-size:10.5px;color:var(--green);cursor:pointer;border-radius:4px" onclick="navigator.clipboard.writeText(this.closest('.pa-worker-card').querySelector('.pa-result-content').innerText); this.innerText = '✓ Copied'; setTimeout(() => this.innerText = '📋 Copy Result', 1500);">
                         📋 Copy Result
                       </button>
                     </div>
-                    <div class="mono pa-result-content" style="background:var(--bg-1);padding:10px 12px;border-radius:4px;border:1px solid var(--border);color:var(--text);font-size:11px;max-height:360px;overflow-y:auto;white-space:pre-wrap;line-height:1.5;word-break:break-word">
+                    <div class="mono pa-result-content" style="background:var(--bg-1);padding:12px 14px;border-radius:6px;border:1px solid var(--border);color:var(--text);font-size:11px;max-height:360px;overflow-y:auto;white-space:pre-wrap;line-height:1.55;word-break:break-word">
                       ${escHtml(it.result)}
                     </div>
                   </div>
                 ` : (it.latestToolCall ? `
-                  <div style="color:var(--text-3);font-size:10.5px;background:var(--bg-1);padding:8px 10px;border-radius:4px;border:1px solid var(--border);display:flex;align-items:center;gap:8px">
+                  <div style="color:var(--text-3);font-size:11px;background:var(--bg-1);padding:10px 14px;border-radius:6px;border:1px solid var(--border);display:flex;align-items:center;gap:8px">
                     <span>⚡ Latest Tool Call:</span>
-                    <code style="color:#818cf8;background:rgba(99,102,241,0.15);padding:2px 6px;border-radius:4px">${escHtml(it.latestToolCall)}</code>
+                    <code style="color:#818cf8;background:rgba(99,102,241,0.15);padding:2px 8px;border-radius:4px;font-size:11px">${escHtml(it.latestToolCall)}</code>
                   </div>
                 ` : '')}
               </div>
@@ -2574,6 +2618,9 @@ function renderSubagentWorkerCardsMarkup(subagentData, callIdx) {
 }
 
 function renderDiffBoxMarkup(item, prevCallIdx, callIdx, category, targetName, icon, catColor, defaultExpanded = false) {
+  if (item.isSubagent || category === 'Subagents') {
+    return renderSubagentWorkerCardsMarkup(item.subagentData, callIdx);
+  }
   const diff = item.diffChunks || {};
   const prefix = diff.prefix || '';
   const suffix = diff.suffix || '';
@@ -2958,11 +3005,12 @@ function drawTimelineChart(calls, targetCanvas = null, zoomRange = null, crossha
     const readY = pad.top + chartH - (c.cacheReads / maxCache) * chartH;
     const writeY = pad.top + chartH - (c.cacheWrites / maxCache) * chartH;
     const ctxY = c.contextUtilizationPct != null ? pad.top + chartH * (1 - c.contextUtilizationPct / 100) : null;
+    const memY = c.systemRamPct != null ? pad.top + chartH * (1 - c.systemRamPct / 100) : null;
     const costY = pad.top + chartH * (1 - (c.cumulativeCost || 0) / maxCost);
     const hitPctY = pad.top + chartH * (1 - (c.cacheHitPct || 0) / 100);
     const latY = pad.top + chartH * (1 - ((c.latencyMs || 0) / 1000) / maxLatency);
 
-    points.push({ x, barY, barH, readY, writeY, ctxY, costY, hitPctY, latY, call: c, index: origIndex, localIndex: i });
+    points.push({ x, barY, barH, readY, writeY, ctxY, memY, costY, hitPctY, latY, call: c, index: origIndex, localIndex: i });
 
     const hoveredIdx = canvas._hoveredIndex != null ? canvas._hoveredIndex : null;
     const isHighlighted = (hoveredIdx === origIndex) || (crosshairStepIndex === origIndex) || (activeCallFocusIndex === origIndex);
@@ -3119,6 +3167,39 @@ function drawTimelineChart(calls, targetCanvas = null, zoomRange = null, crossha
       ctx.arc(pt.x, Math.max(pt.ctxY, pad.top), (hoveredCallIndex === pt.index) ? 5 : 3, 0, Math.PI * 2);
       ctx.fill();
     }
+  }
+
+  // Draw Host RAM % Line Overlay (Sleek Teal #14b8a6 dashed line)
+  if (chartSeries.systemMemory && points.some(p => p.memY != null)) {
+    ctx.strokeStyle = '#14b8a6';
+    ctx.lineWidth = 2.2;
+    ctx.shadowColor = 'rgba(20, 184, 166, 0.4)';
+    ctx.shadowBlur = 4;
+    ctx.setLineDash([4, 2]);
+    ctx.beginPath();
+    let started = false;
+    points.forEach((pt) => {
+      if (pt.memY == null) return;
+      const y = Math.max(pt.memY, pad.top);
+      if (!started) {
+        ctx.moveTo(pt.x, y);
+        started = true;
+      } else {
+        ctx.lineTo(pt.x, y);
+      }
+    });
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.shadowBlur = 0;
+
+    points.forEach(pt => {
+      if (pt.memY != null) {
+        ctx.fillStyle = '#14b8a6';
+        ctx.beginPath();
+        ctx.arc(pt.x, Math.max(pt.memY, pad.top), (hoveredCallIndex === pt.index) ? 5 : 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    });
   }
 
   // Draw Cumulative Cost Line Overlay (Vibrant pink line)
@@ -3403,6 +3484,12 @@ function handleChartHover(e, calls, targetCanvas = null, tooltipId = 'pa-chart-t
     ctxStr = `<div style="color:${pctColor};font-size:10.5px;margin-top:2px">🪟 Context Window: <strong>${pct}%</strong> (${total} / ${limit})</div>`;
   }
 
+  let memStr = '';
+  if (c.systemRamPct != null) {
+    const memPctColor = c.systemRamPct >= 85 ? '#ef4444' : c.systemRamPct >= 70 ? '#f59e0b' : '#14b8a6';
+    memStr = `<div style="color:${memPctColor};font-size:10.5px;margin-top:2px">💻 Host RAM: <strong>${c.systemRamPct}%</strong> (${c.systemRamUsedGB || '?'} / ${c.systemRamTotalGB || '?'} GB)${c.processHeapMB ? ` · Heap: <strong>${c.processHeapMB} MB</strong>` : ''}</div>`;
+  }
+
   const modelStr = c.modelId ? `<div style="font-size:10px;color:var(--text-3);margin-top:2px">🤖 ${escHtml(c.modelId)}</div>` : '';
 
   tooltip.style.display = 'block';
@@ -3461,6 +3548,7 @@ function handleChartHover(e, calls, targetCanvas = null, tooltipId = 'pa-chart-t
     <div style="color:#38bdf8;font-size:10.5px">⚡ Per-Turn New Input: <strong>${fmtBytes(c.turnDeltaSize || Math.max(0, c.sizeDelta))}</strong></div>
     ${reductionHtml || scratchStr}
     ${ctxStr}
+    ${memStr}
     <div style="color:#ec4899;font-weight:bold;font-size:10.5px">📈 Cumulative Price: <strong>${fmtCost(c.cumulativeCost || c.cost)}</strong></div>
     <div style="color:#06b6d4;font-weight:bold;font-size:10.5px">🎯 Cache Hit Rate: <strong>${(c.cacheHitPct || 0).toFixed(1)}%</strong></div>
     <div style="color:var(--green);font-size:10px">📖 Cache Reads: <strong>${fmtTokens(c.cacheReads)}</strong></div>

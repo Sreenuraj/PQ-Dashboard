@@ -438,19 +438,20 @@ function resolveSubagentIndex(userPromptText) {
 
 /**
  * Correlates a captured chat/completions request with the nearest task in the
- * DB by timestamp, then persists the system prompt text if not already stored.
+ * DB by timestamp, then persists the system prompt text and system memory snapshot.
  * @param {string} requestBody - raw request body string
  * @param {number} capturedTs   - epoch ms when the proxy captured this request
  * @param {string|null} modelId - model ID from parsed request (x-model or body.model)
+ * @param {string|null} agentLabel - detected agent label (e.g. 'Subagent 1', 'PostQode', custom name)
+ * @param {number|null} subagentIndex - worker index (1..N) if this request is from a subagent
  */
-function extractAndPersistSystemPrompt(requestBody, capturedTs, modelId) {
+function extractAndPersistSystemPrompt(requestBody, capturedTs, modelId, agentLabel = null, subagentIndex = null) {
   if (!proxyDb) return; // DB not wired in — skip silently
 
   let parsed;
   try { parsed = JSON.parse(requestBody); } catch { return; }
 
   const systemText = extractSystemTextFromParsed(parsed);
-  if (!systemText) return;
 
   // Find the nearest api_req_started event within the drift window.
   // events.ts is stored in milliseconds (same as Date.now()).
@@ -471,23 +472,67 @@ function extractAndPersistSystemPrompt(requestBody, capturedTs, modelId) {
 
     const taskId = row.task_id;
     const modelIdFromBody = parsed.model || modelId || null;
-    const approxTokens = Math.round(systemText.length / 4); // rough 4-char-per-token estimate
 
-    // Only store once per task (INSERT OR IGNORE on the unique task_id constraint).
-    // If the system prompt evolves mid-task (rare), we keep the first capture.
-    const existing = proxyDb.prepare(
-      'SELECT id FROM task_system_prompts WHERE task_id = ? LIMIT 1'
-    ).get(taskId);
+    // 1. Determine agent role & identity
+    const isSub = (agentLabel && /subagent/i.test(agentLabel)) || subagentIndex != null;
+    const isCustom = agentLabel && !isSub && !/postqode/i.test(agentLabel) && !/assistant/i.test(agentLabel);
+    const role = isSub ? 'subagent' : (isCustom ? 'custom_agent' : 'main');
+    const subIdx = subagentIndex || null;
+    const agentName = agentLabel || (isSub ? `Subagent ${subIdx || 1}` : 'PostQode');
 
-    if (!existing) {
+    // 2. Persist distinct system prompt if present
+    if (systemText) {
+      const approxTokens = Math.round(systemText.length / 4);
+      const existing = proxyDb.prepare(`
+        SELECT id FROM task_system_prompts
+        WHERE task_id = ? AND agent_role = ? AND (subagent_index IS ? OR subagent_index = ?)
+        LIMIT 1
+      `).get(taskId, role, subIdx, subIdx);
+
+      if (!existing) {
+        proxyDb.prepare(`
+          INSERT INTO task_system_prompts (
+            task_id, captured_at_ts, model_id, system_text, approx_tokens, source,
+            agent_role, subagent_index, agent_name
+          ) VALUES (?, ?, ?, ?, ?, 'proxy', ?, ?, ?)
+        `).run(taskId, capturedTs, modelIdFromBody, systemText, approxTokens, role, subIdx, agentName);
+      }
+    }
+
+    // 3. Record Physical System Memory (RAM & Process Heap) Timeline Snapshot
+    try {
+      const os = require('os');
+      const totalMem = os.totalmem();
+      const freeMem = os.freemem();
+      const usedMem = totalMem - freeMem;
+      const memPct = totalMem > 0 ? (usedMem / totalMem) * 100 : 0;
+      let procMem = null;
+      try { procMem = process.memoryUsage(); } catch {}
+
       proxyDb.prepare(`
-        INSERT INTO task_system_prompts (task_id, captured_at_ts, model_id, system_text, approx_tokens, source)
-        VALUES (?, ?, ?, ?, ?, 'proxy')
-      `).run(taskId, capturedTs, modelIdFromBody, systemText, approxTokens);
+        INSERT INTO task_memory_timeline (
+          task_id, turn, ts, agent_role, subagent_index,
+          system_ram_used_bytes, system_ram_total_bytes, system_ram_pct,
+          process_rss_bytes, process_heap_bytes, active_threads
+        ) VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        taskId,
+        capturedTs,
+        role,
+        subIdx,
+        usedMem,
+        totalMem,
+        parseFloat(memPct.toFixed(2)),
+        procMem?.rss || null,
+        procMem?.heapUsed || null,
+        isSub ? (subagentPromptsRegistry.length || 1) : 1
+      );
+    } catch (memErr) {
+      // Non-fatal timeline recording error
     }
   } catch (e) {
     // Non-fatal — the dashboard still works without the system prompt row
-    console.warn('[proxy] system-prompt persist error:', e.message);
+    console.warn('[proxy] system-prompt/memory persist error:', e.message);
   }
 }
 
@@ -1010,7 +1055,7 @@ function startProxy(config = {}) {
           modelHint = resJson.model || null;
         } catch {}
         // Run async so we never block the proxy callback
-        setImmediate(() => extractAndPersistSystemPrompt(requestBody, capturedTs, modelHint));
+        setImmediate(() => extractAndPersistSystemPrompt(requestBody, capturedTs, modelHint, agentLabel, subagentIndex));
       }
 
       return callback();
