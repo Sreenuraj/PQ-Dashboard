@@ -483,6 +483,22 @@ function generateAllureHtml(runDir, reportData, options = {}) {
     .severity-p1 { background: rgba(210, 153, 34, 0.2); color: #d29922; }
     .severity-p2 { background: rgba(88, 166, 255, 0.2); color: #58a6ff; }
 
+    .side-effect-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 9px;
+      border-radius: 4px;
+      background: rgba(56, 189, 248, 0.12);
+      color: #38bdf8;
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      font-size: 11px;
+      font-weight: 500;
+      line-height: 1.3;
+      max-width: 100%;
+      word-break: break-word;
+    }
+
     /* ── Test Detail Pane ── */
     .suites-detail {
       background: var(--bg-sidebar);
@@ -505,6 +521,7 @@ function generateAllureHtml(runDir, reportData, options = {}) {
       align-items: center;
       gap: 10px;
       margin-bottom: 8px;
+      flex-wrap: wrap;
     }
 
     .detail-title {
@@ -515,9 +532,11 @@ function generateAllureHtml(runDir, reportData, options = {}) {
 
     .detail-meta-row {
       display: flex;
-      gap: 16px;
+      gap: 14px;
       font-size: 12px;
       color: var(--text-muted);
+      flex-wrap: wrap;
+      align-items: center;
     }
 
     .section-card {
@@ -955,11 +974,10 @@ function generateAllureHtml(runDir, reportData, options = {}) {
 
       container.innerHTML = \`
         <div class="detail-header">
-          <div class="detail-top-row" style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+          <div class="detail-top-row">
             <span class="severity-badge severity-\${(step.priority || 'P0').toLowerCase()}" style="font-size: 11px; padding: 2px 8px;">\${step.priority || 'P0'}</span>
             <span class="status-badge \${step.status}">\${statusIcon}</span>
-            \${step.sideEffects ? '<span class="status-badge" style="background: rgba(56,189,248,0.15); color: #38bdf8; border: 1px solid rgba(56,189,248,0.3); font-size: 10px;">' + step.sideEffects + '</span>' : ''}
-            <h2 style="margin: 0; font-size: 18px; color: var(--text);">\${step.checklistId ? '[' + step.checklistId + '] ' : ''}\${step.title || step.scenario}</h2>
+            <h2 class="detail-title" style="margin: 0;">\${step.checklistId ? '[' + step.checklistId + '] ' : ''}\${step.title || step.scenario}</h2>
             <a href="/#/postqode-test?rerun=\${encodeURIComponent(step.checklistId || step.id)}" target="_blank" class="btn btn-primary" style="margin-left: auto; padding: 4px 12px; font-size: 11px; text-decoration: none;" title="Re-run this test in PQ Dashboard">▶ Re-run in Dashboard</a>
           </div>
           <div class="detail-meta-row">
@@ -967,6 +985,7 @@ function generateAllureHtml(runDir, reportData, options = {}) {
             <span>Model: <strong style="color: #a371f7; font-family: ui-monospace, monospace;">\${step.model || (reportData.mode === 'live' ? reportData.liveModel : 'Mock SSE')}</strong></span>
             <span>Duration: <strong>\${((step.durationMs || 0)/1000).toFixed(2)}s</strong></span>
             <span>Status: <strong style="color:\${isPass ? '#3fb950' : '#f85149'}">\${step.status.toUpperCase()}</strong></span>
+            \${step.sideEffects ? '<span class="side-effect-badge" title="Side-effect verification contract">⚡ ' + step.sideEffects + '</span>' : ''}
           </div>
         </div>
 
