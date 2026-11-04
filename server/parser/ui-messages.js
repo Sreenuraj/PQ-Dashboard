@@ -57,6 +57,7 @@ function parseUIMessages(filePath, apiHistoryPath, maxFileSize) {
   let totalTokensOut = 0;
   let totalCacheReads = 0;
   let totalCacheWrites = 0;
+  let totalCacheWrites1h = 0;
   let errorCount = 0;
   let toolCallCount = 0;
   let apiCallCount = 0;
@@ -100,6 +101,8 @@ function parseUIMessages(filePath, apiHistoryPath, maxFileSize) {
       tokens_out: null,
       cache_reads: null,
       cache_writes: null,
+      cache_writes_1h: 0,
+      has_cache_1h_field: false,
       reasoning_text: null,
       content_preview: null,
       model_switched: false,
@@ -145,6 +148,8 @@ function parseUIMessages(filePath, apiHistoryPath, maxFileSize) {
         event.tokens_out = parsed.tokensOut;
         event.cache_reads = parsed.cacheReads;
         event.cache_writes = parsed.cacheWrites;
+        event.cache_writes_1h = parsed.cacheWrites1h;
+        event.has_cache_1h_field = parsed.hasCacheWrites1hField;
         event.request_text = parsed.requestText;
 
         totalCost += parsed.cost || 0;
@@ -152,6 +157,7 @@ function parseUIMessages(filePath, apiHistoryPath, maxFileSize) {
         totalTokensOut += parsed.tokensOut || 0;
         totalCacheReads += parsed.cacheReads || 0;
         totalCacheWrites += parsed.cacheWrites || 0;
+        totalCacheWrites1h += parsed.cacheWrites1h || 0;
 
         // Compute context window percentage
         if (modelId && parsed.tokensIn > 0 && getModelInfoFn) {
@@ -282,6 +288,7 @@ function parseUIMessages(filePath, apiHistoryPath, maxFileSize) {
     total_tokens_out: totalTokensOut,
     total_cache_reads: totalCacheReads,
     total_cache_writes: totalCacheWrites,
+    total_cache_writes_1h: totalCacheWrites1h,
     error_count: errorCount,
     tool_call_count: toolCallCount,
     api_call_count: apiCallCount,
@@ -395,6 +402,9 @@ function extractApiReqData(text) {
       tokensOut: obj.tokensOut || 0,
       cacheReads: obj.cacheReads || 0,
       cacheWrites: obj.cacheWrites || 0,
+      // 1-hour TTL portion of cacheWrites (a SUBSET, not additive). Absent on builds before the 1h-TTL change.
+      cacheWrites1h: obj.cacheWrite1hTokens || 0,
+      hasCacheWrites1hField: obj.cacheWrite1hTokens !== undefined,
       cost: obj.cost || 0,
       // Extract request text, truncated to 2000 chars
       requestText: obj.request ? String(obj.request).substring(0, 2000) : null,

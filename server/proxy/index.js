@@ -22,6 +22,8 @@ const path = require('path');
 const fs = require('fs');
 const zlib = require('zlib');
 const { NetworkStore } = require('./store');
+const { buildFingerprint } = require('../analytics/cache-fingerprint');
+const { saveRequestFingerprint } = require('../cache/db');
 const { broadcast, broadcastMessage } = require('./ws');
 const { randomUUID } = require('crypto');
 const { Readable } = require('stream');
@@ -445,6 +447,17 @@ function resolveSubagentIndex(userPromptText) {
  * @param {string|null} agentLabel - detected agent label (e.g. 'Subagent 1', 'PostQode', custom name)
  * @param {number|null} subagentIndex - worker index (1..N) if this request is from a subagent
  */
+function persistCacheFingerprint(record) {
+  if (!proxyDb) return;
+  try {
+    const fp = buildFingerprint(record);
+    if (!fp || fp.promptTokens == null) return; // no usage in the response => nothing to join on
+    saveRequestFingerprint(proxyDb, null, fp);
+  } catch (e) {
+    console.warn('[cache-fingerprint] persist failed:', e.message);
+  }
+}
+
 function extractAndPersistSystemPrompt(requestBody, capturedTs, modelId, agentLabel = null, subagentIndex = null) {
   if (!proxyDb) return; // DB not wired in — skip silently
 
@@ -1056,6 +1069,10 @@ function startProxy(config = {}) {
         } catch {}
         // Run async so we never block the proxy callback
         setImmediate(() => extractAndPersistSystemPrompt(requestBody, capturedTs, modelHint, agentLabel, subagentIndex));
+        // Prompt-cache evidence: ONE compact fingerprint per request (system/tools hashes, serving provider,
+        // breakpoints, per-message hashes). task_id is resolved later by matching prompt-token counts, because the
+        // task's events may not be parsed yet when the proxy sees the request.
+        setImmediate(() => persistCacheFingerprint(record));
       }
 
       return callback();

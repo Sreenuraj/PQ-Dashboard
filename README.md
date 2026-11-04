@@ -28,9 +28,12 @@ A comprehensive subsystem for reconstructing and inspecting the exact prompt pay
   - **🗂️ Grouped** — Target-centric folder grouping with turn count badges.
 - **Interactive Timeline Graph** — Multi-series canvas visualizing Request Size (KB), Cumulative Cost ($), Cache Reads/Writes, Latency, and Context Window Utilization (%) with section zoom and interactive call isolation.
 - **Step Quick-Jump Navigation** — Mini turn selector strip (`[#1] [#2] [#3⚡] [#4📁⚡] ...`) for instant turn-by-turn inspection.
-- **Dynamic Live Model Registry** — Auto-syncs live pricing, context windows (e.g. Gemini 3.7 Flash 1.0M tokens, Claude 3.7 Sonnet 200K, etc.), and provider metadata from OpenRouter API (`https://openrouter.ai/api/v1/models`) with offline cache ingestion and heuristic fallbacks.
+- **Dynamic Live Model Registry** — Auto-syncs live pricing (including 5-minute and 1-hour cache-write prices and long-context tiers), context windows and provider metadata from the extension's own catalog files and the OpenRouter API (`https://openrouter.ai/api/v1/models`). No model prices or model names are hard-coded: an unknown model is shown as "price unknown" with its logged cost, never guessed.
 - **Side-by-Side Task Comparison (`#/prompt-analytics?mode=compare`)** — Compare up to 5 tasks side-by-side with shared proportional Y-axis scaling, combined cost curves, per-turn step scrubbers, and locally-scoped chart tooltips.
-- **Prompt Cache Hit Observability & Scratch Inspector** — Detailed breakdown of prompt caching savings (90% read discounts, cache write costs) and a dedicated scratch file log viewer.
+- **Prompt Cache Observability & Scratch Inspector** — Per-call prompt-cache analysis plus a dedicated scratch file log viewer:
+  - **TTL-aware cost** — Cache writes are split into 5-minute and 1-hour TTL portions (`cacheWrite1hTokens` in the task log) and every call is priced with *its own model's* rates, so mid-session model switches are costed correctly. Rates come from the live catalogs and are calibrated per task against the cost the extension logged (this absorbs provider price changes over time).
+  - **Spike explanations backed by evidence** — Each cache miss (a large prompt rewritten instead of read) gets a cause, the extra cost versus a cache hit, and an evidence level: *Confirmed* (the Network Inspector captured both requests and they were diffed), *Recorded* (task files or extension log), or *Inferred*. Causes: model/mode changed, TTL expired, different provider served the request, tool list changed, system prompt changed, earlier conversation edited, request rebuilt after a cancel, provider-side eviction, or "not recorded".
+  - **Evidence capture** — The Network Inspector stores a compact fingerprint per LLM request (system/tool hashes, serving provider, cache breakpoints, per-message hashes) and the extension log (`TaskCancel`, request rebuilds, context optimiser) is ingested, so causes that are not in the task files can still be proven. `node scripts/backfill-fingerprints.js` snapshots the in-memory buffer and logs into the database.
 
 ### Agent-Aware Analytics
 PQ Dashboard treats agents as first-class entities. Every session records which agent(s) handled the work (`web_agent`, `plan`, `agent`, `mobile_agent`, etc.), and the dashboard surfaces this across every view:
@@ -288,7 +291,7 @@ PQ-Dashboard/
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /api/prompt-analytics/:taskId` | Full prompt analytics: reconstructed turns, context reductions, scratch logs, financial breakdown. |
+| `GET /api/prompt-analytics/:taskId` | Full prompt analytics: reconstructed turns, context reductions, scratch logs, financial breakdown (per-model, 5m/1h cache-write split) and `cacheAnalysis` (per-call `cache` object: TTL, cost components, cause, evidence level, extra cost). |
 | `GET /api/prompt-analytics/compare` | Multi-task comparative analytics data (`?tasks=id1,id2`). |
 | `GET /api/prompt-analytics/models` | Model pricing registry cache and context window lookup. |
 | `POST /api/prompt-analytics/label/:taskId` | Update custom user label for a task. |
@@ -304,6 +307,14 @@ PQ-Dashboard/
 | `GET /api/network/export` | Export all buffered requests as HAR file. |
 
 ---
+
+## Development
+
+```bash
+npm test                          # unit tests for pricing, calibration, cache analysis, fingerprints (synthetic models only)
+node scripts/verify-cache-cost.js # reconcile the cost model against every logged API call on this machine
+node scripts/try-cache-analysis.js <taskId> [--live]   # print the cache spikes of one task
+```
 
 ## Troubleshooting
 

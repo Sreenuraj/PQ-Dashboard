@@ -167,7 +167,8 @@
     "server": "nodemon server/index.js",
     "dev": "vite --config vite.config.js --port 5173 --open",
     "start": "node server/index.js",
-    "parse": "node server/parser/index.js"
+    "parse": "node server/parser/index.js",
+    "test": "node --test tests/*.test.js"
   },
   "dependencies": {
     "better-sqlite3": "^11.10.0",

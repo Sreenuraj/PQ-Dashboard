@@ -257,12 +257,65 @@ function initSchema(db) {
     'ALTER TABLE task_system_prompts ADD COLUMN agent_role TEXT DEFAULT \'main\'',
     'ALTER TABLE task_system_prompts ADD COLUMN subagent_index INTEGER DEFAULT NULL',
     'ALTER TABLE task_system_prompts ADD COLUMN agent_name TEXT DEFAULT NULL',
+    // Prompt-cache TTL awareness: 1h portion of cache writes (subset of cache_writes)
+    'ALTER TABLE events ADD COLUMN cache_writes_1h INTEGER DEFAULT 0',
+    'ALTER TABLE events ADD COLUMN has_cache_1h_field INTEGER DEFAULT 0',
+    'ALTER TABLE tasks ADD COLUMN total_cache_writes_1h INTEGER DEFAULT 0',
   ];
   for (const sql of migrations) {
     try { db.exec(sql); } catch (e) {
       // Column already exists — ignore
     }
   }
+
+  // Prompt-cache evidence: one compact fingerprint per LLM request seen by the Network Inspector proxy,
+  // plus system/tools texts de-duplicated by hash (so a mid-task prompt change is never lost).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS llm_request_fingerprints (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id TEXT,
+      captured_ts INTEGER NOT NULL,
+      model TEXT,
+      served_by TEXT,
+      generation_id TEXT,
+      prompt_tokens INTEGER,
+      cached_tokens INTEGER,
+      cache_write_tokens INTEGER,
+      completion_tokens INTEGER,
+      reported_cost REAL,
+      n_messages INTEGER,
+      n_tools INTEGER,
+      system_hash TEXT,
+      tools_hash TEXT,
+      agent_label TEXT,
+      subagent_index INTEGER,
+      fingerprint_json TEXT NOT NULL,
+      UNIQUE(generation_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_llmfp_task_ts ON llm_request_fingerprints(task_id, captured_ts);
+    CREATE INDEX IF NOT EXISTS idx_llmfp_ts ON llm_request_fingerprints(captured_ts);
+
+    CREATE TABLE IF NOT EXISTS llm_prompt_variants (
+      hash TEXT NOT NULL,
+      kind TEXT NOT NULL,           -- 'system' | 'tools'
+      text TEXT NOT NULL,
+      first_seen_ts INTEGER,
+      PRIMARY KEY (hash, kind)
+    );
+
+    -- Extension-log facts (TaskCancel, request rebuilt, ContextOpt) joined to calls by index/timestamp
+    CREATE TABLE IF NOT EXISTS extension_log_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id TEXT,
+      ts INTEGER,
+      kind TEXT NOT NULL,           -- 'task_cancel' | 'task_aborted' | 'request_rebuilt' | 'context_opt'
+      detail_json TEXT,
+      source_file TEXT,
+      source_line INTEGER,
+      UNIQUE(source_file, source_line)
+    );
+    CREATE INDEX IF NOT EXISTS idx_extlog_task_ts ON extension_log_events(task_id, ts);
+  `);
 
   // Create composite index for role/worker lookups if missing
   try {
@@ -334,8 +387,9 @@ function saveTask(db, taskId, source, summary, metadata, focusCompletion, events
      environment,pq_version,event_count,
      activity_category,edit_turns,oneshot_turns,retry_cycles,shell_command_count,
      primary_agent,agent_count,is_multi_agent,agent_sequence_json,label,
-     parallel_tool_batches,max_parallel_tools,parallel_tool_calls,concurrency_rate,roundtrips_saved)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+     parallel_tool_batches,max_parallel_tools,parallel_tool_calls,concurrency_rate,roundtrips_saved,
+     total_cache_writes_1h)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
     taskId, source,
     summary.first_ts, summary.last_ts, summary.duration,
@@ -364,7 +418,8 @@ function saveTask(db, taskId, source, summary, metadata, focusCompletion, events
     summary.max_parallel_tools || 0,
     summary.parallel_tool_calls || 0,
     summary.concurrency_rate || 0,
-    summary.roundtrips_saved || 0
+    summary.roundtrips_saved || 0,
+    summary.total_cache_writes_1h || 0
   );
 
   // Delete old events + related data for this task (replace)
@@ -377,8 +432,9 @@ function saveTask(db, taskId, source, summary, metadata, focusCompletion, events
     (task_id,ts,type,sub_type,tool_name,command_text,error_message,error_category,
      cost,tokens_in,tokens_out,cache_reads,cache_writes,model_id,provider_id,mode,
      reasoning_text,content_preview,model_switched,request_text,retry_count,context_pct,response_text,
-     is_parallel,parallel_count,parallel_index,parallel_group_id,parallel_tools_json) 
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+     is_parallel,parallel_count,parallel_index,parallel_group_id,parallel_tools_json,
+     cache_writes_1h,has_cache_1h_field) 
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
 
   const insertEventBatch = db.transaction((events) => {
     for (const e of events) {
@@ -397,7 +453,9 @@ function saveTask(db, taskId, source, summary, metadata, focusCompletion, events
         e.parallel_count || 1,
         e.parallel_index || 1,
         e.parallel_group_id || null,
-        e.parallel_tools ? JSON.stringify(e.parallel_tools) : null
+        e.parallel_tools ? JSON.stringify(e.parallel_tools) : null,
+        e.cache_writes_1h || 0,
+        e.has_cache_1h_field ? 1 : 0
       );
     }
   });
@@ -567,7 +625,81 @@ function getTaskSystemPrompts(db, taskId) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Prompt-cache evidence persistence (fingerprints, prompt variants, extension-log events)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Persists one request fingerprint (and its de-duplicated system/tools texts). Idempotent per generation id. */
+function saveRequestFingerprint(db, taskId, fp) {
+  if (!fp) return false;
+  const { _texts, ...slim } = fp;
+  const tx = db.transaction(() => {
+    if (_texts) {
+      const putVariant = db.prepare('INSERT OR IGNORE INTO llm_prompt_variants (hash, kind, text, first_seen_ts) VALUES (?,?,?,?)');
+      if (fp.systemHash && _texts.system) putVariant.run(fp.systemHash, 'system', _texts.system, fp.capturedTs);
+      if (fp.toolsHash && _texts.tools) putVariant.run(fp.toolsHash, 'tools', _texts.tools, fp.capturedTs);
+    }
+    const r = db.prepare(`INSERT OR IGNORE INTO llm_request_fingerprints
+      (task_id,captured_ts,model,served_by,generation_id,prompt_tokens,cached_tokens,cache_write_tokens,completion_tokens,
+       reported_cost,n_messages,n_tools,system_hash,tools_hash,agent_label,subagent_index,fingerprint_json)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      taskId || null, fp.capturedTs, fp.model, fp.servedBy, fp.generationId,
+      fp.promptTokens, fp.cachedTokens, fp.cacheWriteTokens, fp.completionTokens,
+      fp.reportedCost, fp.nMessages, fp.nTools, fp.systemHash, fp.toolsHash,
+      fp.agentLabel, fp.subagentIndex, JSON.stringify(slim)
+    );
+    return r.changes > 0;
+  });
+  return tx();
+}
+
+/** Fingerprints for a task, oldest first, with parsed JSON. */
+function getRequestFingerprints(db, taskId) {
+  try {
+    return db.prepare('SELECT id, task_id, captured_ts, fingerprint_json FROM llm_request_fingerprints WHERE task_id = ? ORDER BY captured_ts ASC, id ASC')
+      .all(taskId)
+      .map((r) => ({ ...JSON.parse(r.fingerprint_json), _id: r.id, _taskId: r.task_id }));
+  } catch { return []; }
+}
+
+/** Fingerprints (any task) captured inside [fromTs, toTs]. Used to match proxy captures to task calls by token counts. */
+function getRequestFingerprintsInWindow(db, fromTs, toTs) {
+  try {
+    return db.prepare('SELECT id, task_id, captured_ts, fingerprint_json FROM llm_request_fingerprints WHERE captured_ts BETWEEN ? AND ? ORDER BY captured_ts ASC, id ASC')
+      .all(fromTs, toTs)
+      .map((r) => ({ ...JSON.parse(r.fingerprint_json), _id: r.id }));
+  } catch { return []; }
+}
+
+function getPromptVariant(db, hash, kind) {
+  try { return db.prepare('SELECT text, first_seen_ts FROM llm_prompt_variants WHERE hash = ? AND kind = ?').get(hash, kind) || null; } catch { return null; }
+}
+
+function saveExtensionLogEvents(db, events) {
+  if (!events || !events.length) return 0;
+  const ins = db.prepare('INSERT OR IGNORE INTO extension_log_events (task_id,ts,kind,detail_json,source_file,source_line) VALUES (?,?,?,?,?,?)');
+  const tx = db.transaction((list) => {
+    let n = 0;
+    for (const e of list) n += ins.run(e.taskId || null, e.ts || null, e.kind, e.detail ? JSON.stringify(e.detail) : null, e.sourceFile || null, e.sourceLine == null ? null : e.sourceLine).changes;
+    return n;
+  });
+  return tx(events);
+}
+
+function getExtensionLogEvents(db, taskId) {
+  try {
+    return db.prepare('SELECT ts, kind, detail_json FROM extension_log_events WHERE task_id = ? ORDER BY ts ASC, id ASC').all(taskId)
+      .map((r) => ({ ts: r.ts, kind: r.kind, detail: r.detail_json ? JSON.parse(r.detail_json) : null }));
+  } catch { return []; }
+}
+
 module.exports = {
+  saveRequestFingerprint,
+  getRequestFingerprints,
+  getRequestFingerprintsInWindow,
+  getPromptVariant,
+  saveExtensionLogEvents,
+  getExtensionLogEvents,
   getDB,
   isTaskCached,
   saveTask,

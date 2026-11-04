@@ -10,6 +10,7 @@ const path = require('path');
 const os = require('os');
 const { getModelInfo } = require('../model-registry');
 const { getMemoryTimeline, getTaskSystemPrompts } = require('../cache/db');
+const { buildCacheAnalysis } = require('../analytics/cache-service');
 
 function resolvePath(p) {
   return p.replace(/^~/, os.homedir());
@@ -49,12 +50,6 @@ function getModelCachePricing(modelId, openrouterCache) {
     if (kClean.includes(cleanId) || cleanId.includes(kClean)) {
       return { modelKey: key, ...openrouterCache[key] };
     }
-  }
-
-  // Soft fuzzy fallback (e.g. "sonnet" matching "anthropic/claude-sonnet-4.5")
-  if (cleanId.includes('sonnet')) {
-    const sonnetKey = Object.keys(openrouterCache).find(k => k.includes('sonnet') && !k.includes('free'));
-    if (sonnetKey) return { modelKey: sonnetKey, ...openrouterCache[sonnetKey] };
   }
 
   return null;
@@ -133,6 +128,28 @@ function resolveMaxMsgIdx(callIndex, histIdx, apiHistoryLength) {
   return callIndex === 0 && apiHistoryLength > 0 ? 0 : -1;
 }
 
+/**
+ * Prompt size the provider actually processed for one call.
+ * Anthropic-style usage reports uncached input, cache reads and cache writes as DISJOINT buckets, so the prompt is
+ * their sum. Some providers report `tokensIn` as the whole prompt (it already contains the cached part): in that case
+ * tokensIn >= cacheReads and it is used as-is.
+ */
+function promptTokensOf(d) {
+  const inTok = d.tokensIn || 0;
+  const reads = d.cacheReads || 0;
+  const writes = d.cacheWrites || 0;
+  if (reads > 0 && inTok >= reads + writes) return inTok;
+  return inTok + reads + writes;
+}
+
+/** Share of the prompt that was served from cache (0-100, one decimal). */
+function cacheHitPctOf(d) {
+  const total = promptTokensOf(d);
+  const reads = d.cacheReads || 0;
+  if (reads <= 0 || total <= 0) return 0;
+  return Math.min(100, Math.max(0, Math.round((reads / total) * 1000) / 10));
+}
+
 function extractTextContent(content) {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
@@ -160,79 +177,6 @@ function detectReductionCategory(contentPrevStr, contentCurrStr) {
   }
   return { category: 'Other Content', targetName: 'Context Text' };
 }
-
-/**
- * Looks for evidence (in ui_messages.json, between the previous call's and
- * this call's api_req_started entries) that the agent was sitting idle
- * waiting on the user — an `ask` event (completion_result, followup
- * question, tool-approval, etc.) — rather than just assuming any large time
- * gap means "TTL expired". This turns a guess into an evidenced claim.
- */
-function findUserWaitGap(uiMessages, fromUiIdx, toUiIdx) {
-  if (!Array.isArray(uiMessages) || fromUiIdx == null || toUiIdx == null) return null;
-  for (let idx = fromUiIdx + 1; idx < toUiIdx; idx++) {
-    const m = uiMessages[idx];
-    if (m && m.type === 'ask') {
-      return { askType: m.ask || null, ts: m.ts };
-    }
-  }
-  return null;
-}
-
-/**
- * Explains WHY a given call had (or didn't have) a cache read/write, since
- * the raw numbers alone don't tell the user the cause. Checks, in order:
- * first call, model swap (cache is model-specific), an evidenced user-wait
- * gap (an `ask` event found in ui_messages.json between the two calls),
- * unexplained elapsed time (only ever a guess — labeled as such), and
- * prefix invalidation (earlier content pruned/rewritten since the previous
- * call broke the cached prefix match).
- */
-function computeCacheExplanation(call, prevCall, uiMessages) {
-  const hasRead = call.cacheReads > 0;
-  const hasWrite = call.cacheWrites > 0;
-
-  if (!prevCall) {
-    if (hasWrite) {
-      return { code: 'first_call', text: 'First request in this task — there was no existing cache to read from yet, so the full prompt prefix was written to cache.' };
-    }
-    return { code: 'no_cache_activity', text: 'No cache reads or writes reported by the provider for this request.' };
-  }
-
-  const timeSincePrevMs = (call.ts || 0) - (prevCall.ts || 0);
-  const FIVE_MIN_MS = 5 * 60 * 1000; // ponytail: Anthropic's default breakpoint TTL; other providers may differ
-  const modelChanged = !!(call.modelId && prevCall.modelId && call.modelId !== prevCall.modelId);
-  const waitGap = findUserWaitGap(uiMessages, prevCall.uiMsgIndex, call.uiMsgIndex);
-
-  if (hasWrite && !hasRead) {
-    if (modelChanged) {
-      return { code: 'model_changed', text: `Model changed from "${prevCall.modelId}" to "${call.modelId}" — prompt cache is model-specific, so a fresh cache entry had to be created.` };
-    }
-    if (waitGap) {
-      const waitedMin = Math.round(timeSincePrevMs / 60000);
-      return { code: 'idle_wait_ttl', text: `Evidence found: the agent finished its previous turn and was waiting on you (an "${waitGap.askType || 'ask'}" event) — ${waitedMin} minute(s) passed before you responded. That idle gap exceeded the provider's ~5-minute cache breakpoint window, so the prompt prefix had to be rewritten to cache once the conversation resumed.` };
-    }
-    if (timeSincePrevMs > FIVE_MIN_MS) {
-      const elapsedMin = Math.round(timeSincePrevMs / 60000);
-      return { code: 'ttl_expired_unconfirmed', text: `${elapsedMin} minutes passed since the previous request with no "waiting on user" event found in the task log — likely the provider's ~5-minute cache breakpoint expired, but this is a guess based on elapsed time only (the API doesn't report cache-eviction reasons).` };
-    }
-    if (call.hasPruning || call.trimmedFromPrevBytes > 100) {
-      return { code: 'prefix_invalidated', text: `Earlier content in the prompt (before the cache breakpoint) was pruned or rewritten since the previous call (${call.trimmedFromPrevBytes} bytes changed), invalidating the old cached prefix — a new cache entry was written.` };
-    }
-    return { code: 'prefix_extended', text: 'New content (tools, files, instructions) was appended beyond the previously cached prefix, so it was written to cache again.' };
-  }
-
-  if (hasRead && hasWrite) {
-    return { code: 'partial_hit', text: 'The earlier part of the prompt matched the existing cache (read), and new content appended beyond it was written as a fresh cache breakpoint.' };
-  }
-
-  if (hasRead && !hasWrite) {
-    return { code: 'full_hit', text: 'The prompt prefix matched the existing cache exactly — tokens were served from cache with no new write needed.' };
-  }
-
-  return { code: 'no_cache_activity', text: "No cache reads or writes reported by the provider for this request (uncached, or this model doesn't support prompt caching)." };
-}
-
 
 function summarizePromptMessage(msg, idx) {
 
@@ -694,13 +638,15 @@ module.exports = (db, config, getStore) => {
       const modelInfo = getModelInfo(mId);
       const contextWindowSize = modelInfo?.contextWindow || null;
       
-      const isFailedOrZeroReturn = (data.tokensIn === 0 && data.cacheReads === 0);
+      const isFailedOrZeroReturn = (data.tokensIn === 0 && data.cacheReads === 0 && !data.cacheWrites);
       let totalTokensInContext;
       if (isFailedOrZeroReturn && requestSize > 0) {
         const estimatedTokens = Math.round(requestSize / 3.2);
         totalTokensInContext = estimatedTokens || (prevTotalTokensInContext + Math.round(turnDeltaSize / 3.2));
       } else {
-        totalTokensInContext = (data.tokensIn || 0) + (data.cacheReads || 0) + systemPromptTokens;
+        // The provider-reported prompt already contains the system prompt and tools; cache WRITES are part of it
+        // (a call that rewrites the whole prompt has tokensIn≈0 and cacheReads=0 but a full-size cacheWrites).
+        totalTokensInContext = promptTokensOf(data);
       }
       prevTotalTokensInContext = totalTokensInContext;
 
@@ -731,6 +677,10 @@ module.exports = (db, config, getStore) => {
         tokensOut: data.tokensOut || 0,
         cacheReads: data.cacheReads || 0,
         cacheWrites: data.cacheWrites || 0,
+        // 1-hour TTL portion of cacheWrites (a subset); the field is absent on builds that predate the 1h option
+        cacheWrites1h: data.cacheWrite1hTokens || 0,
+        hasField1h: data.cacheWrite1hTokens !== undefined,
+        mode: msg.modelInfo?.mode || null,
         cost: data.cost || 0,
         historyIndex: histIdx,
         messageCount,
@@ -849,15 +799,25 @@ module.exports = (db, config, getStore) => {
       c.cumulativeCost = runningCost;
       c.elapsedSeconds = Math.max(0, Math.round(((c.ts - startTs) / 1000) * 10) / 10);
       c.latencyMs = i > 0 ? Math.max(0, c.ts - apiCalls[i - 1].ts) : 0;
-      const reads = c.cacheReads || 0;
-      const inTok = c.tokensIn || 0;
-      if (reads <= 0) {
-        c.cacheHitPct = 0;
-      } else {
-        const totalPrompt = inTok >= reads ? inTok : (reads + inTok);
-        c.cacheHitPct = totalPrompt > 0 ? Math.min(100, Math.max(0, Math.round((reads / totalPrompt) * 1000) / 10)) : 0;
-      }
-      c.cacheExplanation = computeCacheExplanation(c, i > 0 ? apiCalls[i - 1] : null, uiMessages);
+      c.cacheHitPct = cacheHitPctOf(c);
+    }
+
+    // ── Prompt-cache analysis: TTL, exact per-model cost components, per-model cache threads, evidence-backed cause ──
+    let cacheAnalysis = { calls: [], summary: null, evidence: { fingerprints: 0, matched: 0, extensionLogEvents: 0 } };
+    try {
+      cacheAnalysis = buildCacheAnalysis({
+        db, store: typeof getStore === 'function' ? getStore() : null, taskId, apiCalls, uiMessages,
+      });
+    } catch (e) {
+      console.warn('[prompt-analytics] cache analysis failed:', e.message);
+    }
+    for (let i = 0; i < apiCalls.length; i++) {
+      const c = apiCalls[i];
+      const a = cacheAnalysis.calls[i];
+      if (!a) { c.cacheExplanation = null; continue; }
+      c.cache = a;
+      // `cacheExplanation` keeps the shape the page already renders: { code, text } (+ title and evidence level)
+      c.cacheExplanation = { code: a.cause, title: a.message.title, text: a.message.text, level: a.evidenceLevel, spike: a.isSpike };
     }
 
 
@@ -1302,67 +1262,50 @@ module.exports = (db, config, getStore) => {
       scratchPromptBytes: apiCalls.reduce((s, c) => s + (c.subagents?.promptBytes || 0), 0),
     };
 
-    // Calculate Financial Cost Breakdown per API Call (Supports mid-task model switches & Subagents!)
-    let totalInputCost = 0;
-    let totalOutputCost = 0;
-    let totalCacheReadCost = 0;
-    let totalCacheWriteCost = 0;
-
+    // Financial breakdown. Every number comes from the cache analysis: each call is priced with ITS OWN model's rates
+    // (catalog prices, calibrated against the cost the extension logged), split into input / output / cache read /
+    // 5-minute cache write / 1-hour cache write. Calls that no price source can explain keep their logged cost and are
+    // reported separately as `unpriced` — nothing is guessed.
     let totalTokensIn = 0;
     let totalTokensOut = 0;
     let totalCacheReads = 0;
     let totalCacheWrites = 0;
-
+    let totalWrites1h = 0;
+    const comp = { input: 0, output: 0, read: 0, write5m: 0, write1h: 0 };
+    let unpricedCost = 0;
+    let unpricedCalls = 0;
     const modelsUsedSet = new Set();
-    const modelRateMap = {};
+    const perModel = new Map();
 
     for (const c of apiCalls) {
       const callModel = c.modelId || detectedModelId || 'unknown';
       modelsUsedSet.add(callModel);
-
-      if (!modelRateMap[callModel]) {
-        const pricing = getModelCachePricing(callModel, openrouterCache);
-        const info = getModelInfo(callModel);
-        const inRate = pricing?.prompt || info?.inputPrice || 3.0;
-        const outRate = pricing?.completion || info?.outputPrice || 15.0;
-        const readRate = pricing?.cacheRead || (inRate * 0.1);
-        const writeRate = pricing?.cacheWrite || (inRate * 1.25);
-        modelRateMap[callModel] = { inRate, outRate, readRate, writeRate };
+      totalTokensIn += c.tokensIn || 0;
+      totalTokensOut += c.tokensOut || 0;
+      totalCacheReads += c.cacheReads || 0;
+      totalCacheWrites += c.cacheWrites || 0;
+      totalWrites1h += Math.min(c.cacheWrites1h || 0, c.cacheWrites || 0);
+      const pm = perModel.get(callModel) || { modelId: callModel, calls: 0, cost: 0, rateSource: null, rates: null };
+      pm.calls++;
+      pm.cost += c.cost || 0;
+      if (c.cache && c.cache.cost) {
+        comp.input += c.cache.cost.input;
+        comp.output += c.cache.cost.output;
+        comp.read += c.cache.cost.read;
+        comp.write5m += c.cache.cost.write5m;
+        comp.write1h += c.cache.cost.write1h;
+        pm.rateSource = pm.rateSource || c.cache.rateSource;
+        pm.rates = pm.rates || c.cache.rates;
+      } else {
+        unpricedCost += c.cost || 0;
+        unpricedCalls++;
+        pm.rateSource = pm.rateSource || 'logged_only';
       }
+      perModel.set(callModel, pm);
 
-      const rates = modelRateMap[callModel];
-      const inTok = c.tokensIn || 0;
-      const outTok = c.tokensOut || 0;
-      const readTok = c.cacheReads || 0;
-      const writeTok = c.cacheWrites || 0;
-
-      totalTokensIn += inTok;
-      totalTokensOut += outTok;
-      totalCacheReads += readTok;
-      totalCacheWrites += writeTok;
-
-      totalInputCost += (inTok / 1e6) * rates.inRate;
-      totalOutputCost += (outTok / 1e6) * rates.outRate;
-      totalCacheReadCost += (readTok / 1e6) * rates.readRate;
-      totalCacheWriteCost += (writeTok / 1e6) * rates.writeRate;
-
-      // Also account for subagent worker models and tokens if present
+      // Subagent worker models are listed too (their cost is added to the task total below)
       if (c.hasSubagents && c.subagents) {
-        const sub = c.subagents;
-        const items = sub.items || [];
-        for (const it of items) {
-          const sModel = it.modelId || sub.modelId || callModel;
-          modelsUsedSet.add(sModel);
-          if (!modelRateMap[sModel]) {
-            const pricing = getModelCachePricing(sModel, openrouterCache);
-            const info = getModelInfo(sModel);
-            const inRate = pricing?.prompt || info?.inputPrice || 3.0;
-            const outRate = pricing?.completion || info?.outputPrice || 15.0;
-            const readRate = pricing?.cacheRead || (inRate * 0.1);
-            const writeRate = pricing?.cacheWrite || (inRate * 1.25);
-            modelRateMap[sModel] = { inRate, outRate, readRate, writeRate };
-          }
-        }
+        for (const it of (c.subagents.items || [])) modelsUsedSet.add(it.modelId || c.subagents.modelId || callModel);
       }
     }
 
@@ -1376,21 +1319,22 @@ module.exports = (db, config, getStore) => {
       return s + turnCost;
     }, 0);
     const modelsUsedList = Array.from(modelsUsedSet);
-
-    const avgInputRate = totalTokensIn > 0 ? (totalInputCost / totalTokensIn) * 1e6 : (modelRateMap[detectedModelId]?.inRate || 3.0);
-    const avgOutputRate = totalTokensOut > 0 ? (totalOutputCost / totalTokensOut) * 1e6 : (modelRateMap[detectedModelId]?.outRate || 15.0);
-    const avgCacheReadRate = totalCacheReads > 0 ? (totalCacheReadCost / totalCacheReads) * 1e6 : (modelRateMap[detectedModelId]?.readRate || 0.30);
-    const avgCacheWriteRate = totalCacheWrites > 0 ? (totalCacheWriteCost / totalCacheWrites) * 1e6 : (modelRateMap[detectedModelId]?.writeRate || 3.75);
+    const per = (cost, tokens) => (tokens > 0 ? (cost / tokens) * 1e6 : null);
+    const writeCost = comp.write5m + comp.write1h;
 
     const financialBreakdown = {
       modelId: modelsUsedList.length > 1 ? `Multi-Model (${modelsUsedList.map(m => m.split('/').pop()).join(', ')})` : (detectedModelId || 'unknown'),
       modelsUsed: modelsUsedList,
       isMultiModel: modelsUsedList.length > 1,
-      totalCost: calculatedTotalCost || (totalInputCost + totalOutputCost + totalCacheReadCost + totalCacheWriteCost),
-      input: { tokens: totalTokensIn, pricePerM: avgInputRate, cost: totalInputCost },
-      output: { tokens: totalTokensOut, pricePerM: avgOutputRate, cost: totalOutputCost },
-      cacheRead: { tokens: totalCacheReads, pricePerM: avgCacheReadRate, cost: totalCacheReadCost },
-      cacheWrite: { tokens: totalCacheWrites, pricePerM: avgCacheWriteRate, cost: totalCacheWriteCost },
+      totalCost: calculatedTotalCost || (comp.input + comp.output + comp.read + writeCost + unpricedCost),
+      input: { tokens: totalTokensIn, pricePerM: per(comp.input, totalTokensIn), cost: comp.input },
+      output: { tokens: totalTokensOut, pricePerM: per(comp.output, totalTokensOut), cost: comp.output },
+      cacheRead: { tokens: totalCacheReads, pricePerM: per(comp.read, totalCacheReads), cost: comp.read },
+      cacheWrite: { tokens: totalCacheWrites, pricePerM: per(writeCost, totalCacheWrites), cost: writeCost },
+      cacheWrite5m: { tokens: totalCacheWrites - totalWrites1h, pricePerM: per(comp.write5m, totalCacheWrites - totalWrites1h), cost: comp.write5m },
+      cacheWrite1h: { tokens: totalWrites1h, pricePerM: per(comp.write1h, totalWrites1h), cost: comp.write1h },
+      unpriced: { calls: unpricedCalls, cost: unpricedCost },
+      perModel: [...perModel.values()],
       subagents: subagentSummary,
     };
 
@@ -1461,6 +1405,7 @@ module.exports = (db, config, getStore) => {
         contextHistoryPath: fs.existsSync(ctxHistPath) ? ctxHistPath : null,
       },
       apiCalls,
+      cacheAnalysis: { summary: cacheAnalysis.summary, evidence: cacheAnalysis.evidence },
       parallelStats,
       modelPricing: matchedPricing,
       financialBreakdown,

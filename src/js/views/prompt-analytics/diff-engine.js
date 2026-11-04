@@ -153,29 +153,33 @@ export function renderSystemPromptSection(systemPrompt) {
 }
 
 export function renderCacheExplanationBanner(explanation) {
-  if (!explanation) return '';
+  if (!explanation || !explanation.text) return '';
   const iconMap = {
-    first_call: '🆕',
-    model_changed: '🔀',
-    idle_wait_ttl: '⏳',
-    ttl_expired_unconfirmed: '❓',
-    prefix_invalidated: '✂️',
-    prefix_extended: '➕',
-    partial_hit: '🎯',
-    full_hit: '✅',
-    no_cache_activity: 'ℹ️',
+    first_call: '🆕', new_cache_entry: '🆕', model_changed: '🔀', mode_changed: '🔀', ttl_expired: '⏳', provider_changed: '🛰️',
+    tools_changed: '🧰', system_changed: '📜', history_edited: '✂️', provider_eviction: '🗑️', task_rebuilt_after_cancel: '🔁',
+    unexplained_full_miss: '❓', unexplained_partial_miss: '❓', hit: '✅', hit_extend: '✅', no_cache: 'ℹ️',
   };
+  const levels = {
+    confirmed: ['#22c55e', 'Confirmed', 'Both requests were captured by the Network Inspector and diffed.'],
+    strong: ['#38bdf8', 'Recorded', 'Directly recorded in the task files or the extension log.'],
+    inferred: ['#f59e0b', 'Inferred', 'Inferred from cache numbers only; keep the Network Inspector running to capture the evidence.'],
+  };
+  const lv = levels[explanation.level] || null;
+  const isSpike = !!explanation.spike;
+  const accent = isSpike ? '#f87171' : (explanation.level === 'inferred' ? '#f59e0b' : '#38bdf8');
+  const bg = isSpike ? 'rgba(248,113,113,0.08)' : (explanation.level === 'inferred' ? 'rgba(245,158,11,0.08)' : 'rgba(56,189,248,0.08)');
+  const border = isSpike ? 'rgba(248,113,113,0.35)' : (explanation.level === 'inferred' ? 'rgba(245,158,11,0.3)' : 'rgba(56,189,248,0.3)');
   const icon = iconMap[explanation.code] || 'ℹ️';
-  const isUnconfirmed = explanation.code === 'ttl_expired_unconfirmed';
-  const accent = isUnconfirmed ? '#f59e0b' : '#38bdf8';
-  const bg = isUnconfirmed ? 'rgba(245,158,11,0.08)' : 'rgba(56,189,248,0.08)';
-  const border = isUnconfirmed ? 'rgba(245,158,11,0.3)' : 'rgba(56,189,248,0.3)';
-  const label = isUnconfirmed ? 'Possible cache behavior (unconfirmed):' : 'Why this cache behavior?';
+  const title = explanation.title || 'Why this cache behavior?';
 
   return `
     <div style="background:${bg};border:1px solid ${border};border-radius:var(--radius-sm);padding:10px 14px;margin-bottom:10px;font-size:11.5px;color:var(--text);display:flex;align-items:flex-start;gap:8px">
       <span style="font-size:14px">${icon}</span>
-      <span><strong style="color:${accent}">${label}</strong> ${escHtml(explanation.text)}</span>
+      <span>
+        <strong style="color:${accent}">${escHtml(title)}</strong>
+        ${lv ? `<span title="${escHtml(lv[2])}" style="color:${lv[0]};font-weight:bold;font-size:10px;margin-left:6px">● ${lv[1]}</span>` : ''}
+        <br>${escHtml(explanation.text)}
+      </span>
     </div>
   `;
 }

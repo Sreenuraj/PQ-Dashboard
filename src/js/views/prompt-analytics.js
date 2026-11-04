@@ -453,14 +453,22 @@ function renderAnalytics(contentEl) {
 
   const scratchSum = data.scratchSummary || { count: 0, totalSavedBytes: 0 };
   const scratchSaved = scratchSum.totalSavedBytes || 0;
+  // No hard-coded prices: the server prices every call with its own model's rates (see cacheAnalysis) and returns
+  // the breakdown. If it is missing (older server) we show token counts only and leave the prices blank.
   const fb = data.financialBreakdown || {
     modelId: data.task?.model || 'unknown',
     totalCost: data.task?.totalCost || 0,
-    input: { tokens: calls.reduce((s, c) => s + (c.tokensIn || 0), 0), cost: 0, pricePerM: 3.0 },
-    output: { tokens: calls.reduce((s, c) => s + (c.tokensOut || 0), 0), cost: 0, pricePerM: 15.0 },
-    cacheRead: { tokens: calls.reduce((s, c) => s + (c.cacheReads || 0), 0), cost: 0, pricePerM: 0.30 },
-    cacheWrite: { tokens: calls.reduce((s, c) => s + (c.cacheWrites || 0), 0), cost: 0, pricePerM: 3.75 },
+    input: { tokens: calls.reduce((s, c) => s + (c.tokensIn || 0), 0), cost: 0, pricePerM: null },
+    output: { tokens: calls.reduce((s, c) => s + (c.tokensOut || 0), 0), cost: 0, pricePerM: null },
+    cacheRead: { tokens: calls.reduce((s, c) => s + (c.cacheReads || 0), 0), cost: 0, pricePerM: null },
+    cacheWrite: { tokens: calls.reduce((s, c) => s + (c.cacheWrites || 0), 0), cost: 0, pricePerM: null },
   };
+  const fmtRate = (r) => (r == null ? '—' : '$' + (r >= 1 ? r.toFixed(2) : r.toFixed(3)) + '/1M');
+  const w1h = fb.cacheWrite1h || { tokens: 0, cost: 0, pricePerM: null };
+  const w5m = fb.cacheWrite5m || { tokens: fb.cacheWrite?.tokens || 0, cost: fb.cacheWrite?.cost || 0, pricePerM: fb.cacheWrite?.pricePerM };
+  const ttlSplit = w1h.tokens > 0
+    ? `<span title="1-hour TTL writes cost more per token than 5-minute writes but survive idle gaps up to an hour">⏱ 1h ${fmtTokens(w1h.tokens)} @ ${fmtRate(w1h.pricePerM)}${w5m.tokens > 0 ? ` · 5m ${fmtTokens(w5m.tokens)} @ ${fmtRate(w5m.pricePerM)}` : ''}</span>`
+    : (w5m.tokens > 0 ? `<span title="5-minute TTL writes">⏱ 5m @ ${fmtRate(w5m.pricePerM)}</span>` : '');
 
   const accurateTotalCost = fb.totalCost || (data.task?.totalCost) || calls.reduce((s, c) => s + (c.cost || 0), 0);
   if (data.task) data.task.totalCost = accurateTotalCost;
@@ -480,7 +488,7 @@ function renderAnalytics(contentEl) {
           <span style="background:rgba(56,189,248,0.15);color:#38bdf8;padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:bold" class="mono">🤖 ${escHtml(fb.modelId || 'Model')}</span>
         </div>
         <div style="font-size:11px;color:var(--text-3)">
-          Calculated from exact LLM token counts & OpenRouter model rates
+          Each call priced with its own model's rates (dynamic catalog, calibrated to the cost the extension logged)${fb.unpriced?.calls ? ` · ${fb.unpriced.calls} call(s) on models without a known price use the logged cost (${fmtCost(fb.unpriced.cost)})` : ''}
         </div>
       </div>
 
@@ -491,7 +499,7 @@ function renderAnalytics(contentEl) {
           <div class="mono" style="font-size:15px;font-weight:bold;color:var(--text)">${fmtTokens(fb.input?.tokens || 0)}</div>
           <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:10px">
             <span style="color:#38bdf8;font-weight:bold">${fmtCost(fb.input?.cost || 0)}</span>
-            <span style="color:var(--text-3)" class="mono">$${(fb.input?.pricePerM || 0).toFixed(2)}/1M</span>
+            <span style="color:var(--text-3)" class="mono">${fmtRate(fb.input?.pricePerM)}</span>
           </div>
         </div>
 
@@ -501,7 +509,7 @@ function renderAnalytics(contentEl) {
           <div class="mono" style="font-size:15px;font-weight:bold;color:var(--text)">${fmtTokens(fb.output?.tokens || 0)}</div>
           <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:10px">
             <span style="color:#e879f9;font-weight:bold">${fmtCost(fb.output?.cost || 0)}</span>
-            <span style="color:var(--text-3)" class="mono">$${(fb.output?.pricePerM || 0).toFixed(2)}/1M</span>
+            <span style="color:var(--text-3)" class="mono">${fmtRate(fb.output?.pricePerM)}</span>
           </div>
         </div>
 
@@ -509,12 +517,12 @@ function renderAnalytics(contentEl) {
         <div style="background:var(--bg-3);border:1px solid var(--border);padding:10px;border-radius:var(--radius-sm);border-top:3px solid var(--green)">
           <div style="font-size:10.5px;color:var(--text-3);margin-bottom:4px;font-weight:600;display:flex;justify-content:space-between">
             <span>📖 Cache Reads</span>
-            <span style="color:var(--green);font-size:9.5px;font-weight:bold">⚡ 90% Off</span>
+            ${(() => { const i = fb.input?.pricePerM, r = fb.cacheRead?.pricePerM; return i > 0 && r != null ? `<span style="color:var(--green);font-size:9.5px;font-weight:bold">⚡ ${Math.round((1 - r / i) * 100)}% off input</span>` : ''; })()}
           </div>
           <div class="mono" style="font-size:15px;font-weight:bold;color:var(--text)">${fmtTokens(fb.cacheRead?.tokens || 0)}</div>
           <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:10px">
             <span style="color:var(--green);font-weight:bold">${fmtCost(fb.cacheRead?.cost || 0)}</span>
-            <span style="color:var(--text-3)" class="mono">$${(fb.cacheRead?.pricePerM || 0).toFixed(2)}/1M</span>
+            <span style="color:var(--text-3)" class="mono">${fmtRate(fb.cacheRead?.pricePerM)}</span>
           </div>
         </div>
 
@@ -524,8 +532,9 @@ function renderAnalytics(contentEl) {
           <div class="mono" style="font-size:15px;font-weight:bold;color:var(--text)">${fmtTokens(fb.cacheWrite?.tokens || 0)}</div>
           <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:10px">
             <span style="color:#f59e0b;font-weight:bold">${fmtCost(fb.cacheWrite?.cost || 0)}</span>
-            <span style="color:var(--text-3)" class="mono">$${(fb.cacheWrite?.pricePerM || 0).toFixed(2)}/1M</span>
+            <span style="color:var(--text-3)" class="mono">${fmtRate(fb.cacheWrite?.pricePerM)}</span>
           </div>
+          ${ttlSplit ? `<div style="margin-top:4px;font-size:9.5px;color:var(--text-3)" class="mono">${ttlSplit}</div>` : ''}
         </div>
 
         <!-- 5. Total Financial Cost -->
@@ -534,7 +543,7 @@ function renderAnalytics(contentEl) {
           <div class="mono" style="font-size:18px;font-weight:bold;color:var(--green)">${fmtCost(fb.totalCost || data.task?.totalCost || 0)}</div>
           <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;font-size:10px;color:var(--text-2)">
             <span>${calls.length} API Calls</span>
-            <span>100% Billable</span>
+            <span>${fb.isMultiModel ? (fb.modelsUsed || []).length + ' models' : '100% Billable'}</span>
           </div>
         </div>
       </div>
@@ -1435,56 +1444,105 @@ function renderCompareStepInspector(taskIds, stepIdx) {
   }).join('');
 }
 
+const CAUSE_LABELS = {
+  first_call: 'First request', new_cache_entry: 'New cache entry', model_changed: 'Model changed', mode_changed: 'Mode changed',
+  ttl_expired: 'Cache expired (TTL)', provider_changed: 'Different provider served it', tools_changed: 'Tool list changed',
+  system_changed: 'System prompt changed', history_edited: 'Earlier conversation edited', provider_eviction: 'Provider-side eviction',
+  task_rebuilt_after_cancel: 'Request rebuilt after cancel', unexplained_full_miss: 'Cause not recorded', unexplained_partial_miss: 'Partial miss (cause not recorded)',
+};
+const LEVEL_STYLE = {
+  confirmed: { c: '#22c55e', t: 'Confirmed', tip: 'Both requests were captured by the Network Inspector and diffed.' },
+  strong: { c: '#38bdf8', t: 'Recorded', tip: 'Directly recorded in the task files or the extension log.' },
+  inferred: { c: '#f59e0b', t: 'Inferred', tip: 'Inferred from the cache numbers only; keep the Network Inspector running to capture the evidence.' },
+};
+const fmtRateM = (r) => (r == null ? '—' : '$' + (r >= 1 ? r.toFixed(2) : r.toFixed(3)));
+
 function renderCacheObservabilityPanel(body, calls) {
   if (!body) return;
 
-  const serverPricing = analyticsData?.modelPricing;
-  let pricing = {
-    name: 'Claude 3.5/3.7 Sonnet',
-    uncached: 3.00,
-    cacheRead: 0.30,
-    cacheWrite: 3.75,
-    discount: '90%',
-    source: 'Default Rates',
-  };
+  // Everything below comes from the server-side cache analysis (no prices live in the browser).
+  const ca = analyticsData?.cacheAnalysis || {};
+  const summary = ca.summary || null;
+  const evidence = ca.evidence || {};
+  const perCall = (c) => c.cache || null;
 
-  if (serverPricing) {
-    const u = serverPricing.inputPrice != null ? serverPricing.inputPrice : 3.00;
-    const cr = serverPricing.cacheReadsPrice != null ? serverPricing.cacheReadsPrice : u * 0.1;
-    const cw = serverPricing.cacheWritesPrice != null ? serverPricing.cacheWritesPrice : u * 1.25;
-    const disc = u > 0 ? (((u - cr) / u) * 100).toFixed(0) + '%' : '90%';
+  const totalReads = calls.reduce((s, c) => s + (c.cacheReads || 0), 0);
+  const totalWrites = calls.reduce((s, c) => s + (c.cacheWrites || 0), 0);
+  const w1hTokens = summary ? summary.write1hTokens : 0;
+  const w5mTokens = summary ? summary.write5mTokens : totalWrites;
 
-    pricing = {
-      name: serverPricing.modelKey || 'OpenRouter Model',
-      uncached: u,
-      cacheRead: cr,
-      cacheWrite: cw,
-      discount: disc,
-      source: 'IDE Cache (openrouter_models.json)',
-    };
+  // Savings = what the same calls would have cost with no cache at all (every cached token billed as plain input)
+  let costSaved = 0, noCacheCost = 0, pricedCost = 0, priced = 0;
+  for (const c of calls) {
+    const a = perCall(c);
+    if (!a || !a.cost || !a.rates) continue;
+    priced++;
+    const inRate = a.rates.input || 0;
+    const noCache = a.cost.input + a.cost.output + ((c.cacheReads || 0) + (c.cacheWrites || 0)) * inRate / 1e6;
+    noCacheCost += noCache;
+    pricedCost += a.cost.total;
   }
+  costSaved = Math.max(0, noCacheCost - pricedCost);
+  const percentSaved = noCacheCost > 0 ? ((costSaved / noCacheCost) * 100).toFixed(1) : '0.0';
 
+  // Models and their rates (a task can switch models; each has its own rate card)
+  const models = (summary?.models || []);
+  const perModelFin = analyticsData?.financialBreakdown?.perModel || [];
+  const modelBadges = perModelFin.map((m) => {
+    const r = m.rates || {};
+    const src = { catalog: 'live catalog', fitted: 'calibrated to logged cost', logged_only: 'logged cost only (price unknown)' }[m.rateSource] || m.rateSource || '';
+    return `<span style="font-size:10.5px;background:rgba(56,189,248,0.12);color:#38bdf8;padding:3px 10px;border-radius:12px;border:1px solid rgba(56,189,248,0.3);font-weight:600" title="Rates: ${escHtml(src)}">
+      🏷️ <strong>${escHtml(m.modelId)}</strong> ${m.rates ? `(in ${fmtRateM(r.input)} · out ${fmtRateM(r.output)} · read ${fmtRateM(r.cacheRead)} · write 5m ${fmtRateM(r.cacheWrite5m)}${r.cacheWrite1h != null ? ' / 1h ' + fmtRateM(r.cacheWrite1h) : ''} per 1M)` : '(price unknown — logged cost shown)'}
+    </span>`;
+  }).join(' ');
   const modelBadge = document.getElementById('pa-cache-model-badge');
-  if (modelBadge) {
-    modelBadge.innerHTML = `
-      <span style="font-size:10.5px;background:rgba(56,189,248,0.12);color:#38bdf8;padding:3px 10px;border-radius:12px;border:1px solid rgba(56,189,248,0.3);font-weight:600" title="Model pricing loaded dynamically from ${escHtml(pricing.source)}">
-        🏷️ Pricing Rates: <strong>${escHtml(pricing.name)}</strong> (Uncached: $${pricing.uncached.toFixed(2)}/1M | Cache Read: $${pricing.cacheRead.toFixed(3)}/1M [${pricing.discount} Off] | Cache Write: $${pricing.cacheWrite.toFixed(3)}/1M)
-      </span>
-    `;
-  }
+  if (modelBadge) modelBadge.innerHTML = modelBadges;
 
-  const totalReads = calls.reduce((s, c) => s + c.cacheReads, 0);
-  const totalWrites = calls.reduce((s, c) => s + c.cacheWrites, 0);
-  const totalTokensIn = calls.reduce((s, c) => s + c.tokensIn, 0);
-  const totalTokensOut = calls.reduce((s, c) => s + c.tokensOut, 0);
+  // Waste by cause
+  const byCause = summary?.byCause || {};
+  const causeRows = Object.entries(byCause).sort((a, b) => b[1].excessCost - a[1].excessCost).map(([cause, v]) => {
+    const lv = Object.keys(v.evidence || {}).sort((x, y) => ['confirmed', 'strong', 'inferred'].indexOf(x) - ['confirmed', 'strong', 'inferred'].indexOf(y))[0];
+    const st = LEVEL_STYLE[lv] || LEVEL_STYLE.inferred;
+    return `<tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:6px 10px;font-weight:600">${escHtml(CAUSE_LABELS[cause] || cause)}</td>
+      <td class="mono" style="padding:6px 10px">${v.calls}</td>
+      <td class="mono" style="padding:6px 10px">${fmtTokens(v.tokensRewritten)}</td>
+      <td class="mono" style="padding:6px 10px;color:#f87171;font-weight:bold">${fmtCost(v.excessCost)}</td>
+      <td style="padding:6px 10px"><span title="${escHtml(st.tip)}" style="color:${st.c};font-weight:bold;font-size:10px">● ${st.t}</span></td>
+    </tr>`;
+  }).join('');
 
-  const costWithoutCache = ((totalReads + totalTokensIn) / 1000000.0) * pricing.uncached + (totalTokensOut / 1000000.0) * 15.00;
-  const costWithCache = (totalTokensIn / 1000000.0) * pricing.uncached + (totalReads / 1000000.0) * pricing.cacheRead + (totalWrites / 1000000.0) * pricing.cacheWrite + (totalTokensOut / 1000000.0) * 15.00;
-  const costSaved = Math.max(0, costWithoutCache - costWithCache);
-  const percentSaved = costWithoutCache > 0 ? ((costSaved / costWithoutCache) * 100).toFixed(1) : '0.0';
+  const spikes = calls.filter((c) => perCall(c)?.isSpike);
+  const wasteCard = summary && summary.spikes > 0 ? `
+    <div style="background:rgba(248,113,113,0.07);border:1px solid rgba(248,113,113,0.35);border-radius:var(--radius-sm);padding:12px 14px;margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+        <div style="font-weight:bold;font-size:12px;color:#f87171">⚠️ ${summary.spikes} cache miss${summary.spikes > 1 ? 'es' : ''} rewrote the prompt — ${fmtCost(summary.totalExcessCost)} extra (${summary.excessPct.toFixed(1)}% of this task's ${fmtCost(summary.totalLoggedCost)})</div>
+        <div style="font-size:10.5px;color:var(--text-3)">Extra = what each miss cost beyond a cache hit for the same prompt</div>
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:11px;text-align:left">
+        <thead style="color:var(--text-3)"><tr><th style="padding:4px 10px">Cause</th><th style="padding:4px 10px">Calls</th><th style="padding:4px 10px">Tokens rewritten</th><th style="padding:4px 10px">Extra cost</th><th style="padding:4px 10px">Evidence</th></tr></thead>
+        <tbody>${causeRows}</tbody>
+      </table>
+      <div style="margin-top:8px;font-size:10.5px;color:var(--text-3)">Jump to: ${spikes.map((c) => `<a href="#" class="pa-jump-spike" data-idx="${c.index}" style="color:#f87171;font-weight:bold;margin-right:8px">#${c.index + 1}</a>`).join('')}</div>
+    </div>` : '';
+
+  const wi = summary?.ttlWhatIf;
+  const ttlCard = summary && w1hTokens > 0 && wi ? `
+    <div style="background:var(--bg-2);padding:10px 14px;border-radius:var(--radius-sm);border:1px solid var(--border);margin-bottom:16px;font-size:11px;color:var(--text-2)">
+      ⏱ <strong>1-hour vs 5-minute cache TTL</strong> (this task): ${fmtTokens(w1hTokens)} tokens were written with a 1-hour TTL${w5mTokens > 0 ? ` and ${fmtTokens(w5mTokens)} with 5 minutes` : ''}.
+      The longer TTL cost <strong>${fmtCost(wi.premium1hPaid)}</strong> extra in write fees and avoided <strong>${fmtCost(wi.rewritesAvoidedBy1h)}</strong> of rewrites after pauses longer than 5 minutes
+      → net <strong style="color:${wi.net >= 0 ? 'var(--green)' : '#f59e0b'}">${wi.net >= 0 ? '+' : '−'}${fmtCost(Math.abs(wi.net))}</strong>.
+    </div>` : '';
+
+  const evNote = evidence.note ? `
+    <div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.3);border-radius:var(--radius-sm);padding:8px 14px;margin-bottom:14px;font-size:10.5px;color:var(--text-2)">
+      🔎 <strong>Evidence:</strong> ${escHtml(evidence.note)} <span style="color:var(--text-3)">(${evidence.matched || 0}/${calls.length} calls matched a Network Inspector capture · ${evidence.extensionLogEvents || 0} extension-log events)</span>
+    </div>` : (evidence.matched ? `<div style="font-size:10.5px;color:var(--text-3);margin-bottom:10px">🔎 Evidence: ${evidence.matched}/${calls.length} calls matched a Network Inspector capture · ${evidence.extensionLogEvents || 0} extension-log events</div>` : '');
+
 
   const cacheHitsCount = calls.filter(c => c.cacheReads > 0).length;
-  const hitRate = calls.length > 0 ? ((cacheHitsCount / calls.length) * 100).toFixed(1) : '0.0';
+  const promptTotal = calls.reduce((t, c) => t + (c.tokensIn || 0) + (c.cacheReads || 0) + (c.cacheWrites || 0), 0);
+  const tokenHitRate = promptTotal > 0 ? ((totalReads / promptTotal) * 100).toFixed(1) : '0.0';
   const systemPromptNote = analyticsData?.systemPromptNote;
 
   body.innerHTML = `
@@ -1494,58 +1552,33 @@ function renderCacheObservabilityPanel(body, calls) {
         <span><strong style="color:var(--text-2)">Note:</strong> ${escHtml(systemPromptNote)}</span>
       </div>
     ` : ''}
+    ${wasteCard}
+    ${evNote}
+    ${ttlCard}
     <!-- Top Executive Cache Metrics Grid -->
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-bottom:16px">
       <div style="background:var(--bg-3);padding:14px;border-radius:var(--radius-sm);border:1px solid var(--border);border-left:4px solid var(--green)">
-        <div style="font-size:10.5px;color:var(--text-3);font-weight:bold;text-transform:uppercase">💰 Financial Cost Saved</div>
-        <div class="mono" style="font-size:20px;font-weight:bold;color:var(--green);margin:4px 0">$${costSaved.toFixed(2)}</div>
-        <div style="font-size:10.5px;color:var(--green);font-weight:bold">${percentSaved}% total token cost discount</div>
+        <div style="font-size:10.5px;color:var(--text-3);font-weight:bold;text-transform:uppercase">💰 Saved by caching</div>
+        <div class="mono" style="font-size:20px;font-weight:bold;color:var(--green);margin:4px 0">${priced ? fmtCost(costSaved) : '—'}</div>
+        <div style="font-size:10.5px;color:var(--green);font-weight:bold">${priced ? percentSaved + '% vs billing every cached token as plain input' : 'prices unknown for this model'}</div>
       </div>
 
       <div style="background:var(--bg-3);padding:14px;border-radius:var(--radius-sm);border:1px solid var(--border);border-left:4px solid #38bdf8">
-        <div style="font-size:10.5px;color:var(--text-3);font-weight:bold;text-transform:uppercase">🎯 Cache Hit Rate</div>
-        <div class="mono" style="font-size:20px;font-weight:bold;color:#38bdf8;margin:4px 0">${hitRate}%</div>
-        <div style="font-size:10.5px;color:var(--text-3)">${cacheHitsCount} of ${calls.length} requests hit KV cache</div>
+        <div style="font-size:10.5px;color:var(--text-3);font-weight:bold;text-transform:uppercase">🎯 Prompt served from cache</div>
+        <div class="mono" style="font-size:20px;font-weight:bold;color:#38bdf8;margin:4px 0">${tokenHitRate}%</div>
+        <div style="font-size:10.5px;color:var(--text-3)">of ${fmtTokens(promptTotal)} prompt tokens · ${cacheHitsCount} of ${calls.length} requests read from cache</div>
       </div>
 
       <div style="background:var(--bg-3);padding:14px;border-radius:var(--radius-sm);border:1px solid var(--border);border-left:4px solid var(--green)">
         <div style="font-size:10.5px;color:var(--text-3);font-weight:bold;text-transform:uppercase">📖 Total Cache Reads</div>
         <div class="mono" style="font-size:20px;font-weight:bold;color:var(--green);margin:4px 0">${fmtTokens(totalReads)}</div>
-        <div style="font-size:10.5px;color:var(--text-3)">Served at ${pricing.discount} price discount ($${pricing.cacheRead.toFixed(2)}/1M)</div>
+        <div style="font-size:10.5px;color:var(--text-3)">${analyticsData?.financialBreakdown?.cacheRead?.pricePerM != null ? 'avg ' + fmtRateM(analyticsData.financialBreakdown.cacheRead.pricePerM) + ' / 1M' : 'cache-read price unknown'}</div>
       </div>
 
       <div style="background:var(--bg-3);padding:14px;border-radius:var(--radius-sm);border:1px solid var(--border);border-left:4px solid #f59e0b">
         <div style="font-size:10.5px;color:var(--text-3);font-weight:bold;text-transform:uppercase">✍️ Total Cache Writes</div>
         <div class="mono" style="font-size:20px;font-weight:bold;color:#f59e0b;margin:4px 0">${fmtTokens(totalWrites)}</div>
-        <div style="font-size:10.5px;color:var(--text-3)">KV Cache breakpoints created</div>
-      </div>
-    </div>
-
-    <!-- How Cache Read / Write Works Explainer Card -->
-    <div style="background:var(--bg-2);padding:14px;border-radius:var(--radius-sm);border:1px solid var(--border);margin-bottom:16px">
-      <div style="font-weight:bold;font-size:12px;color:var(--text);margin-bottom:8px">
-        💡 How Model Prompt Caching Works (Model: ${escHtml(pricing.name)}):
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;font-size:11px;line-height:1.5">
-        <div style="background:var(--bg-3);padding:10px 12px;border-radius:var(--radius-sm);border-left:3px solid #f59e0b">
-          <strong style="color:#f59e0b;font-size:11.5px">✍️ What is Cache Write?</strong>
-          <p style="color:var(--text-2);margin-top:4px">
-            When you send a request to <strong>${escHtml(pricing.name)}</strong>, the model provider checks for matching prompt prefixes in memory. If new system instructions, tools, or files are added, it writes the prompt prefix into memory as a <strong>5-minute KV Cache Breakpoint</strong>.
-          </p>
-          <div style="color:var(--text-3);font-size:10px;margin-top:4px">
-            • <strong>Rate:</strong> $${pricing.cacheWrite.toFixed(2)} / 1M tokens (initial creation charge).
-          </div>
-        </div>
-
-        <div style="background:var(--bg-3);padding:10px 12px;border-radius:var(--radius-sm);border-left:3px solid var(--green)">
-          <strong style="color:var(--green);font-size:11.5px">📖 What is Cache Read?</strong>
-          <p style="color:var(--text-2);margin-top:4px">
-            On subsequent turns, the model matches your prompt prefix against active KV memory. Instead of re-reading and re-computing tokens, it reads them directly from memory!
-          </p>
-          <div style="color:var(--green);font-size:10px;margin-top:4px;font-weight:bold">
-            • <strong>Rate:</strong> $${pricing.cacheRead.toFixed(2)} / 1M tokens (<strong>${pricing.discount} Discount</strong> vs $${pricing.uncached.toFixed(2)} uncached).
-          </div>
-        </div>
+        <div style="font-size:10.5px;color:var(--text-3)">${w1hTokens > 0 ? `⏱ ${fmtTokens(w1hTokens)} at 1-hour TTL${w5mTokens > 0 ? ` · ${fmtTokens(w5mTokens)} at 5-minute` : ''}` : (totalWrites > 0 ? '⏱ 5-minute TTL' : 'no explicit cache writes')}</div>
       </div>
     </div>
 
@@ -1566,22 +1599,31 @@ function renderCacheObservabilityPanel(body, calls) {
               <th style="padding:8px 12px">Cache Reads</th>
               <th style="padding:8px 12px">Cache Writes</th>
               <th style="padding:8px 12px">Uncached Input</th>
-              <th style="padding:8px 12px">Est. Cost</th>
+              <th style="padding:8px 12px">Cost</th>
+              <th style="padding:8px 12px">TTL</th>
               <th style="padding:8px 12px">Cache Status</th>
             </tr>
           </thead>
           <tbody>
             ${calls.map(c => {
+              const a = c.cache || null;
               const isHit = c.cacheReads > 0;
               const isWrite = c.cacheWrites > 0;
+              const discTip = (a && a.rates && a.rates.input > 0 && a.rates.cacheRead != null) ? ` (${Math.round((1 - a.rates.cacheRead / a.rates.input) * 100)}% cheaper than plain input for this model)` : '';
               let badge = '<span style="color:var(--text-3)" title="No provider-reported prompt cache reads or writes for this request">Uncached</span>';
-              if (isHit && isWrite) {
-                badge = `<span style="background:rgba(34,197,94,0.15);color:var(--green);padding:2px 8px;border-radius:10px;font-weight:bold;font-size:10px" title="${fmtTokens(c.cacheReads)} input tokens were read from a matching cached prompt prefix at the cache-read rate; ${fmtTokens(c.cacheWrites)} tokens were also written as a new cache breakpoint for future requests.">🎯 Cache Read + Write</span>`;
+              if (a && a.isSpike) {
+                const st = LEVEL_STYLE[a.evidenceLevel] || LEVEL_STYLE.inferred;
+                badge = `<span style="background:rgba(248,113,113,0.16);color:#f87171;padding:2px 8px;border-radius:10px;font-weight:bold;font-size:10px" title="${escHtml(a.message.text)}">⚠️ ${escHtml(CAUSE_LABELS[a.cause] || a.cause)} · +${fmtCost(a.excessCost)}</span> <span title="${escHtml(st.tip)}" style="color:${st.c};font-size:10px">●</span>`;
+              } else if (isHit && isWrite) {
+                badge = `<span style="background:rgba(34,197,94,0.15);color:var(--green);padding:2px 8px;border-radius:10px;font-weight:bold;font-size:10px" title="${fmtTokens(c.cacheReads)} tokens were read from a matching cached prefix${discTip}; ${fmtTokens(c.cacheWrites)} tokens were also written as a new cache breakpoint for future requests.">🎯 Cache Read + Write</span>`;
               } else if (isHit) {
-                badge = `<span style="background:rgba(34,197,94,0.15);color:var(--green);padding:2px 8px;border-radius:10px;font-weight:bold;font-size:10px" title="${fmtTokens(c.cacheReads)} input tokens were read from a matching cached prompt prefix at the cache-read rate, which is ${pricing.discount} cheaper than uncached input for this model.">🎯 Cache Read (${pricing.discount} cheaper)</span>`;
+                badge = `<span style="background:rgba(34,197,94,0.15);color:var(--green);padding:2px 8px;border-radius:10px;font-weight:bold;font-size:10px" title="${fmtTokens(c.cacheReads)} tokens were read from a matching cached prefix${discTip}.">🎯 Cache Read</span>`;
               } else if (isWrite) {
-                badge = '<span style="background:rgba(245,158,11,0.15);color:#f59e0b;padding:2px 8px;border-radius:10px;font-weight:bold;font-size:10px" title="The provider wrote prompt-prefix tokens into its prompt cache so later requests can reuse them if the prefix matches.">✍️ Cache Write</span>';
+                badge = `<span style="background:rgba(245,158,11,0.15);color:#f59e0b;padding:2px 8px;border-radius:10px;font-weight:bold;font-size:10px" title="${escHtml(a ? a.message.text : 'The provider wrote prompt-prefix tokens into its prompt cache so later requests can reuse them if the prefix matches.')}">✍️ ${a && a.cause === 'first_call' ? 'First write' : 'Cache Write'}</span>`;
               }
+              const ttlCell = a && a.ttl && a.ttl !== 'n/a'
+                ? `<span class="mono" style="font-size:10px;color:${a.ttl === '1h' ? '#38bdf8' : 'var(--text-2)'}" title="TTL source: ${escHtml(a.ttlSource || '')}${a.write1hTokens ? ' · 1h writes ' + fmtTokens(a.write1hTokens) : ''}${a.write5mTokens ? ' · 5m writes ' + fmtTokens(a.write5mTokens) : ''}">${escHtml(a.ttl)}</span>`
+                : '<span style="color:var(--text-3)">—</span>';
 
               const isParallel = c.isParallel || (c.toolCount > 1);
               let toolsCell = '<span style="color:var(--text-3)">—</span>';
@@ -1594,7 +1636,7 @@ function renderCacheObservabilityPanel(body, calls) {
               }
 
               return `
-                <tr class="pa-cache-row" data-call-idx="${c.index}" style="border-bottom:1px solid var(--border);background:var(--bg-2);cursor:pointer">
+                <tr class="pa-cache-row" data-call-idx="${c.index}" style="border-bottom:1px solid var(--border);background:${a && a.isSpike ? 'rgba(248,113,113,0.07)' : 'var(--bg-2)'};cursor:pointer">
                   <td style="padding:8px 12px;color:var(--text-3);font-size:10px">▶</td>
                   <td style="padding:8px 12px;font-weight:bold">Call #${c.index + 1}</td>
                   <td style="padding:8px 12px;color:var(--text-3)">${fmtTime(c.ts)}</td>
@@ -1602,11 +1644,12 @@ function renderCacheObservabilityPanel(body, calls) {
                   <td class="mono" style="padding:8px 12px;color:${isHit ? 'var(--green)' : 'var(--text-3)'};font-weight:${isHit ? 'bold' : 'normal'}">${fmtTokens(c.cacheReads)}</td>
                   <td class="mono" style="padding:8px 12px;color:${isWrite ? '#f59e0b' : 'var(--text-3)'}">${fmtTokens(c.cacheWrites)}</td>
                   <td class="mono" style="padding:8px 12px;color:var(--text-2)">${fmtTokens(c.tokensIn)}</td>
-                  <td class="mono" style="padding:8px 12px;color:var(--text-2)">${fmtCost(c.cost)}</td>
+                  <td class="mono" style="padding:8px 12px;color:${a && a.isSpike ? '#f87171' : 'var(--text-2)'};font-weight:${a && a.isSpike ? 'bold' : 'normal'}">${fmtCost(c.cost)}</td>
+                  <td style="padding:8px 12px">${ttlCell}</td>
                   <td style="padding:8px 12px">${badge}</td>
                 </tr>
                 <tr id="pa-cache-expand-${c.index}" style="display:none;background:var(--bg-1)">
-                  <td colspan="9" style="padding:12px;border-bottom:1px solid var(--border)">
+                  <td colspan="10" style="padding:12px;border-bottom:1px solid var(--border)">
                     <div class="pa-cache-expand-content" data-loaded="false">
                       <div class="loading-state" style="padding:10px"><div class="spinner"></div><p>Loading prompt diff comparison for Call #${c.index + 1}...</p></div>
                     </div>
@@ -1621,6 +1664,15 @@ function renderCacheObservabilityPanel(body, calls) {
   `;
 
   bindCacheTableEvents(calls);
+  body.querySelectorAll('.pa-jump-spike').forEach((a) => {
+    a.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      const row = body.querySelector(`.pa-cache-row[data-call-idx="${a.dataset.idx}"]`);
+      if (!row) return;
+      row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (document.getElementById(`pa-cache-expand-${a.dataset.idx}`)?.style.display === 'none') row.click();
+    });
+  });
 }
 
 function renderTurnToolsBanner(call) {
@@ -2785,17 +2837,20 @@ function renderCallPillsStrip(calls, container) {
         const hasScratch = (c.scratchOffloadedBytes || 0) > 50;
         const hasErr = c.hasError;
         const isParallel = c.isParallel || (c.toolCount > 1);
+        const spike = c.cache && c.cache.isSpike ? c.cache : null;
 
         let badge = hasErr ? '⚠️' : (hasFile ? (hasScratch ? '📁⚡' : '📁') : (hasCmd ? '💻' : (hasScratch ? '⚡' : '')));
         if (hasErr && (hasFile || hasScratch)) badge = hasScratch ? '⚠️⚡' : '⚠️📁';
         if (isParallel) badge = `⚡${c.toolCount}` + (hasErr ? ' ⚠️' : '');
+        if (spike) badge = '💸' + (badge ? ' ' + badge : '');
 
-        const bg = isFocused ? '#0284c7' : (hasErr ? 'rgba(239,68,68,0.18)' : (isParallel ? 'rgba(56,189,248,0.15)' : (hasFile ? 'rgba(16,185,129,0.15)' : (hasCmd ? 'rgba(6,182,212,0.15)' : (hasScratch ? 'rgba(232,121,249,0.15)' : 'var(--bg-3)')))));
-        const border = isFocused ? '#38bdf8' : (hasErr ? '#ef4444' : (isParallel ? '#0284c7' : (hasFile ? '#10b981' : (hasCmd ? '#06b6d4' : (hasScratch ? '#e879f9' : 'var(--border)')))));
-        const color = isFocused ? '#ffffff' : (hasErr ? '#f87171' : (isParallel ? '#38bdf8' : (hasFile ? '#10b981' : (hasCmd ? '#06b6d4' : (hasScratch ? '#e879f9' : 'var(--text-2)')))));
+        const bg = isFocused ? '#0284c7' : (spike ? 'rgba(248,113,113,0.2)' : hasErr ? 'rgba(239,68,68,0.18)' : (isParallel ? 'rgba(56,189,248,0.15)' : (hasFile ? 'rgba(16,185,129,0.15)' : (hasCmd ? 'rgba(6,182,212,0.15)' : (hasScratch ? 'rgba(232,121,249,0.15)' : 'var(--bg-3)')))));
+        const border = isFocused ? '#38bdf8' : (spike ? '#f87171' : hasErr ? '#ef4444' : (isParallel ? '#0284c7' : (hasFile ? '#10b981' : (hasCmd ? '#06b6d4' : (hasScratch ? '#e879f9' : 'var(--border)')))));
+        const color = isFocused ? '#ffffff' : (spike ? '#f87171' : hasErr ? '#f87171' : (isParallel ? '#38bdf8' : (hasFile ? '#10b981' : (hasCmd ? '#06b6d4' : (hasScratch ? '#e879f9' : 'var(--text-2)')))));
 
         const errTitle = hasErr ? ` [⚠️ Error: ${c.errorDetails?.message || 'Failed'}]` : '';
-        const toolTitle = isParallel ? ` · ⚡ ${c.toolCount} parallel tools` : (c.toolCount === 1 ? ` · 🔧 1 tool` : '');
+        const toolTitle = (isParallel ? ` · ⚡ ${c.toolCount} parallel tools` : (c.toolCount === 1 ? ` · 🔧 1 tool` : ''))
+          + (spike ? ` · 💸 cache miss: ${spike.message.title} (+${fmtCost(spike.excessCost)} extra)` : '');
 
         return `
           <button class="pa-call-pill-btn" data-call="${idx}" style="background:${bg};border:1px solid ${border};color:${color};padding:2px 7px;border-radius:4px;font-size:10.5px;font-weight:bold;cursor:pointer;white-space:nowrap;transition:all 0.15s;display:flex;align-items:center;gap:3px" title="Call #${idx + 1} (${fmtBytes(c.requestSize)})${toolTitle}${errTitle} - Click to isolate & view diff">

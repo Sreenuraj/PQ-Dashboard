@@ -15,3 +15,5 @@ start.cmd
 scripts/**
 scratch/**
 .postqode/**
+
+tests/**

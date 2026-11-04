@@ -14,6 +14,8 @@ let registry = {};    // { modelId -> info } — after promotion
 let rawEntries = {};  // { modelId -> info } — as-is from files, before promotion
 let lastFetchTs = 0;
 let isFetchingLive = false;
+let livePromise = null;     // in-flight live fetch (callers can await it)
+let registryVersion = 0;   // bumps whenever the registry content changes (lets dependants rebuild indexes)
 
 function loadModelRegistry(sources) {
   registry = {};
@@ -36,6 +38,7 @@ function loadModelRegistry(sources) {
   }
 
   promoteMaxContextVariants();
+  registryVersion++;
   console.log(`[model-registry] Loaded ${Object.keys(registry).length} unique models from ${loaded} files`);
 
   // 3. Trigger asynchronous live refresh in background
@@ -49,12 +52,13 @@ function loadModelRegistry(sources) {
  */
 function fetchLiveOpenRouterModels() {
   const now = Date.now();
+  if (isFetchingLive && livePromise) return livePromise;
   if (isFetchingLive || (now - lastFetchTs < 30 * 60 * 1000 && Object.keys(registry).length > 100)) {
     return Promise.resolve(registry);
   }
 
   isFetchingLive = true;
-  return new Promise((resolve) => {
+  livePromise = new Promise((resolve) => {
     const req = https.get('https://openrouter.ai/api/v1/models', {
       headers: { 'User-Agent': 'PQ-Dashboard/1.0' },
       timeout: 10000,
@@ -79,6 +83,7 @@ function fetchLiveOpenRouterModels() {
               const outputPrice = m.pricing?.completion ? parseFloat(m.pricing.completion) * 1000000 : null;
               const cacheReadsPrice = m.pricing?.input_cache_read ? parseFloat(m.pricing.input_cache_read) * 1000000 : null;
               const cacheWritesPrice = m.pricing?.input_cache_write ? parseFloat(m.pricing.input_cache_write) * 1000000 : null;
+              const cacheWrites1hPrice = m.pricing?.input_cache_write_1h ? parseFloat(m.pricing.input_cache_write_1h) * 1000000 : null;
 
               mapped[m.id] = {
                 contextWindow: m.context_length || null,
@@ -87,6 +92,7 @@ function fetchLiveOpenRouterModels() {
                 outputPrice,
                 cacheReadsPrice,
                 cacheWritesPrice,
+                cacheWrites1hPrice,
                 supportsImages: m.architecture?.modality?.includes('image') || false,
                 supportsPromptCache: !!(cacheReadsPrice || cacheWritesPrice),
                 description: m.description || '',
@@ -102,9 +108,18 @@ function fetchLiveOpenRouterModels() {
             for (const [id, info] of Object.entries(mapped)) {
               rawEntries[id] = info;
               if (!registry[id] || (info.contextWindow && info.contextWindow > (registry[id].contextWindow || 0))) {
-                registry[id] = { ...info, source: 'openrouter-live' };
+                // keep tiers / 1h price an older local catalog already carried for this id
+                const prior = registry[id] || {};
+                registry[id] = { ...info, tiers: prior.tiers || null, cacheWrites1hPrice: info.cacheWrites1hPrice || prior.cacheWrites1hPrice || null, source: 'openrouter-live' };
+              } else {
+                // existing entry wins for prices, but local caches predate the 1h write price: fill it in
+                if (info.cacheWrites1hPrice && !registry[id].cacheWrites1hPrice) registry[id].cacheWrites1hPrice = info.cacheWrites1hPrice;
               }
+              // the un-promoted variants (":free", etc.) too
+              const norm = id.replace(/:free$/, '');
+              if (norm !== id && registry[norm] && info.cacheWrites1hPrice && !registry[norm].cacheWrites1hPrice) registry[norm].cacheWrites1hPrice = info.cacheWrites1hPrice;
             }
+            registryVersion++;
             promoteMaxContextVariants();
             console.log(`[model-registry] Successfully refreshed ${Object.keys(mapped).length} live models from OpenRouter API`);
           }
@@ -127,6 +142,7 @@ function fetchLiveOpenRouterModels() {
       resolve(registry);
     });
   });
+  return livePromise;
 }
 
 /**
@@ -173,6 +189,9 @@ function loadModelFile(filePath, source) {
         outputPrice: info.outputPrice || null,
         cacheReadsPrice: info.cacheReadsPrice || null,
         cacheWritesPrice: info.cacheWritesPrice || null,
+        // 1-hour TTL cache-write price and long-context price tiers (when the catalog provides them)
+        cacheWrites1hPrice: info.cacheWrites1hPrice || null,
+        tiers: Array.isArray(info.tiers) && info.tiers.length ? info.tiers : null,
         supportsImages: info.supportsImages || false,
         supportsPromptCache: info.supportsPromptCache || false,
         source,
@@ -203,108 +222,6 @@ function loadModelFile(filePath, source) {
 }
 
 /**
- * Intelligent Fallback for standard AI frontier models when offline or unindexed.
- */
-function inferModelFallback(modelId) {
-  if (!modelId) return null;
-  const m = modelId.toLowerCase();
-
-  // Gemini models (1M to 2M tokens)
-  if (m.includes('gemini-3.7') || m.includes('gemini-3.6') || m.includes('gemini-3.5') || m.includes('gemini-2.5') || m.includes('gemini-flash') || m.includes('gemini-pro')) {
-    const isPro = m.includes('pro');
-    return {
-      contextWindow: 1048576, // 1M tokens
-      maxTokens: 65536,
-      inputPrice: isPro ? 1.25 : 0.375,
-      outputPrice: isPro ? 10.0 : 1.875,
-      cacheReadsPrice: isPro ? 0.125 : 0.09375,
-      cacheWritesPrice: isPro ? 0.375 : 0,
-      supportsImages: true,
-      supportsPromptCache: true,
-      source: 'inferred-gemini',
-    };
-  }
-
-  // Claude models (200K or 1M tokens)
-  if (m.includes('claude-3-7') || m.includes('claude-3.7') || m.includes('claude-3-5') || m.includes('claude-sonnet') || m.includes('claude-opus')) {
-    const is1M = m.includes('1m') || m.includes('extended');
-    return {
-      contextWindow: is1M ? 1000000 : 200000,
-      maxTokens: 64000,
-      inputPrice: 3.0,
-      outputPrice: 15.0,
-      cacheReadsPrice: 0.30,
-      cacheWritesPrice: 3.75,
-      supportsImages: true,
-      supportsPromptCache: true,
-      source: 'inferred-claude',
-    };
-  }
-
-  // DeepSeek models (64K or 128K tokens)
-  if (m.includes('deepseek')) {
-    return {
-      contextWindow: 131072,
-      maxTokens: 8192,
-      inputPrice: 0.14,
-      outputPrice: 0.28,
-      cacheReadsPrice: 0.014,
-      cacheWritesPrice: 0.14,
-      supportsImages: false,
-      supportsPromptCache: true,
-      source: 'inferred-deepseek',
-    };
-  }
-
-  // OpenAI GPT-4o / GPT-4.5 / o1 / o3
-  if (m.includes('gpt-4') || m.includes('o1') || m.includes('o3') || m.includes('chatgpt')) {
-    return {
-      contextWindow: 128000,
-      maxTokens: 16384,
-      inputPrice: 2.5,
-      outputPrice: 10.0,
-      cacheReadsPrice: 1.25,
-      cacheWritesPrice: 0,
-      supportsImages: true,
-      supportsPromptCache: true,
-      source: 'inferred-openai',
-    };
-  }
-
-  // Moonshot Kimi
-  if (m.includes('kimi')) {
-    return {
-      contextWindow: 262144,
-      maxTokens: 8192,
-      inputPrice: 0.6,
-      outputPrice: 2.4,
-      cacheReadsPrice: 0.15,
-      cacheWritesPrice: 0,
-      supportsImages: false,
-      supportsPromptCache: true,
-      source: 'inferred-kimi',
-    };
-  }
-
-  // GLM
-  if (m.includes('glm')) {
-    return {
-      contextWindow: 131072,
-      maxTokens: 4096,
-      inputPrice: 0.5,
-      outputPrice: 1.0,
-      cacheReadsPrice: 0.1,
-      cacheWritesPrice: 0,
-      supportsImages: false,
-      supportsPromptCache: true,
-      source: 'inferred-glm',
-    };
-  }
-
-  return null;
-}
-
-/**
  * Multi-step model ID resolution:
  *  1. Exact key match
  *  2. Strip provider prefix (e.g. "postqode:google/gemini-3.7-flash" -> "google/gemini-3.7-flash")
@@ -313,7 +230,9 @@ function inferModelFallback(modelId) {
  *  5. Strip ~ and :free
  *  6. Bare name without provider prefix (e.g. "gemini-3.7-flash", "kimi-k2.6")
  *  7. Fuzzy substring matching
- *  8. Intelligent fallback inference
+ *
+ * Nothing is invented: when no catalog (extension cache files, Vercel gateway list, live OpenRouter list)
+ * knows a model, null is returned and callers show "unknown" instead of guessed prices.
  */
 function getModelInfo(modelId) {
   if (!modelId) return null;
@@ -353,16 +272,6 @@ function getModelInfo(modelId) {
     if (keyLower.includes(cleanLower) || cleanLower.includes(keyLower)) return info;
   }
 
-  // 7. Fallback to model family inference
-  const inferred = inferModelFallback(cleanId);
-  if (inferred) {
-    // Cache inferred entry so future lookups are instant
-    registry[cleanId] = inferred;
-    // Trigger background refresh in case OpenRouter has updated specs
-    fetchLiveOpenRouterModels().catch(() => {});
-    return inferred;
-  }
-
   return null;
 }
 
@@ -370,4 +279,8 @@ function getAllModels() {
   return registry;
 }
 
-module.exports = { loadModelRegistry, getModelInfo, getAllModels, fetchLiveOpenRouterModels };
+function getRegistryVersion() {
+  return registryVersion;
+}
+
+module.exports = { loadModelRegistry, getModelInfo, getAllModels, getRegistryVersion, fetchLiveOpenRouterModels };
