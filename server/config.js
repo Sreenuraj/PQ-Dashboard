@@ -25,6 +25,25 @@ function resolvePath(p) {
   return path.normalize(resolved);
 }
 
+function resolveDbPath(p) {
+  if (!p) p = './data/dashboard.db';
+  const resolved = resolvePath(p);
+  const userDb = path.join(USER_CONFIG_DIR, 'dashboard.db');
+  
+  // If persistent user database exists and is populated (> 100KB), prefer it so extension reinstalls don't lose data
+  if (fs.existsSync(userDb)) {
+    try {
+      if (fs.statSync(userDb).size > 100000) return userDb;
+    } catch {}
+  }
+  
+  if (path.isAbsolute(resolved) && fs.existsSync(resolved)) return resolved;
+  const localDb = path.resolve(resolved);
+  if (fs.existsSync(localDb)) return localDb;
+  
+  return userDb;
+}
+
 function loadConfig() {
   const cfgPath = getConfigPath();
   let raw = '';
@@ -83,10 +102,11 @@ function loadConfig() {
   };
 
   config.cache = {
-    db_path: './data/dashboard.db',
+    db_path: resolveDbPath(config.cache?.db_path),
     incremental: true,
     ...config.cache
   };
+  config.cache.db_path = resolveDbPath(config.cache.db_path);
 
   config.server = {
     port: 3456,

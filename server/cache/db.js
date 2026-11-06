@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const Database = require('better-sqlite3');
 const { computeSessionMetrics } = require('../analytics/metrics');
 
@@ -7,9 +8,22 @@ let db;
 
 function getDB(dbPath) {
   if (db) return db;
-  const dir = path.dirname(dbPath);
+  let finalPath = dbPath;
+  const userDb = path.join(os.homedir(), '.pq-dashboard', 'dashboard.db');
+  if (finalPath) {
+    if (finalPath.startsWith('~')) {
+      finalPath = path.join(os.homedir(), finalPath.slice(1));
+    }
+    // If provided path doesn't exist or is empty (< 100KB), but userDb exists and is populated
+    if ((!fs.existsSync(finalPath) || (fs.existsSync(finalPath) && fs.statSync(finalPath).size < 100000)) && fs.existsSync(userDb) && fs.statSync(userDb).size > 100000) {
+      finalPath = userDb;
+    }
+  } else {
+    finalPath = fs.existsSync(userDb) ? userDb : './data/dashboard.db';
+  }
+  const dir = path.dirname(finalPath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  db = new Database(dbPath);
+  db = new Database(finalPath);
   db.pragma('journal_mode = WAL');
   initSchema(db);
   return db;

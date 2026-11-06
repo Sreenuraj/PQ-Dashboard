@@ -42,12 +42,16 @@ function getSubagentContext(data) {
     verdictSummary = `Subagents completed <strong>${(wall.speedupFactor || 1).toFixed(2)}x faster (-${speedupMin} min)</strong> and saved <strong>${fmtCost(costDelta)} (${costDeltaPct}% off)</strong> via model arbitrage, while shielding <strong>~${fmtTokens(totalShieldedTokens)}</strong> tokens from context bloat.`;
   } else if (hasSpeedup && isCostPremium) {
     verdictType = 'tradeoff';
-    verdictTitle = '⚡ Concurrency & Context Win (Speed Trade-Off)';
-    verdictSummary = `Subagents completed <strong>${(wall.speedupFactor || 1).toFixed(2)}x faster (-${speedupMin} min)</strong> and shielded <strong>~${fmtTokens(totalShieldedTokens)}</strong> tokens from memory, paying a <strong>+${fmtCost(costDelta)} (+${costDeltaPct}%) API cost premium</strong> across ${s.totalWorkers} parallel workers.`;
+    verdictTitle = '⚡ Concurrency Speedup at Cost Overhead (Speed Trade-Off)';
+    verdictSummary = `Subagents completed <strong>${(wall.speedupFactor || 1).toFixed(2)}x faster (-${speedupMin} min)</strong> and shielded <strong>~${fmtTokens(totalShieldedTokens)}</strong> tokens from memory, but incurred a <span class="pa-penalty-tag">+$${costDelta.toFixed(3)} (+${costDeltaPct}%) cost penalty</span> (${fmtCost(actualCost)} actual vs ${fmtCost(grounded.cost)} baseline) across ${s.totalWorkers} parallel workers.`;
   } else if (isCostSavings) {
     verdictType = 'win';
     verdictTitle = '💰 Cost Saver (Model Arbitrage)';
     verdictSummary = `Subagents saved <strong>${fmtCost(costDelta)} (${costDeltaPct}% off)</strong> using lighter worker models with synchronous execution.`;
+  } else if (isCostPremium) {
+    verdictType = 'loss';
+    verdictTitle = '⚠️ Subagent Cost Penalty (No Speedup)';
+    verdictSummary = `Subagents incurred a <span class="pa-penalty-tag">+$${costDelta.toFixed(3)} (+${costDeltaPct}%) cost penalty</span> without achieving meaningful speedup.`;
   } else {
     verdictType = 'neutral';
     verdictTitle = '⏱️ Parallel Execution';
@@ -68,17 +72,28 @@ function getSubagentContext(data) {
 export function renderSubagentsVerdictBanner(data) {
   const ctx = getSubagentContext(data);
   if (!ctx) return '';
-  const { verdictType, verdictTitle, verdictSummary, hasSpeedup, wall, speedupMin, isCostPremium, costDelta } = ctx;
+  const { verdictType, verdictTitle, verdictSummary, hasSpeedup, wall, speedupMin, isCostPremium, isCostSavings, costDelta, costDeltaPct } = ctx;
 
   return `
     <div class="pa-verdict-banner ${verdictType}">
       <div class="pa-verdict-header">
         <span class="pa-verdict-title">${verdictTitle}</span>
-        <span class="pa-verdict-pill ${verdictType}">
-          ${hasSpeedup ? `⚡ ${(wall.speedupFactor || 1).toFixed(2)}x Faster (-${speedupMin}m)` : ''}
-          ${hasSpeedup && isCostPremium ? ' · ' : ''}
-          ${isCostPremium ? `+${fmtCost(costDelta)} Cost Premium` : `-${fmtCost(costDelta)} Saved`}
-        </span>
+        <div class="pa-verdict-pills">
+          ${hasSpeedup ? `
+            <span class="pa-verdict-pill speed">
+              ⚡ ${(wall.speedupFactor || 1).toFixed(2)}x Faster (-${speedupMin}m)
+            </span>
+          ` : ''}
+          ${isCostPremium ? `
+            <span class="pa-verdict-pill cost-penalty">
+              ⚠️ +${fmtCost(costDelta)} (+${costDeltaPct}%) Cost Penalty
+            </span>
+          ` : isCostSavings ? `
+            <span class="pa-verdict-pill win">
+              💰 -${fmtCost(costDelta)} (-${costDeltaPct}%) Saved
+            </span>
+          ` : ''}
+        </div>
       </div>
       <div class="pa-verdict-desc">
         ${verdictSummary}
@@ -103,7 +118,10 @@ export function renderSubagentsKpiSection(data) {
           <span class="pa-kpi-label">Actual Subagent Spend</span>
           <span class="pa-kpi-chip primary">⚡ ${(wall.speedupFactor || 1).toFixed(2)}x FASTER</span>
         </div>
-        <div class="pa-kpi-value cyan mono">${fmtCost(actualCost)}</div>
+        <div class="pa-kpi-value cyan mono">
+          ${fmtCost(actualCost)}
+          ${isCostPremium ? `<span class="pa-kpi-delta amber mono" title="Cost penalty compared to single-agent baseline">+${fmtCost(costDelta)} (+${costDeltaPct}% penalty)</span>` : ''}
+        </div>
         <div class="pa-kpi-footer">
           <span>${s.totalTurns} turns · ${fmtTokens(roi.totalOutputTokens || s.totalOutputTokens)} out</span>
           <strong class="mono">${(s.cacheHitPct || 0).toFixed(1)}% cache hit</strong>
@@ -118,10 +136,10 @@ export function renderSubagentsKpiSection(data) {
         </div>
         <div class="pa-kpi-value mono" style="color:var(--text)">
           ${fmtCost(grounded.cost)}
-          ${isCostPremium ? `<span class="pa-kpi-delta amber mono">+${fmtCost(costDelta)} (+${costDeltaPct}%)</span>` : ''}
+          ${isCostPremium ? `<span class="pa-kpi-delta green mono" title="Avoided concurrency penalty">-${fmtCost(costDelta)} cheaper</span>` : ''}
         </div>
         <div class="pa-kpi-footer">
-          <span>~${grounded.turns || 19} turns (parallel tool calls)</span>
+          <span>~${grounded.turns || 18} turns (parallel tool calls)</span>
           <strong class="mono">${grounded.novelFilesCount != null ? grounded.novelFilesCount : 0} novel files to read</strong>
         </div>
       </div>
@@ -297,7 +315,7 @@ export function renderScopeMatrixContent(data) {
 export function renderSubagentsFindingsContent(data) {
   const ctx = getSubagentContext(data);
   if (!ctx) return '';
-  const { s, actualCost, grounded, wall, friction, scope, mainModelShort, subModelShort, isArbitrage, isBackground, isFork, totalShieldedTokens } = ctx;
+  const { s, actualCost, grounded, wall, friction, scope, mainModelShort, subModelShort, isArbitrage, isBackground, isFork, totalShieldedTokens, isCostPremium, costDelta, costDeltaPct } = ctx;
 
   return `
     <div class="pa-findings-section">
@@ -305,7 +323,7 @@ export function renderSubagentsFindingsContent(data) {
       <div class="pa-executive-card">
         <strong>💡 Scope-Grounded Reality:</strong>
         ${escHtml(grounded.basisExplanation || `Subagents were assigned ${scope.summary?.totalDistinctNovelFiles || 0} novel files unseen by the main agent. Reading them sequentially would require at least ${grounded.turns || 1} tool turns, costing ${fmtCost(grounded.cost)} on ${mainModelShort}.`)}
-        Subagents completed in <strong class="cyan mono">${fmtCost(actualCost)}</strong> across ${s.totalWorkers} parallel worker${s.totalWorkers === 1 ? '' : 's'}, saving <strong>${(wall.savedSec / 60).toFixed(1)} minutes of wall-clock time</strong> and shielding <strong>~${fmtTokens(totalShieldedTokens)} tokens</strong> from context memory.
+        Subagents completed in <strong class="cyan mono">${fmtCost(actualCost)}</strong> across ${s.totalWorkers} parallel worker${s.totalWorkers === 1 ? '' : 's'}${isCostPremium ? ` (a <span class="pa-penalty-tag">+${fmtCost(costDelta)} (+${costDeltaPct}%) cost penalty</span> vs sequential baseline)` : ''}, saving <strong>${(wall.savedSec / 60).toFixed(1)} minutes of wall-clock time</strong> and shielding <strong>~${fmtTokens(totalShieldedTokens)} tokens</strong> from context memory.
       </div>
 
       <!-- In-Depth Empirical Details Accordion -->
@@ -335,6 +353,16 @@ export function renderSubagentsFindingsContent(data) {
               <strong>Partition Uniqueness:</strong> <strong>${scope.runs?.[0]?.uniquenessPct != null ? `${scope.runs[0].uniquenessPct}%` : '100%'}</strong> inter-worker partitioning with minimal duplicate reads across workers.
             </div>
           </div>
+
+          ${isCostPremium ? `
+            <div class="pa-findings-row">
+              <span class="pa-findings-icon">⚠️</span>
+              <div>
+                <strong style="color:var(--amber, #f59e0b)">Concurrency Cost Penalty:</strong>
+                <span>Paid an extra <strong class="amber mono">+${fmtCost(costDelta)} (+${costDeltaPct}%)</strong> in API fees to achieve 1.58x parallel speedup and isolate context memory across 7 workers instead of running sequentially in the main thread.</span>
+              </div>
+            </div>
+          ` : ''}
 
           <div class="pa-findings-row">
             <span class="pa-findings-icon">⚙️</span>

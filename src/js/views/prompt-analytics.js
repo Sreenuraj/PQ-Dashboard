@@ -2543,8 +2543,8 @@ function renderSubagentWorkerCardsMarkup(subagentData, callIdx) {
           <div style="background:var(--surface-sub);border:1px solid ${roi.isNetSavings ? 'rgba(16,185,129,0.35)' : 'rgba(245,158,11,0.35)'};border-left:3px solid ${roi.isNetSavings ? '#10b981' : '#f59e0b'};padding:14px 18px;border-radius:8px;margin-top:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px">
             <div style="flex:1;min-width:300px">
               <div style="font-weight:600;font-size:12px;color:${roi.isNetSavings ? '#10b981' : '#f59e0b'};display:flex;align-items:center;gap:6px">
-                <span>${roi.isNetSavings ? '💰' : '⚡'}</span>
-                <span>Call Economics: Parallel Subagents vs Monolithic Main Agent</span>
+                <span>${roi.isNetSavings ? '💰' : '⚠️'}</span>
+                <span>Call Economics: Parallel Subagents vs Monolithic Main Agent ${roi.isNetSavings ? '(Cost Savings)' : '(Cost Overhead)'}</span>
               </div>
               <div style="font-size:11.5px;color:var(--text-2);margin-top:4px;line-height:1.5">
                 Running these <strong>${workerCount} parallel workers</strong> cost <strong>${fmtCost(totalCost)}</strong> (${escHtml(roi.workerModelName || primaryModel.split('/').pop())}).
@@ -2554,10 +2554,10 @@ function renderSubagentWorkerCardsMarkup(subagentData, callIdx) {
             <div style="display:flex;gap:16px;align-items:center;border-left:1px solid var(--border-subtle);padding-left:16px">
               <div style="text-align:right">
                 <div style="font-size:10px;color:var(--text-3);text-transform:uppercase;letter-spacing:0.04em">
-                  ${roi.isNetSavings ? 'Estimated Net Savings' : 'Concurrency Speed Premium'}
+                  ${roi.isNetSavings ? 'Estimated Net Savings' : 'Cost Penalty (Speed Overhead)'}
                 </div>
                 <div class="mono" style="font-size:16px;font-weight:bold;color:${roi.isNetSavings ? '#10b981' : '#f59e0b'}">
-                  ${roi.isNetSavings ? '-' : '+'}${fmtCost(roi.savingsDollar || 0)} (${roi.savingsPct || 0}% ${roi.isNetSavings ? 'saved' : 'premium'})
+                  ${roi.isNetSavings ? '-' : '+'}${fmtCost(roi.savingsDollar || 0)} (${roi.savingsPct || 0}% ${roi.isNetSavings ? 'saved' : 'penalty'})
                 </div>
                 <div style="font-size:10.5px;color:var(--text-3);margin-top:2px">
                   ${(roi.wallClockSavedSec > 0) ? `⚡ ${(roi.wallClockSavedSec / 60).toFixed(1)}m faster wall-clock` : 'Synchronous handoff'}
