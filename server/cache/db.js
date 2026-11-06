@@ -102,6 +102,32 @@ function initSchema(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_mem_task ON task_memory_timeline(task_id, ts);
 
+    -- Stores individual turns of subagent workers.
+    -- Persisted permanently so subagent timelines can be inspected across sessions.
+    CREATE TABLE IF NOT EXISTS task_subagent_turns (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id TEXT NOT NULL,
+      parent_call_idx INTEGER NOT NULL,
+      worker_index INTEGER NOT NULL,
+      turn_number INTEGER NOT NULL,
+      ts INTEGER NOT NULL,
+      duration_ms INTEGER,
+      model_id TEXT,
+      request_size INTEGER DEFAULT 0,
+      tokens_in INTEGER DEFAULT 0,
+      tokens_out INTEGER DEFAULT 0,
+      cache_reads INTEGER DEFAULT 0,
+      cache_writes INTEGER DEFAULT 0,
+      cost REAL DEFAULT 0,
+      context_tokens INTEGER,
+      context_window INTEGER,
+      context_pct REAL,
+      tool_calls_json TEXT,
+      result_preview TEXT,
+      UNIQUE(task_id, parent_call_idx, worker_index, turn_number)
+    );
+    CREATE INDEX IF NOT EXISTS idx_subagent_turns ON task_subagent_turns(task_id, parent_call_idx, worker_index);
+
     CREATE TABLE IF NOT EXISTS events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       task_id TEXT,
@@ -693,6 +719,73 @@ function getExtensionLogEvents(db, taskId) {
   } catch { return []; }
 }
 
+function saveSubagentTurns(db, turns) {
+  if (!turns || !turns.length) return 0;
+  const ins = db.prepare(`
+    INSERT OR REPLACE INTO task_subagent_turns (
+      task_id, parent_call_idx, worker_index, turn_number, ts, duration_ms, model_id,
+      request_size, tokens_in, tokens_out, cache_reads, cache_writes, cost,
+      context_tokens, context_window, context_pct, tool_calls_json, result_preview
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const tx = db.transaction((list) => {
+    let count = 0;
+    for (const t of list) {
+      ins.run(
+        t.taskId,
+        t.parentCallIdx,
+        t.workerIndex,
+        t.turnNumber,
+        t.ts,
+        t.durationMs || 0,
+        t.modelId || '',
+        t.requestSize || 0,
+        t.tokensIn || 0,
+        t.tokensOut || 0,
+        t.cacheReads || 0,
+        t.cacheWrites || 0,
+        t.cost || 0,
+        t.contextTokens || null,
+        t.contextWindow || null,
+        t.contextPct != null ? t.contextPct : null,
+        typeof t.tools === 'object' ? JSON.stringify(t.tools) : (t.toolCallsJson || null),
+        t.resultPreview || null
+      );
+      count++;
+    }
+    return count;
+  });
+  return tx(turns);
+}
+
+function getSubagentTurns(db, taskId, parentCallIdx = null) {
+  try {
+    let sql = 'SELECT * FROM task_subagent_turns WHERE task_id = ?';
+    const params = [taskId];
+    if (parentCallIdx != null) {
+      sql += ' AND parent_call_idx = ?';
+      params.push(parentCallIdx);
+    }
+    sql += ' ORDER BY parent_call_idx ASC, worker_index ASC, turn_number ASC';
+    return db.prepare(sql).all(...params).map(r => ({
+      ...r,
+      turn: r.turn_number,
+      tokensIn: r.tokens_in,
+      tokensOut: r.tokens_out,
+      cacheReads: r.cache_reads,
+      cacheWrites: r.cache_writes,
+      requestSize: r.request_size,
+      latencyMs: r.duration_ms,
+      contextUtilizationPct: r.context_pct,
+      contextTokens: r.context_tokens,
+      contextWindowSize: r.context_window,
+      tools: r.tool_calls_json ? JSON.parse(r.tool_calls_json) : [],
+    }));
+  } catch (e) {
+    return [];
+  }
+}
+
 module.exports = {
   saveRequestFingerprint,
   getRequestFingerprints,
@@ -707,4 +800,6 @@ module.exports = {
   recordMemorySnapshot,
   getMemoryTimeline,
   getTaskSystemPrompts,
+  saveSubagentTurns,
+  getSubagentTurns,
 };

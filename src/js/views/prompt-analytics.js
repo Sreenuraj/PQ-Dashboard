@@ -549,6 +549,211 @@ function renderAnalytics(contentEl) {
       </div>
     </div>
 
+    <!-- Executive Subagents Economic ROI & Counterfactual Analysis -->
+    ${(data.subagentSummary?.hasSubagents && data.subagentSummary.roiAnalysis) ? (() => {
+      const s = data.subagentSummary;
+      const roi = s.roiAnalysis;
+      const actualCost = roi.actualCost || s.totalCost || 0;
+      const grounded = roi.groundedSingleAgent || roi.realisticFocused || { cost: actualCost, turns: s.totalTurns || 1, outputTokens: s.totalOutputTokens || 0, explorationPremium: 0, explorationPremiumPct: 0 };
+      const exh = roi.exhaustiveMonolithic || { cost: actualCost, turns: s.totalTurns || 1, sameModelCost: actualCost, arbitrageSavings: 0 };
+      const modes = roi.modes || {};
+      const wall = roi.wallClock || { actualSec: 0, sequentialSec: 0, savedSec: 0, speedupFactor: 1 };
+      const friction = roi.scratchFriction || { redundantCost: roi.redundantWorkCost || 0, redundantTurns: 0, scratchBytes: 0 };
+      const scope = roi.scopeAnalysis || { runs: [], summary: {} };
+
+      const mainModelShort = (modes.arbitrage?.mainModel || roi.modelArbitrage?.mainModel || 'opus').split('/').pop().replace('claude-', '').replace('latest', '');
+      const subModelShort = (modes.arbitrage?.subagentModel || roi.modelArbitrage?.subagentModel || 'sonnet').split('/').pop().replace('claude-', '').replace('latest', '');
+      const isArbitrage = modes.arbitrage?.isActive !== false;
+      const isBackground = modes.concurrency?.isBackground || false;
+      const isFork = modes.context?.isFork || false;
+
+      return `
+        <div style="margin-bottom:16px;background:linear-gradient(135deg, rgba(99,102,241,0.08), rgba(56,189,248,0.04));border:1px solid rgba(99,102,241,0.35);border-radius:var(--radius-sm);padding:14px;box-shadow:var(--shadow-sm)">
+          <!-- Panel Header with Settings Modes -->
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <span style="font-weight:bold;font-size:13px;color:#a5b4fc;display:flex;align-items:center;gap:6px">
+                <span>🤖</span> <span>Subagents Engineering Economics & Empirical Scope Analysis</span>
+              </span>
+              <span class="mono" style="background:rgba(99,102,241,0.22);color:#c7d2fe;padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:bold;border:1px solid rgba(99,102,241,0.35)">
+                ${s.totalRuns} Run${s.totalRuns === 1 ? '' : 's'} · ${s.totalWorkers} Worker${s.totalWorkers === 1 ? '' : 's'} · ${s.totalTurns} Turn${s.totalTurns === 1 ? '' : 's'}
+              </span>
+              <!-- Setting 1: Subagent Model / Arbitrage -->
+              <span class="mono" style="background:${isArbitrage ? 'rgba(56,189,248,0.18)' : 'rgba(148,163,184,0.18)'};color:${isArbitrage ? '#38bdf8' : '#cbd5e1'};padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:bold" title="Settings > Agents: Custom model ID configured for subagents">
+                ${isArbitrage ? `Arbitrage: ${escHtml(subModelShort)} (Sub) vs ${escHtml(mainModelShort)} (Main)` : `Model: ${escHtml(mainModelShort)}`}
+              </span>
+              <!-- Setting 2: Background Agents -->
+              <span class="mono" style="background:${isBackground ? 'rgba(34,197,94,0.18)' : 'rgba(99,102,241,0.15)'};color:${isBackground ? '#4ade80' : '#a5b4fc'};padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:bold" title="Settings > Agents: Background agents setting">
+                ${isBackground ? '⚡ Async Background Agent' : '⏱ Sync Workers (Parallel Batch)'}
+              </span>
+              <!-- Setting 3: Fork Agents -->
+              <span class="mono" style="background:${isFork ? 'rgba(245,158,11,0.18)' : 'rgba(56,189,248,0.12)'};color:${isFork ? '#fbbf24' : '#93c5fd'};padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:bold" title="Settings > Agents: Fork agents setting">
+                ${isFork ? '🔀 Forked Agent (Inherited History)' : '🛡️ Fresh Isolated Context'}
+              </span>
+            </div>
+            <div style="font-size:11px;color:var(--text-3);display:flex;align-items:center;gap:10px">
+              <span title="Provider Prompt Caching details">⏱ <strong>${escHtml(roi.ttlMode || 'Prompt Cache Active')}</strong></span>
+            </div>
+          </div>
+
+          <!-- 4-Column Realistic Trade-Off Grid -->
+          <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(210px, 1fr));gap:10px;margin-bottom:12px">
+            <!-- 1. Actual Subagents Run -->
+            <div style="background:var(--bg-1);border:1px solid var(--border);padding:10px 12px;border-radius:var(--radius-sm);border-left:3px solid #6366f1">
+              <div style="font-size:10.5px;color:var(--text-3);margin-bottom:2px;font-weight:600">With Subagents (Actual Spend)</div>
+              <div class="mono" style="font-size:16px;font-weight:bold;color:#a5b4fc">${fmtCost(actualCost)}</div>
+              <div style="font-size:10px;color:var(--text-2);margin-top:4px;display:flex;flex-direction:column;gap:2px">
+                <span>• <strong>${s.totalTurns}</strong> turn${s.totalTurns === 1 ? '' : 's'} across ${s.totalWorkers} parallel worker${s.totalWorkers === 1 ? '' : 's'}</span>
+                <span>• <strong>${fmtTokens(roi.totalOutputTokens || s.totalOutputTokens)}</strong> output tokens (${s.totalWorkers} worker report${s.totalWorkers === 1 ? '' : 's'})</span>
+                <span>• <strong>${fmtTokens(s.totalCacheReads)}</strong> cache reads (${(s.cacheHitPct || 0).toFixed(1)}% hit)</span>
+              </div>
+            </div>
+
+            <!-- 2. Data-Grounded Single Agent Baseline -->
+            <div style="background:var(--bg-1);border:1px solid var(--border);padding:10px 12px;border-radius:var(--radius-sm);border-left:3px solid #38bdf8">
+              <div style="font-size:10.5px;color:#38bdf8;margin-bottom:2px;font-weight:bold">Single Agent Baseline (${grounded.novelFilesCount != null ? grounded.novelFilesCount : 0} Novel Files)</div>
+              <div class="mono" style="font-size:16px;font-weight:bold;color:#38bdf8">${fmtCost(grounded.cost)}</div>
+              <div style="font-size:10px;color:var(--text-2);margin-top:4px;display:flex;flex-direction:column;gap:2px">
+                <span>• <strong>${grounded.novelFilesCount != null ? grounded.novelFilesCount : 0}</strong> unread file${grounded.novelFilesCount === 1 ? '' : 's'} required opening</span>
+                <span>• Min <strong>${grounded.turns || 1}</strong> sequential turn${(grounded.turns || 1) === 1 ? '' : 's'} (${fmtTokens(grounded.outputTokens || 0)} notes)</span>
+                <span>• Subagents carried <strong style="color:${(grounded.explorationPremium || 0) >= 0 ? '#fb7185' : '#34d399'}">${(grounded.explorationPremium || 0) >= 0 ? '+' : ''}${fmtCost(grounded.explorationPremium || grounded.explorationOverhead || 0)}</strong> report & discovery delta</span>
+              </div>
+            </div>
+
+            <!-- 3. Concurrency Wall-Clock Savings -->
+            <div style="background:var(--bg-1);border:1px solid var(--border);padding:10px 12px;border-radius:var(--radius-sm);border-left:3px solid #10b981">
+              <div style="font-size:10.5px;color:#10b981;margin-bottom:2px;font-weight:bold">⏱ Measured Concurrency Speedup</div>
+              <div class="mono" style="font-size:16px;font-weight:bold;color:#34d399">-${(wall.savedSec / 60).toFixed(1)} min saved</div>
+              <div style="font-size:10px;color:var(--text-2);margin-top:4px;display:flex;flex-direction:column;gap:2px">
+                <span>• <strong>${(wall.actualSec / 60).toFixed(1)} min</strong> concurrent vs <strong>${(wall.sequentialSec / 60).toFixed(1)} min</strong> sequential</span>
+                <span>• <strong>${(wall.speedupFactor || 1).toFixed(2)}x</strong> parallel speedup factor</span>
+                <span>• Grounded in exact worker timestamps</span>
+              </div>
+            </div>
+
+            <!-- 4. Scratch Amnesia & Redundant Work Overhead -->
+            <div style="background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.3);padding:10px 12px;border-radius:var(--radius-sm);border-left:3px solid #f59e0b">
+              <div style="font-size:10.5px;color:#f59e0b;margin-bottom:2px;font-weight:bold">⚠️ Scratch Amnesia & Friction</div>
+              <div class="mono" style="font-size:16px;font-weight:bold;color:#f59e0b">${friction.redundantCost > 0 ? `+${fmtCost(friction.redundantCost)}` : '$0.00'}</div>
+              <div style="font-size:10px;color:var(--text-2);margin-top:4px;display:flex;flex-direction:column;gap:2px">
+                <span>• <strong>${friction.redundantTurns || 0}</strong> extra main agent turn${friction.redundantTurns === 1 ? '' : 's'} triggered</span>
+                <span>• <strong>${fmtBytes(friction.scratchBytes || 0)}</strong> findings offloaded to scratch</span>
+                <span>• ${friction.description || 'No redundant scratch re-reads detected.'}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Scope Independence & Context Overlap Matrix -->
+          ${(scope.runs && scope.runs.length > 0) ? `
+            <div style="margin-bottom:12px;background:var(--bg-1);border:1px solid var(--border);border-radius:6px;padding:12px">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+                <div style="display:flex;align-items:center;gap:6px">
+                  <span style="font-weight:bold;font-size:12px;color:var(--text)">🎯 Subagent Task Independence & Context Overlap Matrix</span>
+                  <span class="mono" style="background:rgba(99,102,241,0.18);color:#a5b4fc;padding:1px 6px;border-radius:8px;font-size:10px;font-weight:bold">
+                    ${scope.summary.totalDistinctNovelFiles || 0} Total Novel Files Unseen by Main Agent
+                  </span>
+                </div>
+                <div style="font-size:10.5px;color:var(--text-3)">
+                  Programmatic verification of prior main context vs worker scopes
+                </div>
+              </div>
+
+              <div style="display:flex;flex-direction:column;gap:10px">
+                ${scope.runs.map(r => `
+                  <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:6px;padding:10px">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:6px">
+                      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                        <strong style="font-size:11.5px;color:var(--text)">Run #${r.runIndex} (Call #${r.callIndex}): ${r.workerCount} Worker${r.workerCount === 1 ? '' : 's'}</strong>
+                        <span class="mono" style="background:${r.overallNoveltyPct >= 75 ? 'rgba(34,197,94,0.18)' : 'rgba(56,189,248,0.18)'};color:${r.overallNoveltyPct >= 75 ? '#4ade80' : '#38bdf8'};padding:1px 6px;border-radius:8px;font-size:10px;font-weight:bold">
+                          ${escHtml(r.taskType)} (${r.overallNoveltyPct}% Novel Files)
+                        </span>
+                        <span class="mono" style="background:rgba(168,85,247,0.18);color:#c084fc;padding:1px 6px;border-radius:8px;font-size:10px;font-weight:bold">
+                          ${r.uniquenessPct}% Worker-to-Worker Uniqueness
+                        </span>
+                      </div>
+                      <div style="font-size:10.5px;color:var(--text-3)">
+                        <strong>${r.uniqueNovelFilesCount}</strong> novel files · <strong>${r.uniqueTargetFilesCount}</strong> total scope files
+                      </div>
+                    </div>
+                    <div style="font-size:10.5px;color:var(--text-2);margin-bottom:8px">
+                      ${escHtml(r.taskTypeDescription)}
+                    </div>
+
+                    <!-- Worker Cards Grid -->
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(210px, 1fr));gap:8px">
+                      ${r.workers.map(w => `
+                        <div style="background:var(--bg-1);border:1px solid var(--border);border-radius:4px;padding:8px;font-size:10px">
+                          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+                            <strong style="color:#a5b4fc">${escHtml(w.label)}</strong>
+                            <span class="mono" style="font-weight:bold;color:${w.noveltyPct >= 75 ? '#4ade80' : (w.noveltyPct >= 35 ? '#38bdf8' : '#fbbf24')}">
+                              ${w.noveltyPct}% novel
+                            </span>
+                          </div>
+                          <div style="color:var(--text-3);margin-bottom:4px">
+                            <span>Prior Main Context: </span>
+                            <strong style="color:${w.knownToMainCount > 0 ? '#fbbf24' : '#4ade80'}">
+                              ${w.knownToMainCount > 0 ? `${w.knownToMainCount} file(s) seen` : '0% seen (100% Brand-New)'}
+                            </strong>
+                          </div>
+                          <div style="color:var(--text-2);line-height:1.3">
+                            <div style="font-weight:600;margin-bottom:2px">Assigned Scope Targets (${w.targetCount}):</div>
+                            ${w.targetCount > 0 ? `
+                              <ul style="margin:0 0 0 12px;padding:0;list-style:disc">
+                                ${w.targets.slice(0, 3).map(t => `<li title="${escHtml(t)}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(t.split('/').pop())}</li>`).join('')}
+                                ${w.targets.length > 3 ? `<li style="color:var(--text-3)">+${w.targets.length - 3} more files...</li>` : ''}
+                              </ul>
+                            ` : `<span style="color:var(--text-3);font-style:italic">Dynamic codebase inspection / directive</span>`}
+                          </div>
+                        </div>
+                      `).join('')}
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+          ` : ''}
+
+          <!-- Comprehensive Engineering Insights Banner -->
+          <div style="font-size:11px;color:var(--text-2);background:var(--bg-1);padding:12px 14px;border-radius:6px;border:1px solid var(--border);line-height:1.6;display:flex;flex-direction:column;gap:8px">
+            <div style="display:flex;align-items:flex-start;gap:8px">
+              <span style="font-size:14px;line-height:1">💡</span>
+              <div>
+                <strong style="color:var(--text)">The Scope-Grounded Reality:</strong>
+                ${escHtml(grounded.basisExplanation || `Subagents were assigned ${scope.summary?.totalDistinctNovelFiles || 0} novel files unseen by the main agent. Reading them sequentially would require at least ${grounded.turns || 1} tool turns, costing ${fmtCost(grounded.cost)} on ${mainModelShort}.`)}
+                Subagents completed in <strong style="color:#a5b4fc">${fmtCost(actualCost)}</strong> across ${s.totalWorkers} parallel worker${s.totalWorkers === 1 ? '' : 's'} (${s.totalTurns} turns, ${fmtTokens(s.totalOutputTokens || 0)} output tokens).
+              </div>
+            </div>
+
+            <div style="display:flex;align-items:flex-start;gap:8px">
+              <span style="font-size:14px;line-height:1">⚡</span>
+              <div>
+                <strong style="color:var(--text)">Why Subagents Were Used (Empirical Values):</strong>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(240px, 1fr));gap:6px;margin-top:4px">
+                  <span style="background:rgba(16,185,129,0.08);padding:4px 8px;border-radius:4px;border:1px solid rgba(16,185,129,0.2)">
+                    🚀 <strong>Concurrency Speedup:</strong> Completed in <strong>${(wall.actualSec / 60).toFixed(1)} min</strong> concurrent vs <strong>${(wall.sequentialSec / 60).toFixed(1)} min</strong> sequential (<strong>${(wall.savedSec / 60).toFixed(1)} min saved</strong>).
+                  </span>
+                  <span style="background:rgba(34,197,94,0.08);padding:4px 8px;border-radius:4px;border:1px solid rgba(34,197,94,0.2)">
+                    🛡️ <strong>Context Window Protection:</strong> Kept <strong>~${fmtTokens(roi.contextTokensPrevented || (s.totalTokensIn + s.totalTokensOut) || 0)}</strong> of raw file contents and worker reasoning out of the main thread.
+                  </span>
+                  <span style="background:rgba(168,85,247,0.08);padding:4px 8px;border-radius:4px;border:1px solid rgba(168,85,247,0.2)">
+                    🎯 <strong>Partition Uniqueness:</strong> <strong>${scope.runs?.[0]?.uniquenessPct != null ? `${scope.runs[0].uniquenessPct}%` : '100%'}</strong> inter-worker partitioning with minimal duplicate reads across workers.
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div style="display:flex;align-items:flex-start;gap:8px">
+              <span style="font-size:14px;line-height:1">⚙️</span>
+              <div>
+                <strong style="color:var(--text)">PostQode Subagent Settings in Effect:</strong>
+                <span>(1) <em>Model:</em> ${isArbitrage ? `Custom ID <code>${escHtml(subModelShort)}</code> (saving vs <code>${escHtml(mainModelShort)}</code>)` : `Inherited chat model (<code>${escHtml(mainModelShort)}</code>)`}. (2) <em>Concurrency:</em> ${isBackground ? 'Background mode (async non-blocking)' : 'Foreground mode (sync blocking)'}. (3) <em>Context:</em> ${isFork ? 'Fork mode (inherited conversation history)' : 'Fresh isolated context (lean memory)'}.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    })() : ''}
+
     <!-- Executive Pruning Category Summary Grid -->
     <div style="margin-bottom:16px">
       <div style="font-weight:bold;font-size:12.5px;color:var(--text);margin-bottom:10px">
@@ -2122,6 +2327,9 @@ function renderReductionSequenceFeed(body, events) {
       if (typeof redrawTargetCanvas === 'function' && typeof analyticsData !== 'undefined') redrawTargetCanvas(document.getElementById('pa-target-chart'), analyticsData.apiCalls);
     };
   }
+
+  // Initialize any subagent worker timeline canvases rendered in the feed
+  initSubagentWorkerCharts(body);
 }
 
 function renderSplitExplorerView(filteredEvents) {
@@ -2142,7 +2350,9 @@ function renderSplitExplorerView(filteredEvents) {
             const isSelected = idx === selectedIdx;
             let icon = '📁';
             let catColor = 'var(--green)';
-            if (ev.isSystemPrompt || ev.category.includes('System')) { icon = '🛡️'; catColor = '#38bdf8'; }
+            if (ev.isSubagent || ev.category === 'Subagents' || (ev.category && ev.category.includes('Subagent'))) { icon = '🤖'; catColor = '#818cf8'; }
+            else if (ev.isError || ev.category === 'Tool Error' || (ev.category && ev.category.includes('Error'))) { icon = '⚠️'; catColor = '#ef4444'; }
+            else if (ev.isSystemPrompt || ev.category.includes('System')) { icon = '🛡️'; catColor = '#38bdf8'; }
             else if (ev.toolName === 'execute_command' || ev.category.includes('Terminal')) { icon = '💻'; catColor = '#38bdf8'; }
             else if (ev.toolName === 'postqode_browser_agent' || ev.category.includes('Browser')) { icon = '🌐'; catColor = '#06b6d4'; }
             else if (ev.toolName === 'use_skill' || ev.category.includes('Skill')) { icon = '⚡'; catColor = '#e879f9'; }
@@ -2439,9 +2649,16 @@ function renderSubagentWorkerCardsMarkup(subagentData, callIdx) {
   const totalCost = subagentData.totalCost || items.reduce((s, it) => s + (it.totalCost || 0), 0);
   const totalIn = subagentData.totalInputTokens || items.reduce((s, it) => s + (it.inputTokens || 0), 0);
   const totalOut = subagentData.totalOutputTokens || items.reduce((s, it) => s + (it.outputTokens || 0), 0);
+  const totalReads = subagentData.totalCacheReads || items.reduce((s, it) => s + (it.cacheReads || it.apiCalls?.reduce((as, at) => as + (at.cacheReads || 0), 0) || 0), 0);
+  const totalWrites = subagentData.totalCacheWrites || items.reduce((s, it) => s + (it.cacheWrites || it.apiCalls?.reduce((as, at) => as + (at.cacheWrites || 0), 0) || 0), 0);
+  const totalPromptTokens = totalIn + totalReads + totalWrites;
+  const subagentHitPct = subagentData.cacheHitPct != null
+    ? subagentData.cacheHitPct
+    : (totalPromptTokens > 0 ? ((totalReads / totalPromptTokens) * 100) : 0);
   const totalTools = subagentData.totalToolCalls || items.reduce((s, it) => s + (it.toolCalls || 0), 0);
   const peakContextPct = subagentData.maxContextUsagePercentage || Math.max(...items.map(it => it.contextUsagePercentage || 0), 0);
   const primaryModel = subagentData.modelId || (items[0]?.modelId) || 'subagent';
+  const roi = subagentData.roi || null;
 
   const cardId = `subagent-deck-${callIdx}`;
 
@@ -2464,7 +2681,7 @@ function renderSubagentWorkerCardsMarkup(subagentData, callIdx) {
           </div>
         </div>
 
-        <!-- 5-6 Column Summary Metrics Grid -->
+        <!-- 8-Column Summary Metrics Grid (Including Cache) -->
         <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(130px, 1fr));gap:10px;font-size:11px">
           <div style="background:var(--bg-1);padding:10px 12px;border-radius:8px;border:1px solid var(--border)">
             <div style="color:var(--text-3);font-size:10.5px;margin-bottom:4px">Parallel Workers</div>
@@ -2479,6 +2696,18 @@ function renderSubagentWorkerCardsMarkup(subagentData, callIdx) {
             <div class="mono" style="font-weight:bold;font-size:13px;color:#e879f9">↓${fmtTokens(totalOut)}</div>
           </div>
           <div style="background:var(--bg-1);padding:10px 12px;border-radius:8px;border:1px solid var(--border)">
+            <div style="color:var(--text-3);font-size:10.5px;margin-bottom:4px">📖 Cache Reads</div>
+            <div class="mono" style="font-weight:bold;font-size:13px;color:var(--green)">${fmtTokens(totalReads)}</div>
+          </div>
+          <div style="background:var(--bg-1);padding:10px 12px;border-radius:8px;border:1px solid var(--border)">
+            <div style="color:var(--text-3);font-size:10.5px;margin-bottom:4px">✍️ Cache Writes</div>
+            <div class="mono" style="font-weight:bold;font-size:13px;color:#f59e0b">${fmtTokens(totalWrites)}</div>
+          </div>
+          <div style="background:var(--bg-1);padding:10px 12px;border-radius:8px;border:1px solid var(--border)">
+            <div style="color:var(--text-3);font-size:10.5px;margin-bottom:4px">🎯 Cache Hit Rate</div>
+            <div class="mono" style="font-weight:bold;font-size:13px;color:#06b6d4">${subagentHitPct.toFixed(1)}%</div>
+          </div>
+          <div style="background:var(--bg-1);padding:10px 12px;border-radius:8px;border:1px solid var(--border)">
             <div style="color:var(--text-3);font-size:10.5px;margin-bottom:4px">Tools Executed</div>
             <div class="mono" style="font-weight:bold;font-size:13px;color:#818cf8">🔧 ${totalTools} calls</div>
           </div>
@@ -2486,12 +2715,6 @@ function renderSubagentWorkerCardsMarkup(subagentData, callIdx) {
             <div style="color:var(--text-3);font-size:10.5px;margin-bottom:4px">Peak Context Used</div>
             <div class="mono" style="font-weight:bold;font-size:13px;color:${peakContextPct >= 80 ? '#ef4444' : peakContextPct >= 50 ? '#f59e0b' : '#10b981'}">🪟 ${peakContextPct.toFixed(1)}%</div>
           </div>
-          ${(subagentData.systemRamPct != null) ? `
-          <div style="background:var(--bg-1);padding:10px 12px;border-radius:8px;border:1px solid var(--border)">
-            <div style="color:var(--text-3);font-size:10.5px;margin-bottom:4px">Host RAM Pressure</div>
-            <div class="mono" style="font-weight:bold;font-size:13px;color:#14b8a6">💻 ${subagentData.systemRamPct}%</div>
-          </div>
-          ` : ''}
         </div>
 
         ${(subagentData.isFalseFailure || (subagentData.status === 'failed' && (subagentData.successes || 0) > 0 && (subagentData.failures || 0) === 0)) ? `
@@ -2510,6 +2733,26 @@ function renderSubagentWorkerCardsMarkup(subagentData, callIdx) {
               <strong style="color:#f59e0b">Subagent Output Truncated & Offloaded to Scratch:</strong> The ${workerCount} subagents generated <strong>${fmtBytes(subagentData.rawBytes || 25970)}</strong> of architectural findings. PostQode offloaded this to <code>scratch/${escHtml(subagentData.scratchFile || 'tool_use_subagents_*.log')}</code> and only kept a <strong>${fmtBytes(subagentData.promptBytes || 1221)}</strong> preview in the prompt history (saving ${fmtBytes(subagentData.bytesSaved || 24749)}).
               <div style="margin-top:6px;color:var(--text-2);font-size:11px;line-height:1.45">
                 ℹ️ <strong>Why the main agent re-explored:</strong> When resumed after being interrupted, the main agent read the truncated prompt log (<em>"106 lines offloaded to scratch file"</em>), assumed sections were missing, and redundantly ran <code>listFilesRecursive</code> and <code>searchFiles</code> across the directories the subagents had already explored.
+              </div>
+            </div>
+          </div>
+        ` : ''}
+
+        <!-- Call-Level Economic ROI & Counterfactual Comparison -->
+        ${roi ? `
+          <div style="background:linear-gradient(135deg, rgba(34,197,94,0.06), rgba(99,102,241,0.06));border:1px solid rgba(34,197,94,0.3);padding:12px 16px;border-radius:8px;margin-top:12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+            <div>
+              <div style="font-weight:bold;font-size:12px;color:var(--green);display:flex;align-items:center;gap:6px">
+                <span>💰</span> <span>Call Economics: Subagent Parallelism vs Monolithic Main Agent</span>
+              </div>
+              <div style="font-size:11px;color:var(--text-2);margin-top:3px;line-height:1.45">
+                Running these ${workerCount} workers concurrently cost <strong>${fmtCost(totalCost)}</strong> (${primaryModel.split('/').pop()}). If executed sequentially in the main agent context (Claude Opus 5.5), re-reading the accumulated conversation prefix under 1-hour TTL would have cost an estimated <strong style="color:#f87171">${fmtCost(roi.counterfactualMainCost)}</strong>.
+              </div>
+            </div>
+            <div style="display:flex;gap:14px;align-items:center">
+              <div style="text-align:right">
+                <div style="font-size:10px;color:var(--text-3);text-transform:uppercase">Estimated Net Savings</div>
+                <div class="mono" style="font-size:16px;font-weight:bold;color:var(--green)">-${fmtCost(roi.savingsDollar)} (${roi.savingsPct}% off)</div>
               </div>
             </div>
           </div>
@@ -2537,6 +2780,54 @@ function renderSubagentWorkerCardsMarkup(subagentData, callIdx) {
         </div>
       ` : ''}
 
+      <!-- Parallel Concurrency Waterfall (Gantt Swimlane) -->
+      ${(() => {
+        const validStartTimes = items.map(it => it.startTime).filter(Boolean);
+        const minStartMs = validStartTimes.length > 0 ? Math.min(...validStartTimes) : 0;
+        const validEndTimes = items.map(it => it.endTime).filter(Boolean);
+        const maxEndMs = validEndTimes.length > 0 ? Math.max(...validEndTimes) : (minStartMs + 1000);
+        const totalDurationMs = Math.max(1000, maxEndMs - minStartMs);
+
+        if (items.length <= 1 || totalDurationMs <= 1000) return '';
+
+        return `
+          <div class="pa-subagent-waterfall-box" style="background:var(--bg-1);border:1px solid rgba(99,102,241,0.25);border-radius:10px;padding:14px 18px;margin-bottom:18px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+              <span style="font-weight:bold;font-size:12px;color:#a5b4fc;display:flex;align-items:center;gap:6px">
+                <span>⏱️</span> <span>Parallel Concurrency Timeline (Gantt)</span>
+              </span>
+              <span class="mono" style="font-size:11px;color:var(--text-3)">Total Elapsed: ${(totalDurationMs / 1000).toFixed(1)}s</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:10px">
+              ${items.map((it, idx) => {
+                const num = it.index || idx + 1;
+                const wStart = it.startTime || minStartMs;
+                const wEnd = it.endTime || (wStart + (it.durationMs || 1000));
+                const leftPct = Math.max(0, Math.min(92, ((wStart - minStartMs) / totalDurationMs) * 100));
+                const widthPct = Math.max(6, Math.min(100 - leftPct, (((it.durationMs || (wEnd - wStart)) / totalDurationMs) * 100)));
+                const durSec = ((it.durationMs || (wEnd - wStart)) / 1000).toFixed(1);
+                return `
+                  <div style="display:grid;grid-template-columns:130px 1fr 70px;gap:10px;align-items:center;font-size:11px">
+                    <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;color:var(--text-2)" title="Worker #${num}">
+                      🤖 Worker #${num}
+                    </div>
+                    <div style="width:100%;height:22px;background:var(--bg-2);border-radius:4px;position:relative;border:1px solid var(--border)">
+                      <div style="position:absolute;left:${leftPct}%;width:${widthPct}%;height:100%;background:linear-gradient(90deg, #6366f1, #38bdf8);border-radius:3px;display:flex;align-items:center;justify-content:space-between;padding:0 8px;color:#ffffff;font-size:10px;font-weight:bold;box-shadow:0 1px 4px rgba(0,0,0,0.2)" title="Worker #${num}: ${durSec}s · ${it.toolCalls || 0} tools · ${fmtCost(it.totalCost || 0)}">
+                        <span>${durSec}s</span>
+                        <span class="mono" style="font-size:9.5px;opacity:0.95">🔧 ${it.toolCalls || 0}</span>
+                      </div>
+                    </div>
+                    <div class="mono" style="text-align:right;font-size:10.5px;color:var(--green)">
+                      ${fmtCost(it.totalCost || 0)}
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        `;
+      })()}
+
       <!-- Subagent Workers List -->
       <div class="pa-workers-list" style="display:flex;flex-direction:column;gap:18px">
         ${items.map((it, idx) => {
@@ -2550,6 +2841,11 @@ function renderSubagentWorkerCardsMarkup(subagentData, callIdx) {
           const workerTitle = (it.agentName && !it.agentName.startsWith('Worker #') && it.agentName !== `Subagent ${wNum}`)
             ? `Worker #${wNum} · ${escHtml(it.agentName)}`
             : `Worker #${wNum}`;
+
+          if (it.apiCalls && it.apiCalls.length > 0 && typeof window !== 'undefined') {
+            window.__subagentWorkerCalls = window.__subagentWorkerCalls || {};
+            window.__subagentWorkerCalls[`pa-subagent-chart-${callIdx}-${wNum}`] = it.apiCalls;
+          }
 
           return `
             <div class="pa-worker-card" data-worker-id="worker-${wNum}" style="background:var(--bg-1);border:1px solid rgba(99,102,241,0.35);border-radius:10px;overflow:hidden;box-shadow:0 4px 14px rgba(0,0,0,0.15)">
@@ -2573,29 +2869,126 @@ function renderSubagentWorkerCardsMarkup(subagentData, callIdx) {
               </div>
 
               <!-- Worker Token & Context Metrics Grid -->
-              <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(135px, 1fr));gap:10px;padding:12px 18px;background:var(--bg-2);border-bottom:1px solid var(--border)">
-                <div style="background:var(--bg-1);padding:8px 12px;border-radius:6px;border:1px solid var(--border)">
-                  <div style="font-size:10px;color:var(--text-3);margin-bottom:2px">📥 Input Tokens</div>
-                  <div class="mono" style="font-weight:bold;font-size:12.5px;color:var(--text)">${fmtTokens(it.inputTokens || 0)}</div>
-                </div>
-                <div style="background:var(--bg-1);padding:8px 12px;border-radius:6px;border:1px solid var(--border)">
-                  <div style="font-size:10px;color:var(--text-3);margin-bottom:2px">📤 Output Tokens</div>
-                  <div class="mono" style="font-weight:bold;font-size:12.5px;color:#e879f9">${fmtTokens(it.outputTokens || 0)}</div>
-                </div>
-                <div style="background:var(--bg-1);padding:8px 12px;border-radius:6px;border:1px solid var(--border)">
-                  <div style="font-size:10px;color:var(--text-3);margin-bottom:2px">💵 Worker Cost</div>
-                  <div class="mono" style="font-weight:bold;font-size:12.5px;color:var(--green)">${fmtCost(it.totalCost || 0)}</div>
-                </div>
-                <div style="grid-column:span 2;background:var(--bg-1);padding:8px 12px;border-radius:6px;border:1px solid var(--border)">
-                  <div style="display:flex;justify-content:space-between;font-size:10.5px;color:var(--text-3);margin-bottom:4px">
-                    <span>🪟 Context Window Utilization</span>
-                    <span class="mono" style="color:${ctxBarColor};font-weight:bold">${wCtxPct.toFixed(1)}% (${fmtTokens(it.contextTokens || 0)} / ${fmtTokens(it.contextWindow || 200000)})</span>
+              ${(() => {
+                const wReads = it.cacheReads != null
+                  ? it.cacheReads
+                  : (it.apiCalls ? it.apiCalls.reduce((s, t) => s + (t.cacheReads || 0), 0) : 0);
+                const wWrites = it.cacheWrites != null
+                  ? it.cacheWrites
+                  : (it.apiCalls ? it.apiCalls.reduce((s, t) => s + (t.cacheWrites || 0), 0) : 0);
+                const wTotalPrompt = (it.inputTokens || 0) + wReads + wWrites;
+                const wHitPct = it.cacheHitPct != null
+                  ? it.cacheHitPct
+                  : (wTotalPrompt > 0 ? (wReads / wTotalPrompt) * 100 : 0);
+
+                return `
+                  <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(120px, 1fr));gap:10px;padding:12px 18px;background:var(--bg-2);border-bottom:1px solid var(--border)">
+                    <div style="background:var(--bg-1);padding:8px 12px;border-radius:6px;border:1px solid var(--border)">
+                      <div style="font-size:10px;color:var(--text-3);margin-bottom:2px">📥 Input Tokens</div>
+                      <div class="mono" style="font-weight:bold;font-size:12.5px;color:var(--text)">${fmtTokens(it.inputTokens || 0)}</div>
+                    </div>
+                    <div style="background:var(--bg-1);padding:8px 12px;border-radius:6px;border:1px solid var(--border)">
+                      <div style="font-size:10px;color:var(--text-3);margin-bottom:2px">📤 Output Tokens</div>
+                      <div class="mono" style="font-weight:bold;font-size:12.5px;color:#e879f9">${fmtTokens(it.outputTokens || 0)}</div>
+                    </div>
+                    <div style="background:var(--bg-1);padding:8px 12px;border-radius:6px;border:1px solid var(--border)">
+                      <div style="font-size:10px;color:var(--text-3);margin-bottom:2px">📖 Cache Reads</div>
+                      <div class="mono" style="font-weight:bold;font-size:12.5px;color:var(--green)">${fmtTokens(wReads)}</div>
+                    </div>
+                    <div style="background:var(--bg-1);padding:8px 12px;border-radius:6px;border:1px solid var(--border)">
+                      <div style="font-size:10px;color:var(--text-3);margin-bottom:2px">✍️ Cache Writes</div>
+                      <div class="mono" style="font-weight:bold;font-size:12.5px;color:#f59e0b">${fmtTokens(wWrites)}</div>
+                    </div>
+                    <div style="background:var(--bg-1);padding:8px 12px;border-radius:6px;border:1px solid var(--border)">
+                      <div style="font-size:10px;color:var(--text-3);margin-bottom:2px">🎯 Cache Hit Rate</div>
+                      <div class="mono" style="font-weight:bold;font-size:12.5px;color:#06b6d4">${wHitPct.toFixed(1)}%</div>
+                    </div>
+                    <div style="background:var(--bg-1);padding:8px 12px;border-radius:6px;border:1px solid var(--border)">
+                      <div style="font-size:10px;color:var(--text-3);margin-bottom:2px">💵 Worker Cost</div>
+                      <div class="mono" style="font-weight:bold;font-size:12.5px;color:var(--green)">${fmtCost(it.totalCost || 0)}</div>
+                    </div>
+                    <div style="grid-column:span 2;background:var(--bg-1);padding:8px 12px;border-radius:6px;border:1px solid var(--border)">
+                      <div style="display:flex;justify-content:space-between;font-size:10.5px;color:var(--text-3);margin-bottom:4px">
+                        <span>🪟 Context Window Utilization</span>
+                        <span class="mono" style="color:${ctxBarColor};font-weight:bold">${wCtxPct.toFixed(1)}% (${fmtTokens(it.contextTokens || 0)} / ${fmtTokens(it.contextWindow || 200000)})</span>
+                      </div>
+                      <div style="width:100%;height:6px;background:var(--bg-3);border-radius:3px;overflow:hidden;border:1px solid var(--border)">
+                        <div style="width:${Math.min(100, Math.max(3, wCtxPct))}%;height:100%;background:${ctxBarColor};border-radius:3px"></div>
+                      </div>
+                    </div>
                   </div>
-                  <div style="width:100%;height:6px;background:var(--bg-3);border-radius:3px;overflow:hidden;border:1px solid var(--border)">
-                    <div style="width:${Math.min(100, Math.max(3, wCtxPct))}%;height:100%;background:${ctxBarColor};border-radius:3px"></div>
+                `;
+              })()}
+
+              <!-- Worker Turn Timeline Chart (matching Main Agent) -->
+              ${(it.apiCalls && it.apiCalls.length > 0) ? `
+                <div class="pa-worker-chart-box" style="padding:14px 18px;background:var(--bg-1);border-bottom:1px solid var(--border)">
+                  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                    <div style="font-weight:bold;font-size:12px;color:#a5b4fc;display:flex;align-items:center;gap:6px">
+                      <span>📈 Worker Turn Timeline</span>
+                      <span class="mono" style="font-size:10.5px;color:var(--text-3)">(${it.apiCalls.length} turns · ${it.toolCalls || 0} tools)</span>
+                    </div>
+                    <div style="font-size:10px;color:var(--text-3);display:flex;align-items:center;flex-wrap:wrap;gap:10px">
+                      <span style="display:inline-flex;align-items:center;gap:3px"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:#38bdf8"></span> Request Size</span>
+                      <span style="display:inline-flex;align-items:center;gap:3px"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#10b981"></span> Cache Reads</span>
+                      <span style="display:inline-flex;align-items:center;gap:3px"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#f59e0b"></span> Cache Writes</span>
+                      <span style="display:inline-flex;align-items:center;gap:3px"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#06b6d4"></span> Cache Hit %</span>
+                      <span style="display:inline-flex;align-items:center;gap:3px"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#ec4899"></span> Cost</span>
+                      <span style="display:inline-flex;align-items:center;gap:3px"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#a78bfa"></span> Context %</span>
+                    </div>
+                  </div>
+                  <div style="width:100%;height:160px;position:relative">
+                    <canvas id="pa-subagent-chart-${callIdx}-${wNum}" class="pa-subagent-worker-canvas" data-height="160" style="width:100%;height:160px;display:block"></canvas>
+                    <div id="pa-subagent-tooltip-${callIdx}-${wNum}" class="pa-chart-tooltip" style="display:none;pointer-events:none;z-index:100;position:absolute"></div>
                   </div>
                 </div>
-              </div>
+
+                <!-- Turn-by-Turn Tool & Action Trace -->
+                <div class="pa-worker-turn-trace-box" style="padding:12px 18px;background:var(--bg-2);border-bottom:1px solid var(--border)">
+                  <details style="cursor:pointer">
+                    <summary style="font-weight:bold;font-size:11.5px;color:var(--text);display:flex;align-items:center;justify-content:space-between;list-style:none">
+                      <span style="display:inline-flex;align-items:center;gap:6px">
+                        <span>🔍</span> <span>Turn-by-Turn Tool & Action Trace</span>
+                        <span class="mono" style="font-size:10px;color:var(--text-3)">(${it.apiCalls.length} turns)</span>
+                      </span>
+                      <span style="font-size:10.5px;color:#818cf8">Click to Expand/Collapse ▾</span>
+                    </summary>
+                    <div style="margin-top:10px;display:flex;flex-direction:column;gap:6px;max-height:280px;overflow-y:auto;padding-right:4px">
+                      ${it.apiCalls.map(t => {
+                        const toolList = t.tools || [];
+                        return `
+                          <div class="pa-subagent-turn-step" data-turn="${t.turn}" style="background:var(--bg-1);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:11px">
+                            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:4px">
+                              <div style="display:flex;align-items:center;gap:6px">
+                                <span class="mono" style="font-weight:bold;background:rgba(99,102,241,0.2);color:#a5b4fc;padding:1px 6px;border-radius:4px;font-size:10px">Turn #${t.turn}</span>
+                                ${toolList.length > 0 ? toolList.map(tl => `<span class="mono" style="background:rgba(16,185,129,0.15);color:var(--green);padding:1px 6px;border-radius:4px;font-size:10px;font-weight:bold">🔧 ${escHtml(tl.name)}</span>`).join(' ') : `<span style="color:var(--text-3);font-size:10px">Synthesis / Output</span>`}
+                              </div>
+                              <div class="mono" style="font-size:10px;color:var(--text-3);display:flex;align-items:center;flex-wrap:wrap;gap:8px">
+                                <span>↑${fmtTokens(t.tokensIn || 0)}</span>
+                                <span>↓${fmtTokens(t.tokensOut || 0)}</span>
+                                ${t.cacheReads > 0 ? `<span style="color:var(--green)">📖 ${fmtTokens(t.cacheReads)}</span>` : ''}
+                                ${t.cacheWrites > 0 ? `<span style="color:#f59e0b;font-weight:bold">✍️ ${fmtTokens(t.cacheWrites)}</span>` : ''}
+                                ${t.cacheHitPct > 0 ? `<span style="color:#06b6d4">🎯 ${t.cacheHitPct.toFixed(0)}%</span>` : ''}
+                                <span style="color:var(--green)">${fmtCost(t.cost || 0)}</span>
+                                <span>${((t.latencyMs || 0)/1000).toFixed(1)}s</span>
+                              </div>
+                            </div>
+                            ${toolList.length > 0 ? `
+                              <div style="font-size:10px;color:var(--text-2);background:var(--bg-2);padding:5px 8px;border-radius:4px;font-family:monospace;white-space:pre-wrap;overflow-x:auto;max-height:80px">
+                                ${toolList.map(tl => `${escHtml(tl.name)}(${escHtml(typeof tl.arguments === 'object' ? JSON.stringify(tl.arguments) : (tl.arguments || ''))})`).join('\n')}
+                              </div>
+                            ` : (t.resultPreview ? `
+                              <div style="font-size:10.5px;color:var(--text-2);line-height:1.4;white-space:pre-wrap;max-height:60px;overflow-y:auto">
+                                ${escHtml(t.resultPreview)}
+                              </div>
+                            ` : '')}
+                          </div>
+                        `;
+                      }).join('')}
+                    </div>
+                  </details>
+                </div>
+              ` : ''}
 
               <!-- Worker Prompt & Findings Body -->
               <div style="padding:16px 18px;font-size:11.5px;display:flex;flex-direction:column;gap:14px">
@@ -2956,16 +3349,18 @@ function drawTimelineChart(calls, targetCanvas = null, zoomRange = null, crossha
 
   const ctx = canvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
-  const rect = canvas.parentElement.getBoundingClientRect();
+  const rect = canvas.parentElement ? canvas.parentElement.getBoundingClientRect() : { width: 0, height: 0 };
   const h = canvas.dataset.height ? parseInt(canvas.dataset.height) : 260;
+  const parentW = rect.width || canvas.parentElement?.clientWidth || canvas.offsetWidth || 0;
+  if (parentW <= 0) return;
 
-  canvas.width = rect.width * dpr;
+  canvas.width = parentW * dpr;
   canvas.height = h * dpr;
-  canvas.style.width = rect.width + 'px';
+  canvas.style.width = parentW + 'px';
   canvas.style.height = h + 'px';
   ctx.scale(dpr, dpr);
 
-  const w = rect.width;
+  const w = parentW;
   const pad = { top: 25, right: 60, bottom: 40, left: 70 };
 
   // Calculate slice if zoomRange is present
@@ -3198,6 +3593,19 @@ function drawTimelineChart(calls, targetCanvas = null, zoomRange = null, crossha
     });
     ctx.stroke();
     ctx.setLineDash([]);
+
+    // Draw Cache Write marker dots on turns with writes
+    points.forEach(pt => {
+      if (pt.call.cacheWrites > 0) {
+        ctx.fillStyle = '#f59e0b';
+        ctx.beginPath();
+        ctx.arc(pt.x, Math.max(pt.writeY, pad.top), (hoveredCallIndex === pt.index) ? 5.5 : 3.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = isDark ? '#111827' : '#ffffff';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+    });
   }
 
   // Draw Context Window % line
@@ -3338,7 +3746,7 @@ function drawTimelineChart(calls, targetCanvas = null, zoomRange = null, crossha
   ctx.fillStyle = isDark ? 'rgba(255,255,255,0.4)' : 'rgba(0,0,0,0.4)';
   ctx.font = '11px Inter, sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText('API Call #', w / 2, h - 6);
+  ctx.fillText(canvas.id && canvas.id.startsWith('pa-subagent-chart-') ? 'Worker Turn #' : 'API Call #', w / 2, h - 6);
 
   canvas._chartPoints = points;
   canvas._barWidth = barWidth;
@@ -3429,12 +3837,47 @@ function bindAnalyticsEvents(calls) {
       deck.querySelectorAll('.pa-worker-card').forEach(card => {
         if (target === 'all' || card.dataset.workerId === target) {
           card.style.display = 'block';
+          const canvas = card.querySelector('.pa-subagent-worker-canvas');
+          if (canvas) {
+            const calls = (typeof window !== 'undefined' && window.__subagentWorkerCalls) ? window.__subagentWorkerCalls[canvas.id] : canvas._calls;
+            if (calls && calls.length > 0) {
+              canvas._calls = calls;
+              setTimeout(() => redrawTargetCanvas(canvas, calls), 50);
+            }
+          }
         } else {
           card.style.display = 'none';
         }
       });
     });
   }
+}
+
+function initSubagentWorkerCharts(container = document) {
+  if (!container) return;
+  const canvases = container.querySelectorAll('.pa-subagent-worker-canvas');
+  canvases.forEach(canvas => {
+    if (canvas._isBound) return;
+    canvas._isBound = true;
+    const calls = (typeof window !== 'undefined' && window.__subagentWorkerCalls) ? window.__subagentWorkerCalls[canvas.id] : canvas._calls;
+    if (calls && calls.length > 0) {
+      canvas._calls = calls;
+      setTimeout(() => redrawTargetCanvas(canvas, calls), 80);
+    }
+    const tooltipId = canvas.id ? canvas.id.replace('pa-subagent-chart-', 'pa-subagent-tooltip-') : 'pa-chart-tooltip';
+    canvas.addEventListener('mousemove', (e) => {
+      const activeCalls = canvas._calls || (typeof window !== 'undefined' && window.__subagentWorkerCalls ? window.__subagentWorkerCalls[canvas.id] : null);
+      if (activeCalls) handleChartHover(e, activeCalls, canvas, tooltipId);
+    });
+    canvas.addEventListener('mouseleave', () => {
+      const tooltip = document.getElementById(tooltipId) || document.getElementById('pa-chart-tooltip');
+      if (tooltip) tooltip.style.display = 'none';
+      if (canvas._hoveredIndex != null) {
+        canvas._hoveredIndex = null;
+        if (canvas._calls) redrawTargetCanvas(canvas, canvas._calls);
+      }
+    });
+  });
 }
 
 function redrawTargetCanvas(canvas, calls = null) {
@@ -3446,6 +3889,8 @@ function redrawTargetCanvas(canvas, calls = null) {
     drawTimelineChart(activeCalls, canvas);
   } else if (canvas.id === 'pa-fullscreen-canvas') {
     drawTimelineChart(activeCalls, canvas, fullscreenZoomRange);
+  } else if (canvas.id && canvas.id.startsWith('pa-subagent-chart-')) {
+    drawTimelineChart(activeCalls, canvas);
   } else if (canvas.id && canvas.id.startsWith('pa-compare-canvas-')) {
     const stepIdx = (compareStepIndex != null) ? compareStepIndex : 0;
     const validIds = Object.keys(compareDataMap);
@@ -3555,7 +4000,8 @@ function handleChartHover(e, calls, targetCanvas = null, tooltipId = 'pa-chart-t
   } else {
     tooltip.style.left = `${Math.min(mouseX + 15, rect.width - tooltipWidth - 10)}px`;
   }
-  tooltip.style.top = `${Math.max(10, Math.min(mouseY - 30, rect.height - 180))}px`;
+  const maxTop = Math.max(6, rect.height - 120);
+  tooltip.style.top = `${Math.max(6, Math.min(mouseY - 20, maxTop))}px`;
 
   const elapsedStr = c.elapsedSeconds != null ? `+${fmtDuration(c.elapsedSeconds * 1000)}` : '';
   const latStr = c.latencyMs ? `(step latency ${fmtDuration(c.latencyMs)})` : '';
@@ -3591,16 +4037,31 @@ function handleChartHover(e, calls, targetCanvas = null, tooltipId = 'pa-chart-t
        </div>`
     : '';
 
+  const isWorkerTurn = !!c.workerIndex || (canvas.id && canvas.id.startsWith('pa-subagent-chart-'));
+  const headerTurnStr = isWorkerTurn
+    ? `<span>🤖 Worker #${c.workerIndex || '?'} · Turn #${c.turn || foundPt.index + 1}</span>`
+    : `<span>API Call #${foundPt.index + 1}</span>`;
+
+  const workerToolsHtml = (isWorkerTurn && c.tools && c.tools.length > 0)
+    ? `<div style="color:#818cf8;font-size:10.5px;margin-top:2px">🔧 Tools: <strong>${c.tools.map(t => escHtml(t.name || t)).join(', ')}</strong></div>`
+    : '';
+
+  const workerPreviewHtml = (isWorkerTurn && c.resultPreview)
+    ? `<div style="color:var(--text-3);font-size:10px;margin-top:2px;max-height:45px;overflow:hidden;text-overflow:ellipsis">📄 ${escHtml(c.resultPreview.slice(0, 120))}</div>`
+    : '';
+
   tooltip.innerHTML = `
     <div style="font-weight:bold;color:var(--text);margin-bottom:4px;display:flex;justify-content:space-between">
-      <span>API Call #${foundPt.index + 1}</span>
+      ${headerTurnStr}
       <span style="color:var(--text-3);font-weight:normal">${fmtTime(c.ts)} ${elapsedStr ? `<strong style="color:#38bdf8">${elapsedStr}</strong>` : ''}</span>
     </div>
     ${errorHtml}
     ${subagentHtml}
+    ${workerToolsHtml}
+    ${workerPreviewHtml}
     ${modelStr}
     <div style="color:#38bdf8;font-weight:600;font-size:10.5px">📦 Accumulated Payload: <strong>${fmtBytes(c.requestSize)}</strong></div>
-    <div style="color:#38bdf8;font-size:10.5px">⚡ Per-Turn New Input: <strong>${fmtBytes(c.turnDeltaSize || Math.max(0, c.sizeDelta))}</strong></div>
+    <div style="color:#38bdf8;font-size:10.5px">⚡ Per-Turn New Input: <strong>${fmtBytes(c.turnDeltaSize || Math.max(0, c.sizeDelta || 0))}</strong></div>
     ${reductionHtml || scratchStr}
     ${ctxStr}
     ${memStr}
@@ -3609,7 +4070,7 @@ function handleChartHover(e, calls, targetCanvas = null, tooltipId = 'pa-chart-t
     <div style="color:var(--green);font-size:10px">📖 Cache Reads: <strong>${fmtTokens(c.cacheReads)}</strong></div>
     <div style="color:#f59e0b;font-size:10px">✍️ Cache Writes: <strong>${fmtTokens(c.cacheWrites)}</strong></div>
     <div style="font-size:10px;color:var(--text-2);margin-top:2px">${prunedStr}</div>
-    <div style="font-size:10px;color:var(--text-3)">Call Cost: <strong>${fmtCost(c.cost)}</strong> ${latStr}</div>
+    <div style="font-size:10px;color:var(--text-3)">${isWorkerTurn ? 'Turn Cost' : 'Call Cost'}: <strong>${fmtCost(c.cost)}</strong> ${latStr}</div>
   `;
 }
 
