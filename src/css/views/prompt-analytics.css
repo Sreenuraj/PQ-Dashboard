@@ -177,6 +177,124 @@
   font-family: var(--font-mono);
 }
 
+/* ── Observability At-A-Glance Verdict Banners ── */
+.pa-verdict-banner {
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
+  border-left: 3px solid #38bdf8;
+  border-radius: var(--radius-sm);
+  padding: 11px 16px;
+  margin-bottom: 14px;
+}
+.pa-verdict-banner.win {
+  border-left-color: #10b981;
+}
+.pa-verdict-banner.tradeoff {
+  border-left-color: #38bdf8;
+}
+.pa-verdict-banner.neutral {
+  border-left-color: var(--text-3);
+}
+
+.pa-verdict-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.pa-verdict-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pa-verdict-pill {
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.pa-verdict-pill.win {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+.pa-verdict-pill.tradeoff {
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+}
+.pa-verdict-pill.neutral {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-3);
+  border: 1px solid var(--border);
+}
+
+.pa-verdict-desc {
+  font-size: 11.5px;
+  color: var(--text-2);
+  line-height: 1.45;
+}
+.pa-verdict-desc strong {
+  color: var(--text);
+}
+
+/* ── Full Dossier Accordion Sections ── */
+.pa-dossier-container {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.pa-dossier-accordion {
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  transition: border-color var(--transition);
+}
+
+.pa-dossier-accordion:hover {
+  border-color: var(--border-2);
+}
+
+.pa-dossier-summary {
+  padding: 12px 16px;
+  cursor: pointer;
+  user-select: none;
+  background: rgba(255, 255, 255, 0.02);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  transition: background var(--transition);
+}
+
+.pa-dossier-summary:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.pa-dossier-meta {
+  font-size: 11px;
+  color: var(--text-3);
+  font-weight: normal;
+}
+
+.pa-dossier-body {
+  padding: 16px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface-card);
+}
+
 /* 4-KPI Grid */
 .pa-kpi-grid-4 {
   display: grid;

@@ -390,9 +390,10 @@ function computeSubagentScopeAnalysis(uiMessages) {
   }
 
   const totalDistinctNovelFiles = runs.reduce((s, r) => s + r.uniqueNovelFilesCount, 0);
+  // Realistic turn estimate accounting for parallel tool calls (batching ~3-4 file reads per turn)
   const groundedMinTurns = totalDistinctNovelFiles > 0
-    ? Math.max(1, Math.round(totalDistinctNovelFiles * 1.15 + 2))
-    : Math.max(1, Math.min(runs.reduce((s, r) => s + (r.workerCount * 4), 0), 10));
+    ? Math.max(2, Math.round(totalDistinctNovelFiles / 3.5 + 2))
+    : Math.max(1, Math.min(runs.reduce((s, r) => s + (r.workerCount * 2), 0), 10));
 
   return {
     runs,
@@ -1898,6 +1899,9 @@ module.exports = (db, config, getStore) => {
     let totalSeqDurationSec = 0;
     let totalActualWallClockSec = 0;
 
+    // ── Programmatic Scope Independence & Context Overlap Analysis ──
+    const scopeAnalysis = computeSubagentScopeAnalysis(uiMessages);
+
     for (const c of subRuns) {
       const sub = c.subagents;
       const items = sub.items || [];
@@ -1914,24 +1918,55 @@ module.exports = (db, config, getStore) => {
       const runDurationSec = (runMinStart > 0 && runMaxEnd > runMinStart) ? (runMaxEnd - runMinStart) / 1000 : Math.min(120, runSeqDurationSec);
       totalActualWallClockSec += runDurationSec;
 
+      // Find scope for this run
+      const runScope = scopeAnalysis.runs.find(r => r.callIndex === c.index);
+      const runNovelFiles = runScope ? runScope.uniqueNovelFilesCount : (items.length * 3);
+      const runTargetFiles = runScope ? runScope.uniqueTargetFilesCount : (items.length * 4);
+
+      // Realistic counterfactual if this run was executed in the main agent (Claude Opus 5.5)
+      // Modern LLMs batch 3-5 file reads in parallel per turn
+      const turnsNeeded = Math.max(2, Math.round(runNovelFiles / 3.5 + 2));
+      const mainPrefixAtCall = (c.tokensIn || 0) + (c.cacheReads || 0) + (c.cacheWrites || 0) || 120000;
+      const counterfactualCacheReads = turnsNeeded * mainPrefixAtCall;
+      const counterfactualToolTokens = runNovelFiles * 5200;
+      const counterfactualOutTokens = turnsNeeded * 450;
+
+      const counterfactualMainCost = (counterfactualCacheReads / 1e6) * mainProfile.cacheReadRate
+                                   + (counterfactualToolTokens / 1e6) * mainProfile.inputRate
+                                   + (counterfactualOutTokens / 1e6) * mainProfile.outputRate
+                                   + (mainProfile.explicitWrites ? (turnsNeeded * 1200 / 1e6) * mainProfile.cacheWriteRate : 0);
+
+      const costDelta = counterfactualMainCost - (sub.totalCost || 0);
+      const isNetSavings = costDelta >= 0;
+      const savingsDollar = Math.abs(costDelta);
+      const savingsPct = counterfactualMainCost > 0 ? Math.round((savingsDollar / counterfactualMainCost) * 100) : 0;
+
       sub.roi = {
         actualCost: sub.totalCost || 0,
+        counterfactualMainCost,
+        savingsDollar,
+        savingsPct,
+        isNetSavings,
+        turnsNeeded,
+        novelFilesCount: runNovelFiles,
+        targetFilesCount: runTargetFiles,
+        mainPrefixAtCall,
         wallClockSavedSec: Math.max(0, runSeqDurationSec - runDurationSec),
         concurrencyFactor: items.length || sub.total || 1,
+        mainModelName: mainModelId.split('/').pop(),
+        workerModelName: (sub.modelId || items[0]?.modelId || subModelId).split('/').pop(),
       };
     }
-
-    // ── Programmatic Scope Independence & Context Overlap Analysis ──
-    const scopeAnalysis = computeSubagentScopeAnalysis(uiMessages);
 
     // Baseline 1: Scope-Grounded Single Agent Baseline
     // Programmatically determined by extracting the exact unique files the subagents were tasked to inspect
     // that the main agent had ZERO prior context for before that turn.
     const startPrefixCtx = subRuns[0] ? ((subRuns[0].tokensIn || 0) + (subRuns[0].cacheReads || 0) + (subRuns[0].cacheWrites || 0)) : 120000;
     const groundedNovelFiles = scopeAnalysis.summary.totalDistinctNovelFiles || 0;
-    const groundedTurns = scopeAnalysis.summary.groundedMinTurns || Math.max(1, Math.round(groundedNovelFiles * 1.15 + 2));
+    // Account for modern parallel tool calling (batching 3-5 files per turn)
+    const groundedTurns = scopeAnalysis.summary.groundedMinTurns || Math.max(2, Math.round(groundedNovelFiles / 3.5 + 3));
     const groundedToolTokensIn = groundedNovelFiles * 5200;
-    const groundedOutTokens = Math.round(groundedTurns * 400);
+    const groundedOutTokens = Math.round(groundedTurns * 450);
     const avgCtxTokens = Math.round(startPrefixCtx + (groundedTurns * 1200));
 
     const groundedMainCost = (groundedTurns * avgCtxTokens / 1e6) * mainProfile.cacheReadRate
@@ -2076,8 +2111,8 @@ module.exports = (db, config, getStore) => {
           explorationPremium: explorationOverhead,
           explorationPremiumPct: groundedMainCost > 0 ? ((explorationOverhead / groundedMainCost) * 100) : 0,
           basisExplanation: groundedNovelFiles > 0
-            ? `Programmatically verified from ${groundedNovelFiles} unread target file(s) assigned to subagents that the main agent had 0% prior context for. Reading them sequentially requires at least ${groundedTurns} turn(s).`
-            : `Single agent baseline calculated from ${groundedTurns} sequential turn(s) for equivalent worker instructions.`,
+            ? `Programmatically verified from ${groundedNovelFiles} unread target file(s) assigned to subagents that the main agent had 0% prior context for. Reading them in the main thread (batching ~3-4 files per turn with parallel tool calls, ~${groundedTurns} turns) would cost estimated $${groundedMainCost.toFixed(3)} on ${mainProfile.provider || 'opus'}.`
+            : `Single agent baseline calculated from ~${groundedTurns} turns (with parallel tool calls) for equivalent worker instructions.`,
         },
 
         // Baseline A: Realistic Grounded Single Agent

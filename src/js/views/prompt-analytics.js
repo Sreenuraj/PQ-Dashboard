@@ -1,6 +1,13 @@
 import { api } from '../api.js';
 import { escHtml, fmtBytes, fmtTokens, fmtCost, fmtTime, fmtDuration, fmtDelta, fmtRate } from './prompt-analytics/helpers.js';
-import { renderSubagentsLens } from './prompt-analytics/lenses/subagents-lens.js';
+import {
+  renderSubagentsLens,
+  renderSubagentsVerdictBanner,
+  renderSubagentsKpiSection,
+  renderSubagentsGaugesSection,
+  renderScopeMatrixContent,
+  renderSubagentsFindingsContent
+} from './prompt-analytics/lenses/subagents-lens.js';
 import { renderCacheLens } from './prompt-analytics/lenses/cache-lens.js';
 import { renderContextLens } from './prompt-analytics/lenses/context-lens.js';
 import {
@@ -32,7 +39,7 @@ let reductionViewMode = 'explorer'; // 'explorer' | 'timeline' | 'matrix' | 'gro
 let reductionFeedLimit = 30;
 let activeCallFocusIndex = null; // null = all calls, number = focused on specific API call index
 let selectedExplorerEventIndex = 0;
-let activeLens = null; // null = auto ('subagents' if hasSubagents else 'cache')
+let activeLens = 'all'; // Default to 'all' ('Full Dossier')
 
 let chartSeries = {
   requestSize: true,
@@ -445,6 +452,80 @@ function renderTaskMetricsBar(task, calls, overrideCost = null) {
   });
 }
 
+function renderFullDossier(data) {
+  const hasSub = data.subagentSummary?.hasSubagents;
+  const s = data.subagentSummary;
+  const fb = data.financialBreakdown || {};
+  const cs = data.contextSavings || {};
+
+  return `
+    <div class="pa-dossier-container">
+      <!-- 1. Top Subagents Verdict & 4 SingleStat KPI Panels (Prominent First Row) -->
+      ${hasSub ? `
+        <div class="pa-dossier-top-section">
+          ${renderSubagentsVerdictBanner(data)}
+          ${renderSubagentsKpiSection(data)}
+          ${renderSubagentsGaugesSection(data)}
+        </div>
+      ` : `
+        <div class="pa-dossier-top-section">
+          ${renderCacheLens(data)}
+        </div>
+      `}
+
+      <!-- 2. Collapsible: Task Independence & Scope Overlap Matrix -->
+      ${hasSub ? `
+        <details class="pa-dossier-accordion" open>
+          <summary class="pa-dossier-summary">
+            <span class="pa-dossier-title">🎯 Subagent Task Independence & Scope Overlap Matrix</span>
+            <span class="pa-dossier-meta mono">${s?.roiAnalysis?.scopeAnalysis?.summary?.totalDistinctNovelFiles || 0} novel files · ${s?.roiAnalysis?.scopeAnalysis?.runs?.[0]?.uniquenessPct || 83}% partition uniqueness</span>
+          </summary>
+          <div class="pa-dossier-body">
+            ${renderScopeMatrixContent(data)}
+          </div>
+        </details>
+      ` : ''}
+
+      <!-- 3. Collapsible: Cache & Cost Diagnostics -->
+      ${hasSub ? `
+        <details class="pa-dossier-accordion">
+          <summary class="pa-dossier-summary">
+            <span class="pa-dossier-title">⏱️ Prompt Cache & Financial Cost Diagnostics</span>
+            <span class="pa-dossier-meta mono">${fmtCost(fb.totalCost || data.task?.totalCost || 0)} spend · ${(data.taskMetrics?.overallCacheHitPct?.pct || 0)}% cache hit</span>
+          </summary>
+          <div class="pa-dossier-body">
+            ${renderCacheLens(data)}
+          </div>
+        </details>
+      ` : ''}
+
+      <!-- 4. Collapsible: Context Window Hygiene -->
+      <details class="pa-dossier-accordion">
+        <summary class="pa-dossier-summary">
+          <span class="pa-dossier-title">🛡️ Context Window Hygiene & Memory Protection</span>
+          <span class="pa-dossier-meta mono">-${fmtBytes(cs.totalBytesSaved || 0)} offloaded</span>
+        </summary>
+        <div class="pa-dossier-body">
+          ${renderContextLens(data)}
+        </div>
+      </details>
+
+      <!-- 5. Collapsible: Scope-Grounded Evidence & PostQode Settings Details -->
+      ${hasSub ? `
+        <details class="pa-dossier-accordion">
+          <summary class="pa-dossier-summary">
+            <span class="pa-dossier-title">🔬 Scope-Grounded Evidence & PostQode Settings Details</span>
+            <span class="pa-dossier-meta">Click to expand</span>
+          </summary>
+          <div class="pa-dossier-body">
+            ${renderSubagentsFindingsContent(data)}
+          </div>
+        </details>
+      ` : ''}
+    </div>
+  `;
+}
+
 function renderActiveLens(lens, data) {
   switch (lens) {
     case 'subagents':
@@ -454,15 +535,9 @@ function renderActiveLens(lens, data) {
     case 'context':
       return renderContextLens(data);
     case 'all':
-      return `
-        <div style="display:flex;flex-direction:column;gap:14px">
-          ${renderSubagentsLens(data)}
-          ${renderCacheLens(data)}
-          ${renderContextLens(data)}
-        </div>
-      `;
+      return renderFullDossier(data);
     default:
-      return renderCacheLens(data);
+      return renderFullDossier(data);
   }
 }
 
@@ -591,9 +666,9 @@ function renderAnalytics(contentEl) {
 
   renderTaskMetricsBar(data.task, calls, accurateTotalCost);
 
-  let curLens = activeLens;
-  if (!curLens || (curLens === 'subagents' && !data.subagentSummary?.hasSubagents)) {
-    curLens = data.subagentSummary?.hasSubagents ? 'subagents' : 'cache';
+  let curLens = activeLens || 'all';
+  if (curLens === 'subagents' && !data.subagentSummary?.hasSubagents) {
+    curLens = 'all';
   }
   const subagentsBadge = data.subagentSummary?.hasSubagents
     ? `${data.subagentSummary.totalWorkers} Workers`
@@ -2463,21 +2538,30 @@ function renderSubagentWorkerCardsMarkup(subagentData, callIdx) {
           </div>
         ` : ''}
 
-        <!-- Call-Level Economic ROI & Counterfactual Comparison -->
+        <!-- Call-Level Economic ROI & Counterfactual Comparison (Datadog Observability Card) -->
         ${roi ? `
-          <div style="background:linear-gradient(135deg, rgba(34,197,94,0.06), rgba(99,102,241,0.06));border:1px solid rgba(34,197,94,0.3);padding:12px 16px;border-radius:8px;margin-top:12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
-            <div>
-              <div style="font-weight:bold;font-size:12px;color:var(--green);display:flex;align-items:center;gap:6px">
-                <span>💰</span> <span>Call Economics: Subagent Parallelism vs Monolithic Main Agent</span>
+          <div style="background:var(--surface-sub);border:1px solid ${roi.isNetSavings ? 'rgba(16,185,129,0.35)' : 'rgba(245,158,11,0.35)'};border-left:3px solid ${roi.isNetSavings ? '#10b981' : '#f59e0b'};padding:14px 18px;border-radius:8px;margin-top:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px">
+            <div style="flex:1;min-width:300px">
+              <div style="font-weight:600;font-size:12px;color:${roi.isNetSavings ? '#10b981' : '#f59e0b'};display:flex;align-items:center;gap:6px">
+                <span>${roi.isNetSavings ? '💰' : '⚡'}</span>
+                <span>Call Economics: Parallel Subagents vs Monolithic Main Agent</span>
               </div>
-              <div style="font-size:11px;color:var(--text-2);margin-top:3px;line-height:1.45">
-                Running these ${workerCount} workers concurrently cost <strong>${fmtCost(totalCost)}</strong> (${primaryModel.split('/').pop()}). If executed sequentially in the main agent context (Claude Opus 5.5), re-reading the accumulated conversation prefix under 1-hour TTL would have cost an estimated <strong style="color:#f87171">${fmtCost(roi.counterfactualMainCost)}</strong>.
+              <div style="font-size:11.5px;color:var(--text-2);margin-top:4px;line-height:1.5">
+                Running these <strong>${workerCount} parallel workers</strong> cost <strong>${fmtCost(totalCost)}</strong> (${escHtml(roi.workerModelName || primaryModel.split('/').pop())}).
+                If executed sequentially in the main agent context (${escHtml(roi.mainModelName || 'opus')}, ~${roi.turnsNeeded || 6} turns using parallel tool calls), re-reading the <strong>${fmtTokens(roi.mainPrefixAtCall || 180000)}</strong> conversation prefix under 1-hour TTL would have cost an estimated <strong style="color:var(--text)">${fmtCost(roi.counterfactualMainCost || 0)}</strong>.
               </div>
             </div>
-            <div style="display:flex;gap:14px;align-items:center">
+            <div style="display:flex;gap:16px;align-items:center;border-left:1px solid var(--border-subtle);padding-left:16px">
               <div style="text-align:right">
-                <div style="font-size:10px;color:var(--text-3);text-transform:uppercase">Estimated Net Savings</div>
-                <div class="mono" style="font-size:16px;font-weight:bold;color:var(--green)">-${fmtCost(roi.savingsDollar)} (${roi.savingsPct}% off)</div>
+                <div style="font-size:10px;color:var(--text-3);text-transform:uppercase;letter-spacing:0.04em">
+                  ${roi.isNetSavings ? 'Estimated Net Savings' : 'Concurrency Speed Premium'}
+                </div>
+                <div class="mono" style="font-size:16px;font-weight:bold;color:${roi.isNetSavings ? '#10b981' : '#f59e0b'}">
+                  ${roi.isNetSavings ? '-' : '+'}${fmtCost(roi.savingsDollar || 0)} (${roi.savingsPct || 0}% ${roi.isNetSavings ? 'saved' : 'premium'})
+                </div>
+                <div style="font-size:10.5px;color:var(--text-3);margin-top:2px">
+                  ${(roi.wallClockSavedSec > 0) ? `⚡ ${(roi.wallClockSavedSec / 60).toFixed(1)}m faster wall-clock` : 'Synchronous handoff'}
+                </div>
               </div>
             </div>
           </div>

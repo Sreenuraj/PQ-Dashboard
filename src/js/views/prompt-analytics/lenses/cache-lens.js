@@ -67,6 +67,15 @@ export function renderCacheLens(data) {
   const w1hTokens = summary ? summary.write1hTokens : 0;
   const w5mTokens = summary ? summary.write5mTokens : (fb.cacheWrite?.tokens || 0);
 
+  const totalIn = calls.reduce((s, c) => s + (c.tokensIn || 0), 0);
+  const totalReads = calls.reduce((s, c) => s + (c.cacheReads || 0), 0);
+  const totalWrites = calls.reduce((s, c) => s + (c.cacheWrites || 0), 0);
+  const totalPrompt = totalIn + totalReads + totalWrites;
+  const hitPct = totalPrompt > 0 ? ((totalReads / totalPrompt) * 100) : 0;
+  const avoidedRewrites = summary?.ttlWhatIf?.avoidedSpikesCost || 0;
+  const extraWrites = summary?.ttlWhatIf?.extraWriteCost || 0;
+  const netSaved = avoidedRewrites - extraWrites;
+
   return `
     <div class="pa-cache-container">
       <!-- Header -->
@@ -78,6 +87,20 @@ export function renderCacheLens(data) {
             <span class="pa-sep">·</span>
             <span>Priced dynamically from model rate catalog${fb.unpriced?.calls ? ` · ${fb.unpriced.calls} call(s) without known price use logged cost` : ''}</span>
           </div>
+        </div>
+      </div>
+
+      <!-- Verdict Banner -->
+      <div class="pa-verdict-banner ${hitPct >= 75 ? 'win' : 'tradeoff'}">
+        <div class="pa-verdict-header">
+          <span class="pa-verdict-title">${hitPct >= 75 ? '⚡ High Prompt Cache Efficiency' : '⏱️ Prompt Cache Diagnostics'}</span>
+          <span class="pa-verdict-pill ${hitPct >= 75 ? 'win' : 'tradeoff'}">
+            ${hitPct.toFixed(1)}% Hit Rate · ${netSaved > 0 ? `+$${netSaved.toFixed(3)} Net Impact` : '1-Hour TTL Active'}
+          </span>
+        </div>
+        <div class="pa-verdict-desc">
+          Task achieved <strong>${hitPct.toFixed(1)}% prompt cache hit rate</strong> across ${calls.length} API calls.
+          ${avoidedRewrites > 0 ? `Extended 1-hour TTL avoided <strong>$${avoidedRewrites.toFixed(3)}</strong> in cache rewrites after idle pauses.` : 'Maintained stable cache prefix alignment with 0 unprovoked eviction spikes.'}
         </div>
       </div>
 

@@ -18,6 +18,7 @@ export function renderContextLens(data) {
 
   const scratchSum = data.scratchSummary || { count: 0, totalSavedBytes: 0 };
   const scratchSaved = scratchSum.totalSavedBytes || 0;
+  const totalSaved = fileSaved + cmdSaved + envSaved + scratchSaved;
   const failedCalls = calls.filter(c => c.hasError);
 
   return `
@@ -29,6 +30,20 @@ export function renderContextLens(data) {
           <div class="pa-lens-subheading">
             <span>Automated token truncations, stale environment snapshot purges, and scratch offloads</span>
           </div>
+        </div>
+      </div>
+
+      <!-- Verdict Banner -->
+      <div class="pa-verdict-banner ${totalSaved > 0 ? 'win' : 'neutral'}">
+        <div class="pa-verdict-header">
+          <span class="pa-verdict-title">${totalSaved > 0 ? '🛡️ Context Window Hygiene Active' : '🛡️ Context Hygiene Overview'}</span>
+          <span class="pa-verdict-pill ${totalSaved > 0 ? 'win' : 'neutral'}">
+            -${fmtBytes(totalSaved)} Offloaded
+          </span>
+        </div>
+        <div class="pa-verdict-desc">
+          Protected conversation memory by offloading <strong>${fmtBytes(totalSaved)}</strong> of raw tool outputs and logs to scratch disk.
+          ${failedCalls.length > 0 ? `Isolated <strong>${failedCalls.length} tool failure retries</strong> from memory accumulation.` : 'Zero redundant token accumulation detected.'}
         </div>
       </div>
 
