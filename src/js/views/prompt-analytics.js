@@ -601,28 +601,37 @@ function renderAnalytics(contentEl) {
   const totalSaved = fileSaved + cmdSaved + envSaved + scratchSaved;
 
   contentEl.innerHTML = `
-    <!-- Intent-Driven Analytical Lenses Bar (taste-skill anti-slop) -->
-    <div class="pa-lenses-bar" id="pa-lenses-bar" role="tablist" aria-label="Analytical Perspectives">
-      <button class="pa-lens-tab ${curLens === 'subagents' ? 'active' : ''}" data-lens="subagents" role="tab" aria-selected="${curLens === 'subagents'}">
-        <span>🤖 Subagents & Concurrency</span>
-        <span class="pa-lens-badge ${data.subagentSummary?.hasSubagents ? 'blue' : 'neutral'}">${subagentsBadge}</span>
-      </button>
-      <button class="pa-lens-tab ${curLens === 'cache' ? 'active' : ''}" data-lens="cache" role="tab" aria-selected="${curLens === 'cache'}">
-        <span>⏱️ Cache & Cost Diagnostics</span>
-        <span class="pa-lens-badge green">${fmtCost(fb.totalCost || data.task?.totalCost || 0)}</span>
-      </button>
-      <button class="pa-lens-tab ${curLens === 'context' ? 'active' : ''}" data-lens="context" role="tab" aria-selected="${curLens === 'context'}">
-        <span>🛡️ Context Window Hygiene</span>
-        <span class="pa-lens-badge yellow">-${fmtBytes(totalSaved)}</span>
-      </button>
-      <button class="pa-lens-tab ${curLens === 'all' ? 'active' : ''}" data-lens="all" role="tab" aria-selected="${curLens === 'all'}" title="View all analytical lenses stacked together">
-        <span>📑 Full Dossier</span>
-      </button>
-    </div>
+    <!-- Intent-Driven Analytical Lenses Section (taste-skill IDE Tab Anatomy) -->
+    <!-- Analytical Perspectives Bar (Datadog / Grafana Subsystem Navigation) -->
+    <div class="pa-lenses-wrapper">
+      <div class="pa-lenses-bar" id="pa-lenses-bar" role="tablist" aria-label="Analytical Perspectives">
+        <div class="pa-tabs-group">
+          <button class="pa-lens-tab ${curLens === 'subagents' ? 'active' : ''}" data-lens="subagents" role="tab" aria-selected="${curLens === 'subagents'}">
+            <span>🤖 Subagents & Concurrency</span>
+            <span class="pa-lens-badge ${data.subagentSummary?.hasSubagents ? 'blue' : 'neutral'}">${subagentsBadge}</span>
+          </button>
+          <button class="pa-lens-tab ${curLens === 'cache' ? 'active' : ''}" data-lens="cache" role="tab" aria-selected="${curLens === 'cache'}">
+            <span>⏱️ Cache & Cost Diagnostics</span>
+            <span class="pa-lens-badge green">${fmtCost(fb.totalCost || data.task?.totalCost || 0)}</span>
+          </button>
+          <button class="pa-lens-tab ${curLens === 'context' ? 'active' : ''}" data-lens="context" role="tab" aria-selected="${curLens === 'context'}">
+            <span>🛡️ Context Window Hygiene</span>
+            <span class="pa-lens-badge yellow">-${fmtBytes(totalSaved)}</span>
+          </button>
+          <button class="pa-lens-tab ${curLens === 'all' ? 'active' : ''}" data-lens="all" role="tab" aria-selected="${curLens === 'all'}" title="View all analytical lenses stacked together">
+            <span>📑 Full Dossier</span>
+          </button>
+        </div>
+        <div class="pa-nav-meta">
+          <span class="pa-meta-item"><span class="pa-status-dot"></span> 1h Cache TTL</span>
+          <span class="pa-meta-item">Arbitrage: Sonnet vs Opus</span>
+        </div>
+      </div>
 
-    <!-- Active Lens Surface Area -->
-    <div id="pa-lens-content-area" class="pa-lens-content-area">
-      ${renderActiveLens(curLens, data)}
+      <!-- Active Lens Surface Area -->
+      <div id="pa-lens-content-area" class="pa-lens-content-area">
+        ${renderActiveLens(curLens, data)}
+      </div>
     </div>
 
     <!-- Timeline Chart Panel -->

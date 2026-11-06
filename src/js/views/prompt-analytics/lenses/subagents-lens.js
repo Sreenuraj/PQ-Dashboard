@@ -3,9 +3,11 @@ import { escHtml, fmtBytes, fmtTokens, fmtCost, fmtTime, fmtDuration, fmtRate } 
 /**
  * Renders the Subagents & Concurrency Analytical Lens
  * Applying taste-skill anti-slop rules:
- * - Two levels, never three (no nested boxes inside nested boxes)
- * - Strict Obsidian surface cards with hairline borders
- * - Grounded metrics, tabular numbers, zero visual noise
+ * - Softer charcoal engineering aesthetics
+ * - Strict 4-card KPI grid with clear visual focal numbers
+ * - Compact novelty progress indicators & collapsed file details
+ * - Meaningful visual comparisons (concurrency wall-clock & context shield)
+ * - Clean executive synthesis with expandable deep-dive evidence
  */
 export function renderSubagentsLens(data) {
   const s = data.subagentSummary;
@@ -13,10 +15,10 @@ export function renderSubagentsLens(data) {
 
   if (!hasSub) {
     return `
-      <div class="pa-lens-surface" style="padding:32px 24px;text-align:center;background:var(--surface-card);border:1px solid var(--border);border-radius:var(--radius-sm)">
-        <div style="font-size:28px;margin-bottom:8px">🤖</div>
-        <div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:6px">Single-Agent Thread (No Subagents Delegated)</div>
-        <div style="font-size:12px;color:var(--text-3);max-width:520px;margin:0 auto;line-height:1.5">
+      <div class="pa-lens-surface" style="padding:32px 24px;text-align:center;background:var(--surface-sub);border:1px solid var(--border);border-radius:var(--radius-sm)">
+        <div style="font-size:24px;margin-bottom:6px">🤖</div>
+        <div style="font-size:13.5px;font-weight:600;color:var(--text);margin-bottom:4px">Single-Agent Thread (No Subagents Delegated)</div>
+        <div style="font-size:11.5px;color:var(--text-3);max-width:520px;margin:0 auto;line-height:1.5">
           This task ran exclusively in the primary agent thread. Subagent parallel partitioning, model arbitrage, and concurrency speedups are tracked when subagents are launched via <code>use_subagents</code>.
         </div>
       </div>
@@ -26,7 +28,6 @@ export function renderSubagentsLens(data) {
   const roi = s.roiAnalysis;
   const actualCost = roi.actualCost || s.totalCost || 0;
   const grounded = roi.groundedSingleAgent || roi.realisticFocused || { cost: actualCost, turns: s.totalTurns || 1, outputTokens: s.totalOutputTokens || 0, explorationPremium: 0, explorationPremiumPct: 0 };
-  const exh = roi.exhaustiveMonolithic || { cost: actualCost, turns: s.totalTurns || 1, sameModelCost: actualCost, arbitrageSavings: 0 };
   const modes = roi.modes || {};
   const wall = roi.wallClock || { actualSec: 0, sequentialSec: 0, savedSec: 0, speedupFactor: 1 };
   const friction = roi.scratchFriction || { redundantCost: roi.redundantWorkCost || 0, redundantTurns: 0, scratchBytes: 0 };
@@ -38,182 +39,263 @@ export function renderSubagentsLens(data) {
   const isBackground = modes.concurrency?.isBackground || false;
   const isFork = modes.context?.isFork || false;
 
+  const totalShieldedTokens = roi.contextTokensPrevented || (s.totalTokensIn + s.totalTokensOut) || 0;
+
   return `
     <div class="pa-subagents-container">
-      <!-- Lens Header Status Bar -->
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px">
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          <span style="font-weight:600;font-size:13px;color:var(--text);display:flex;align-items:center;gap:6px">
-            <span>🤖</span> <span>Subagents Economics & Empirical Scope Analysis</span>
-          </span>
-          <span class="mono" style="background:var(--surface-sub);border:1px solid var(--border);color:var(--text-2);padding:2px 8px;border-radius:10px;font-size:11px;font-weight:500">
-            ${s.totalRuns} Run${s.totalRuns === 1 ? '' : 's'} · ${s.totalWorkers} Worker${s.totalWorkers === 1 ? '' : 's'} · ${s.totalTurns} Turn${s.totalTurns === 1 ? '' : 's'}
-          </span>
-          <!-- Setting 1: Arbitrage -->
-          <span class="mono" style="background:${isArbitrage ? 'rgba(2,132,199,0.12)' : 'var(--surface-sub)'};border:1px solid ${isArbitrage ? 'rgba(2,132,199,0.3)' : 'var(--border)'};color:${isArbitrage ? '#38bdf8' : 'var(--text-3)'};padding:2px 8px;border-radius:10px;font-size:10.5px">
-            ${isArbitrage ? `Arbitrage: ${escHtml(subModelShort)} (Sub) vs ${escHtml(mainModelShort)} (Main)` : `Model: ${escHtml(mainModelShort)}`}
-          </span>
-          <!-- Setting 2: Background -->
-          <span class="mono" style="background:${isBackground ? 'rgba(16,185,129,0.12)' : 'var(--surface-sub)'};border:1px solid ${isBackground ? 'rgba(16,185,129,0.3)' : 'var(--border)'};color:${isBackground ? '#34d399' : 'var(--text-3)'};padding:2px 8px;border-radius:10px;font-size:10.5px">
-            ${isBackground ? '⚡ Async Background' : '⏱ Sync Foreground'}
-          </span>
-          <!-- Setting 3: Fork -->
-          <span class="mono" style="background:${isFork ? 'rgba(245,158,11,0.12)' : 'var(--surface-sub)'};border:1px solid ${isFork ? 'rgba(245,158,11,0.3)' : 'var(--border)'};color:${isFork ? '#fbbf24' : 'var(--text-3)'};padding:2px 8px;border-radius:10px;font-size:10.5px">
-            ${isFork ? '🔀 Forked Context' : '🛡️ Fresh Isolated'}
-          </span>
+      <!-- 1. Clean Polished Header (Quiet, Informative) -->
+      <div class="pa-lens-header">
+        <div>
+          <div class="pa-lens-heading">Subagents Economics & Empirical Scope Analysis</div>
+          <div class="pa-lens-subheading">
+            <span>${s.totalRuns} run${s.totalRuns === 1 ? '' : 's'}</span>
+            <span>·</span>
+            <span>${s.totalWorkers} parallel worker${s.totalWorkers === 1 ? '' : 's'}</span>
+            <span>·</span>
+            <span>${s.totalTurns} turns</span>
+            <span class="pa-sep">·</span>
+            <span>Arbitrage: <strong>${escHtml(subModelShort)}</strong> (workers) vs <strong>${escHtml(mainModelShort)}</strong> (main)</span>
+            <span class="pa-sep">·</span>
+            <span>${escHtml(roi.ttlMode || 'Prompt Cache Active')}</span>
+          </div>
         </div>
-        <div style="font-size:11px;color:var(--text-3)">
-          <span>⏱ <strong>${escHtml(roi.ttlMode || 'Prompt Cache Active')}</strong></span>
+        <div class="pa-mode-chips">
+          <span class="pa-mode-chip">${isBackground ? 'Async Background' : 'Sync Foreground'}</span>
+          <span class="pa-mode-chip">${isFork ? 'Forked Context' : 'Fresh Context'}</span>
         </div>
       </div>
 
-      <!-- 4-Column Balanced Trade-Off Grid -->
-      <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));gap:10px;margin-bottom:14px">
-        <!-- 1. Actual Subagents Run -->
-        <div style="background:var(--surface-card);border:1px solid var(--border);padding:12px 14px;border-radius:var(--radius-sm)">
-          <div style="font-size:11px;color:var(--text-3);margin-bottom:3px;font-weight:500">With Subagents (Actual Spend)</div>
-          <div class="mono" style="font-size:18px;font-weight:700;color:#a5b4fc">${fmtCost(actualCost)}</div>
-          <div style="font-size:10.5px;color:var(--text-2);margin-top:6px;display:flex;flex-direction:column;gap:3px">
-            <span>• <strong>${s.totalTurns}</strong> turn${s.totalTurns === 1 ? '' : 's'} across ${s.totalWorkers} parallel worker${s.totalWorkers === 1 ? '' : 's'}</span>
-            <span>• <strong>${fmtTokens(roi.totalOutputTokens || s.totalOutputTokens)}</strong> output tokens (${s.totalWorkers} reports)</span>
-            <span>• <strong>${fmtTokens(s.totalCacheReads)}</strong> cache reads (${(s.cacheHitPct || 0).toFixed(1)}% hit)</span>
+      <!-- 2. Balanced 4-KPI Grid (Prominent Numbers, Consistent Height, Meaningful Colors) -->
+      <div class="pa-kpi-grid-4">
+        <!-- KPI 1: Actual Spend -->
+        <div class="pa-kpi-card cyan">
+          <div class="pa-kpi-top">
+            <span class="pa-kpi-label">Actual Subagent Spend</span>
+            <span class="pa-kpi-chip primary">${s.totalWorkers} WORKERS</span>
+          </div>
+          <div class="pa-kpi-value cyan mono">${fmtCost(actualCost)}</div>
+          <div class="pa-kpi-footer">
+            <span>${s.totalTurns} turns · ${fmtTokens(roi.totalOutputTokens || s.totalOutputTokens)} out</span>
+            <strong class="mono">${(s.cacheHitPct || 0).toFixed(1)}% cache hit</strong>
           </div>
         </div>
 
-        <!-- 2. Data-Grounded Single Agent Baseline -->
-        <div style="background:var(--surface-card);border:1px solid var(--border);padding:12px 14px;border-radius:var(--radius-sm)">
-          <div style="font-size:11px;color:var(--text-3);margin-bottom:3px;font-weight:500">Single Agent Baseline (${grounded.novelFilesCount != null ? grounded.novelFilesCount : 0} Novel Files)</div>
-          <div class="mono" style="font-size:18px;font-weight:700;color:#38bdf8">${fmtCost(grounded.cost)}</div>
-          <div style="font-size:10.5px;color:var(--text-2);margin-top:6px;display:flex;flex-direction:column;gap:3px">
-            <span>• <strong>${grounded.novelFilesCount != null ? grounded.novelFilesCount : 0}</strong> unread file${grounded.novelFilesCount === 1 ? '' : 's'} required opening</span>
-            <span>• Min <strong>${grounded.turns || 1}</strong> sequential turn${(grounded.turns || 1) === 1 ? '' : 's'} (${fmtTokens(grounded.outputTokens || 0)} notes)</span>
-            <span>• Subagents carried <strong style="color:${(grounded.explorationPremium || 0) >= 0 ? '#fb7185' : '#34d399'}">${(grounded.explorationPremium || 0) >= 0 ? '+' : ''}${fmtCost(grounded.explorationPremium || grounded.explorationOverhead || 0)}</strong> report delta</span>
+        <!-- KPI 2: Single-Agent Baseline -->
+        <div class="pa-kpi-card neutral">
+          <div class="pa-kpi-top">
+            <span class="pa-kpi-label">Single Agent Baseline</span>
+            <span class="pa-kpi-chip neutral">${grounded.novelFilesCount != null ? grounded.novelFilesCount : 0} NOVEL FILES</span>
+          </div>
+          <div class="pa-kpi-value mono" style="color:var(--text)">
+            ${fmtCost(grounded.cost)}
+            ${(grounded.explorationPremium || 0) > 0 ? `<span class="pa-kpi-delta amber mono">+${fmtCost(grounded.explorationPremium)}</span>` : ''}
+          </div>
+          <div class="pa-kpi-footer">
+            <span>Min ${grounded.turns || 1} sequential turns</span>
+            <strong class="mono">${grounded.novelFilesCount != null ? grounded.novelFilesCount : 0} novel files to read</strong>
           </div>
         </div>
 
-        <!-- 3. Concurrency Wall-Clock Savings -->
-        <div style="background:var(--surface-card);border:1px solid var(--border);padding:12px 14px;border-radius:var(--radius-sm)">
-          <div style="font-size:11px;color:var(--text-3);margin-bottom:3px;font-weight:500">Measured Concurrency Speedup</div>
-          <div class="mono" style="font-size:18px;font-weight:700;color:#34d399">-${(wall.savedSec / 60).toFixed(1)} min saved</div>
-          <div style="font-size:10.5px;color:var(--text-2);margin-top:6px;display:flex;flex-direction:column;gap:3px">
-            <span>• <strong>${(wall.actualSec / 60).toFixed(1)} min</strong> concurrent vs <strong>${(wall.sequentialSec / 60).toFixed(1)} min</strong> sequential</span>
-            <span>• <strong>${(wall.speedupFactor || 1).toFixed(2)}x</strong> parallel speedup factor</span>
-            <span>• Grounded in exact worker timestamps</span>
+        <!-- KPI 3: Concurrency Speedup -->
+        <div class="pa-kpi-card green">
+          <div class="pa-kpi-top">
+            <span class="pa-kpi-label">Concurrency Speedup</span>
+            <span class="pa-kpi-chip green">${(wall.speedupFactor || 1).toFixed(2)}x faster</span>
+          </div>
+          <div class="pa-kpi-value green mono">-${(wall.savedSec / 60).toFixed(1)} min</div>
+          <div class="pa-kpi-footer">
+            <span>${(wall.actualSec / 60).toFixed(1)}m actual vs ${(wall.sequentialSec / 60).toFixed(1)}m seq</span>
+            <strong class="mono green">${(wall.speedupFactor || 1).toFixed(2)}x parallel speedup</strong>
           </div>
         </div>
 
-        <!-- 4. Scratch Amnesia & Redundant Work Overhead -->
-        <div style="background:var(--surface-card);border:1px solid var(--border);padding:12px 14px;border-radius:var(--radius-sm)">
-          <div style="font-size:11px;color:var(--text-3);margin-bottom:3px;font-weight:500">Scratch Friction & Retries</div>
-          <div class="mono" style="font-size:18px;font-weight:700;color:${friction.redundantCost > 0 ? '#fbbf24' : 'var(--text-3)'}">
+        <!-- KPI 4: Scratch Retries & Friction -->
+        <div class="pa-kpi-card amber">
+          <div class="pa-kpi-top">
+            <span class="pa-kpi-label">Scratch Friction & Retries</span>
+            <span class="pa-kpi-chip ${friction.redundantCost > 0 ? 'amber' : 'neutral'}">${friction.redundantTurns || 0} EXTRA TURNS</span>
+          </div>
+          <div class="pa-kpi-value mono ${friction.redundantCost > 0 ? 'amber' : 'muted'}">
             ${friction.redundantCost > 0 ? `+${fmtCost(friction.redundantCost)}` : '$0.00'}
           </div>
-          <div style="font-size:10.5px;color:var(--text-2);margin-top:6px;display:flex;flex-direction:column;gap:3px">
-            <span>• <strong>${friction.redundantTurns || 0}</strong> extra main agent turn${friction.redundantTurns === 1 ? '' : 's'} triggered</span>
-            <span>• <strong>${fmtBytes(friction.scratchBytes || 0)}</strong> findings offloaded to scratch</span>
-            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(friction.description || '')}">• ${escHtml(friction.description || 'No redundant scratch re-reads detected.')}</span>
+          <div class="pa-kpi-footer">
+            <span>${fmtBytes(friction.scratchBytes || 0)} offloaded to scratch</span>
+            <strong class="mono ${friction.redundantTurns > 0 ? 'amber' : ''}">${friction.redundantTurns || 0} extra main turns</strong>
           </div>
         </div>
       </div>
 
-      <!-- Scope Independence & Context Overlap Matrix -->
+      <!-- 3. Performance Visualisation Bar (Compact, Communicates Speedup & Context Shielding) -->
+      <div class="pa-visual-comparison">
+        <div class="pa-comparison-item">
+          <div class="pa-comp-label">
+            <span>⚡ <strong>Execution Wall-Clock:</strong> ${(wall.actualSec / 60).toFixed(1)} min concurrent vs ${(wall.sequentialSec / 60).toFixed(1)} min sequential</span>
+            <span class="green mono"><strong>${(wall.speedupFactor || 1).toFixed(2)}x speedup</strong> (-${(wall.savedSec / 60).toFixed(1)} min)</span>
+          </div>
+          <div class="pa-progress-track">
+            <div class="pa-progress-bar green" style="width: ${Math.min(100, Math.max(15, Math.round((wall.actualSec / (wall.sequentialSec || 1)) * 100)))}%"></div>
+          </div>
+        </div>
+
+        <div class="pa-comparison-item">
+          <div class="pa-comp-label">
+            <span>🛡️ <strong>Main Thread Context Protection:</strong> Kept raw worker investigations out of main conversation memory</span>
+            <span class="cyan mono"><strong>~${fmtTokens(totalShieldedTokens)}</strong> tokens shielded</span>
+          </div>
+          <div class="pa-progress-track">
+            <div class="pa-progress-bar cyan" style="width: 85%"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 4. Task Independence & Overlap Matrix (Datadog Span Breakdown Table) -->
       ${(scope.runs && scope.runs.length > 0) ? `
-        <div style="margin-bottom:14px;background:var(--surface-card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
-            <div style="display:flex;align-items:center;gap:8px">
-              <span style="font-weight:600;font-size:12px;color:var(--text)">🎯 Subagent Task Independence & Overlap Matrix</span>
-              <span class="mono" style="background:var(--surface-sub);border:1px solid var(--border);color:var(--text-2);padding:1px 6px;border-radius:8px;font-size:10px;font-weight:500">
-                ${scope.summary.totalDistinctNovelFiles || 0} Total Novel Files Unseen by Main Agent
-              </span>
+        <div class="pa-matrix-panel">
+          <div class="pa-matrix-header">
+            <div class="pa-matrix-title">
+              <span>🎯 Task Independence & Scope Overlap Matrix</span>
             </div>
-            <div style="font-size:10.5px;color:var(--text-3)">
-              Programmatic verification of prior main context vs worker scopes
+            <div class="pa-matrix-subtitle">
+              Programmatic scope verification: <strong>${scope.summary.totalDistinctNovelFiles || 0} novel files</strong> unseen by main agent
             </div>
           </div>
 
-          <div style="display:flex;flex-direction:column;gap:8px">
-            ${scope.runs.map(r => `
-              <div style="background:var(--surface-sub);border:1px solid var(--border);border-radius:var(--radius-xs);padding:10px">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:6px">
-                  <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-                    <strong style="font-size:11.5px;color:var(--text)">Run #${r.runIndex} (Call #${r.callIndex}): ${r.workerCount} Worker${r.workerCount === 1 ? '' : 's'}</strong>
-                    <span class="mono" style="background:${r.overallNoveltyPct >= 75 ? 'rgba(16,185,129,0.12)' : 'rgba(2,132,199,0.12)'};color:${r.overallNoveltyPct >= 75 ? '#34d399' : '#38bdf8'};padding:1px 6px;border-radius:6px;font-size:10px;font-weight:500">
-                      ${escHtml(r.taskType)} (${r.overallNoveltyPct}% Novel Files)
-                    </span>
-                    <span class="mono" style="background:rgba(139,92,246,0.12);color:#c084fc;padding:1px 6px;border-radius:6px;font-size:10px;font-weight:500">
-                      ${r.uniquenessPct}% Worker-to-Worker Uniqueness
-                    </span>
-                  </div>
-                  <div style="font-size:10.5px;color:var(--text-3)">
-                    <strong>${r.uniqueNovelFilesCount}</strong> novel files · <strong>${r.uniqueTargetFilesCount}</strong> total scope files
-                  </div>
+          ${scope.runs.map(r => `
+            <div class="pa-run-block">
+              <div class="pa-run-bar">
+                <div class="pa-run-bar-left">
+                  <strong>Run #${r.runIndex} (Call #${r.callIndex})</strong>
+                  <span class="pa-sep">·</span>
+                  <span class="pa-run-tag-cyan">${escHtml(r.taskType)}</span>
+                  <span class="pa-sep">·</span>
+                  <span>${r.workerCount} workers</span>
                 </div>
-                <div style="font-size:10.5px;color:var(--text-2);margin-bottom:8px">
-                  ${escHtml(r.taskTypeDescription)}
-                </div>
-
-                <!-- Worker Cards Grid -->
-                <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(210px, 1fr));gap:8px">
-                  ${r.workers.map(w => `
-                    <div style="background:var(--surface-card);border:1px solid var(--border);border-radius:4px;padding:8px;font-size:10px">
-                      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-                        <strong style="color:var(--text);font-size:10.5px">${escHtml(w.label)}</strong>
-                        <span class="mono" style="font-weight:bold;color:${w.noveltyPct >= 75 ? '#34d399' : (w.noveltyPct >= 35 ? '#38bdf8' : '#fbbf24')}">
-                          ${w.noveltyPct}% novel
-                        </span>
-                      </div>
-                      <div style="color:var(--text-3);margin-bottom:4px">
-                        <span>Prior Main Context: </span>
-                        <strong style="color:${w.knownToMainCount > 0 ? '#fbbf24' : '#34d399'}">
-                          ${w.knownToMainCount > 0 ? `${w.knownToMainCount} file(s) seen` : '0% seen (100% Brand-New)'}
-                        </strong>
-                      </div>
-                      <div style="color:var(--text-2);line-height:1.3">
-                        <div style="font-weight:600;margin-bottom:2px">Assigned Scope Targets (${w.targetCount}):</div>
-                        ${w.targetCount > 0 ? `
-                          <ul style="margin:0 0 0 12px;padding:0;list-style:disc">
-                            ${w.targets.slice(0, 3).map(t => `<li title="${escHtml(t)}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(t.split('/').pop())}</li>`).join('')}
-                            ${w.targets.length > 3 ? `<li style="color:var(--text-3)">+${w.targets.length - 3} more files...</li>` : ''}
-                          </ul>
-                        ` : `<span style="color:var(--text-3);font-style:italic">Dynamic codebase inspection / directive</span>`}
-                      </div>
-                    </div>
-                  `).join('')}
+                <div class="pa-run-bar-right mono">
+                  ${r.uniqueNovelFilesCount} novel files · ${r.uniquenessPct}% partition uniqueness
                 </div>
               </div>
-            `).join('')}
-          </div>
+
+              <div class="pa-table-responsive">
+                <table class="pa-worker-table">
+                  <thead>
+                    <tr>
+                      <th style="width:30%">Worker / Target Scope</th>
+                      <th style="width:20%">Novelty Percentage</th>
+                      <th style="width:18%">Scope Partitioning</th>
+                      <th style="width:16%">Prior Context Seen</th>
+                      <th style="width:16%">Target Files</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${r.workers.map((w, wIdx) => {
+                      const noveltyClass = w.noveltyPct >= 75 ? 'green' : (w.noveltyPct >= 35 ? 'cyan' : 'amber');
+                      return `
+                        <tr>
+                          <td class="pa-worker-name-cell">
+                            <strong>Worker #${wIdx + 1}:</strong> ${escHtml(w.label.replace(/^Worker\s*#?\d*:?\s*/i, ''))}
+                          </td>
+                          <td>
+                            <div class="pa-mini-gauge">
+                              <div class="pa-mini-track">
+                                <div class="pa-mini-fill ${noveltyClass}" style="width: ${w.noveltyPct}%"></div>
+                              </div>
+                              <strong class="mono ${noveltyClass}">${w.noveltyPct}%</strong>
+                            </div>
+                          </td>
+                          <td class="mono" style="font-size:11.5px">
+                            ${w.novelCount != null ? w.novelCount : (w.novelTargetCount || 0)} new · ${w.knownToMainCount || 0} prior
+                          </td>
+                          <td>
+                            ${(w.knownToMainCount || 0) > 0
+                              ? `<span class="pa-chip amber">${w.knownToMainCount} file${w.knownToMainCount === 1 ? '' : 's'} seen</span>`
+                              : `<span class="pa-chip green">100% Brand-New</span>`
+                            }
+                          </td>
+                          <td>
+                            ${w.targetCount > 0 ? `
+                              <details class="pa-worker-files-details">
+                                <summary class="pa-expand-btn">Show ${w.targetCount} file${w.targetCount === 1 ? '' : 's'} ▸</summary>
+                                <div class="pa-worker-files-dropdown">
+                                  ${w.targets.map(t => {
+                                    const isNovel = !w.knownFiles?.includes(t);
+                                    return `
+                                      <div class="pa-worker-file-row" title="${escHtml(t)}">
+                                        <span class="pa-file-tag ${isNovel ? 'new' : 'seen'}">${isNovel ? 'NEW' : 'SEEN'}</span>
+                                        <span class="pa-file-path mono">${escHtml(t.split('/').pop())}</span>
+                                      </div>
+                                    `;
+                                  }).join('')}
+                                </div>
+                              </details>
+                            ` : `<span class="pa-worker-dynamic-hint">Dynamic directive</span>`}
+                          </td>
+                        </tr>
+                      `;
+                    }).join('')}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          `).join('')}
         </div>
       ` : ''}
 
-      <!-- Engineering Reality Banner -->
-      <div style="font-size:11px;color:var(--text-2);background:var(--surface-card);padding:12px 14px;border-radius:var(--radius-sm);border:1px solid var(--border);line-height:1.6;display:flex;flex-direction:column;gap:8px">
-        <div style="display:flex;align-items:flex-start;gap:8px">
-          <span style="font-size:14px;line-height:1">💡</span>
-          <div>
-            <strong style="color:var(--text)">The Scope-Grounded Reality:</strong>
-            ${escHtml(grounded.basisExplanation || `Subagents were assigned ${scope.summary?.totalDistinctNovelFiles || 0} novel files unseen by the main agent. Reading them sequentially would require at least ${grounded.turns || 1} tool turns, costing ${fmtCost(grounded.cost)} on ${mainModelShort}.`)}
-            Subagents completed in <strong style="color:#a5b4fc">${fmtCost(actualCost)}</strong> across ${s.totalWorkers} parallel worker${s.totalWorkers === 1 ? '' : 's'} (${s.totalTurns} turns, ${fmtTokens(s.totalOutputTokens || 0)} output tokens).
-          </div>
+      <!-- 5. Lower Sections: Grouped Findings & Evidence Accordion -->
+      <div class="pa-findings-section">
+        <!-- Executive Synthesis Card -->
+        <div class="pa-executive-card">
+          <strong>💡 Scope-Grounded Reality:</strong>
+          ${escHtml(grounded.basisExplanation || `Subagents were assigned ${scope.summary?.totalDistinctNovelFiles || 0} novel files unseen by the main agent. Reading them sequentially would require at least ${grounded.turns || 1} tool turns, costing ${fmtCost(grounded.cost)} on ${mainModelShort}.`)}
+          Subagents completed in <strong class="cyan mono">${fmtCost(actualCost)}</strong> across ${s.totalWorkers} parallel worker${s.totalWorkers === 1 ? '' : 's'}, saving <strong>${(wall.savedSec / 60).toFixed(1)} minutes of wall-clock time</strong> and shielding <strong>~${fmtTokens(totalShieldedTokens)} tokens</strong> from context memory.
         </div>
 
-        <div style="display:flex;align-items:flex-start;gap:8px">
-          <span style="font-size:14px;line-height:1">⚡</span>
-          <div>
-            <strong style="color:var(--text)">Why Subagents Were Used:</strong>
-            <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(240px, 1fr));gap:6px;margin-top:4px">
-              <span style="background:var(--surface-sub);border:1px solid var(--border);padding:4px 8px;border-radius:4px">
-                🚀 <strong>Concurrency Speedup:</strong> Completed in <strong>${(wall.actualSec / 60).toFixed(1)} min</strong> concurrent vs <strong>${(wall.sequentialSec / 60).toFixed(1)} min</strong> sequential (<strong>${(wall.savedSec / 60).toFixed(1)} min saved</strong>).
-              </span>
-              <span style="background:var(--surface-sub);border:1px solid var(--border);padding:4px 8px;border-radius:4px">
-                🛡️ <strong>Context Window Protection:</strong> Kept <strong>~${fmtTokens(roi.contextTokensPrevented || (s.totalTokensIn + s.totalTokensOut) || 0)}</strong> of raw file contents and worker reasoning out of the main thread.
-              </span>
-              <span style="background:var(--surface-sub);border:1px solid var(--border);padding:4px 8px;border-radius:4px">
-                🎯 <strong>Partition Uniqueness:</strong> <strong>${scope.runs?.[0]?.uniquenessPct != null ? `${scope.runs[0].uniquenessPct}%` : '100%'}</strong> inter-worker partitioning with minimal duplicate reads across workers.
-              </span>
+        <!-- In-Depth Empirical Details Accordion (Clean, Expandable, Zero Clutter) -->
+        <details class="pa-findings-accordion">
+          <summary class="pa-findings-summary">
+            <span>🔬 View In-Depth Analysis & Settings Details</span>
+            <span style="font-size:11px;color:var(--text-3)">Click to expand</span>
+          </summary>
+          <div class="pa-findings-body">
+            <div class="pa-findings-row">
+              <span class="pa-findings-icon">🚀</span>
+              <div>
+                <strong>Concurrency Speedup:</strong> Completed in <strong>${(wall.actualSec / 60).toFixed(1)} min</strong> concurrent vs <strong>${(wall.sequentialSec / 60).toFixed(1)} min</strong> sequential (<strong>${(wall.savedSec / 60).toFixed(1)} min saved</strong>).
+              </div>
             </div>
+
+            <div class="pa-findings-row">
+              <span class="pa-findings-icon">🛡️</span>
+              <div>
+                <strong>Context Window Protection:</strong> Kept <strong>~${fmtTokens(totalShieldedTokens)}</strong> of raw file contents and worker reasoning out of the main thread.
+              </div>
+            </div>
+
+            <div class="pa-findings-row">
+              <span class="pa-findings-icon">🎯</span>
+              <div>
+                <strong>Partition Uniqueness:</strong> <strong>${scope.runs?.[0]?.uniquenessPct != null ? `${scope.runs[0].uniquenessPct}%` : '100%'}</strong> inter-worker partitioning with minimal duplicate reads across workers.
+              </div>
+            </div>
+
+            <div class="pa-findings-row">
+              <span class="pa-findings-icon">⚙️</span>
+              <div>
+                <strong>PostQode Subagent Settings in Effect:</strong>
+                <span>(1) <em>Model:</em> ${isArbitrage ? `Custom ID <code>${escHtml(subModelShort)}</code> (saving vs <code>${escHtml(mainModelShort)}</code>)` : `Inherited chat model (<code>${escHtml(mainModelShort)}</code>)`}. (2) <em>Concurrency:</em> ${isBackground ? 'Background mode (async non-blocking)' : 'Foreground mode (sync blocking)'}. (3) <em>Context:</em> ${isFork ? 'Fork mode (inherited conversation history)' : 'Fresh isolated context (lean memory)'}.</span>
+              </div>
+            </div>
+
+            ${friction.redundantCost > 0 ? `
+              <div class="pa-findings-row">
+                <span class="pa-findings-icon">⚠️</span>
+                <div>
+                  <strong>Scratch Offload Overhead:</strong>
+                  <span>Offloaded ${fmtBytes(friction.scratchBytes || 0)} of worker logs into scratch disk, requiring ${friction.redundantTurns || 0} extra main agent turns (+${fmtCost(friction.redundantCost)}) to re-read and verify.</span>
+                </div>
+              </div>
+            ` : ''}
           </div>
-        </div>
+        </details>
       </div>
     </div>
   `;

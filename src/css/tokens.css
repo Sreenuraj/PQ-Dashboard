@@ -3,23 +3,23 @@
   --font-sans:  'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono:  'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 
-  /* Surfaces — Obsidian & Deep Zinc scale */
-  --bg:           #09090b;
-  --bg-2:         #0f1015;
-  --bg-3:         #151720;
-  --bg-4:         #1e212d;
-  --bg-hover:     #242837;
+  /* Surfaces — Polished Charcoal Engineering Scale */
+  --bg:           #121318;
+  --bg-2:         #161820;
+  --bg-3:         #1c1e27;
+  --bg-4:         #242734;
+  --bg-hover:     #2b2e3d;
 
   /* Anti-Slop Strict Surface Cards */
-  --surface-card:       #0f1015;
-  --surface-card-hover: #14161f;
-  --surface-sub:        #151720;
-  --surface-highlight:  #1d202d;
+  --surface-card:       #181a22;
+  --surface-card-hover: #1e202b;
+  --surface-sub:        #1e202b;
+  --surface-highlight:  #262937;
 
-  /* Hairlines & Borders */
-  --border:       rgba(255, 255, 255, 0.08);
-  --border-2:     rgba(255, 255, 255, 0.14);
-  --border-subtle:rgba(255, 255, 255, 0.05);
+  /* Hairlines & Borders (soft, quiet, non-competing) */
+  --border:       rgba(255, 255, 255, 0.07);
+  --border-2:     rgba(255, 255, 255, 0.12);
+  --border-subtle:rgba(255, 255, 255, 0.04);
 
   /* Typography — High-Legibility Strict Contrast */
   --text:         #f4f4f5;
