@@ -24,6 +24,11 @@ export function fmtCost(cost) {
   return '$' + cost.toFixed(3);
 }
 
+export function fmtRate(r) {
+  if (r == null) return '—';
+  return '$' + (r >= 1 ? r.toFixed(2) : r.toFixed(3)) + '/1M';
+}
+
 export function fmtTime(ts) {
   if (!ts) return '';
   const d = new Date(ts);

@@ -1,5 +1,8 @@
 import { api } from '../api.js';
-import { escHtml, fmtBytes, fmtTokens, fmtCost, fmtTime, fmtDuration, fmtDelta } from './prompt-analytics/helpers.js';
+import { escHtml, fmtBytes, fmtTokens, fmtCost, fmtTime, fmtDuration, fmtDelta, fmtRate } from './prompt-analytics/helpers.js';
+import { renderSubagentsLens } from './prompt-analytics/lenses/subagents-lens.js';
+import { renderCacheLens } from './prompt-analytics/lenses/cache-lens.js';
+import { renderContextLens } from './prompt-analytics/lenses/context-lens.js';
 import {
   splitPromptLines, buildSideBySideDiffRows, renderSideBySideDiffRow,
   renderSideBySidePromptDiffMarkup, renderSystemPromptSection,
@@ -29,6 +32,7 @@ let reductionViewMode = 'explorer'; // 'explorer' | 'timeline' | 'matrix' | 'gro
 let reductionFeedLimit = 30;
 let activeCallFocusIndex = null; // null = all calls, number = focused on specific API call index
 let selectedExplorerEventIndex = 0;
+let activeLens = null; // null = auto ('subagents' if hasSubagents else 'cache')
 
 let chartSeries = {
   requestSize: true,
@@ -441,6 +445,114 @@ function renderTaskMetricsBar(task, calls, overrideCost = null) {
   });
 }
 
+function renderActiveLens(lens, data) {
+  switch (lens) {
+    case 'subagents':
+      return renderSubagentsLens(data);
+    case 'cache':
+      return renderCacheLens(data);
+    case 'context':
+      return renderContextLens(data);
+    case 'all':
+      return `
+        <div style="display:flex;flex-direction:column;gap:14px">
+          ${renderSubagentsLens(data)}
+          ${renderCacheLens(data)}
+          ${renderContextLens(data)}
+        </div>
+      `;
+    default:
+      return renderCacheLens(data);
+  }
+}
+
+function focusOnCall(colIdx) {
+  if (colIdx == null || isNaN(colIdx)) return;
+  activeCallFocusIndex = colIdx;
+  selectedExplorerEventIndex = 0;
+  reductionSearchQuery = '';
+  activeCategoryFilter = 'ALL';
+  const allEvs = analyticsData?.reductionEvents || [];
+  const matching = allEvs.filter(e => e.callIndex === colIdx);
+  showChartToast(`🎯 Call #${colIdx + 1}: ${matching.length} event${matching.length === 1 ? '' : 's'} inspected`);
+
+  const searchInput = document.getElementById('pa-seq-search-input');
+  if (searchInput) searchInput.value = '';
+
+  renderReductionSequenceFeed(document.getElementById('pa-comparison-body'), analyticsData?.reductionEvents || []);
+  const chartCanvas = document.getElementById('pa-timeline-chart');
+  if (chartCanvas && analyticsData?.apiCalls) {
+    redrawTargetCanvas(chartCanvas, analyticsData.apiCalls);
+  }
+
+  const compSec = document.getElementById('pa-comparison-section');
+  if (compSec) compSec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function bindLensTabEvents() {
+  const bar = document.getElementById('pa-lenses-bar');
+  if (!bar) return;
+
+  bar.querySelectorAll('.pa-lens-tab').forEach(tab => {
+    tab.onclick = () => {
+      const lens = tab.dataset.lens;
+      if (!lens) return;
+      activeLens = lens;
+      bar.querySelectorAll('.pa-lens-tab').forEach(t => {
+        const isActive = t === tab;
+        t.classList.toggle('active', isActive);
+        t.setAttribute('aria-selected', isActive);
+      });
+      const area = document.getElementById('pa-lens-content-area');
+      if (area) {
+        area.innerHTML = renderActiveLens(lens, analyticsData);
+        bindLensInternalEvents(area);
+      }
+    };
+  });
+}
+
+function bindLensInternalEvents(container = document) {
+  // Jump to miss turn spike links
+  container.querySelectorAll('.pa-jump-spike').forEach(a => {
+    a.onclick = (ev) => {
+      ev.preventDefault();
+      const idx = parseInt(a.dataset.idx, 10);
+      if (!isNaN(idx)) {
+        focusOnCall(idx);
+      }
+    };
+  });
+
+  // Summary row clicks (jump or filter)
+  container.querySelectorAll('.pa-summary-row').forEach(row => {
+    row.onclick = () => {
+      const callIdx = row.dataset.callIndex;
+      if (callIdx != null && callIdx !== '') {
+        const idx = parseInt(callIdx, 10);
+        if (!isNaN(idx)) {
+          focusOnCall(idx);
+          return;
+        }
+      }
+
+      const target = row.dataset.target;
+      if (!target) return;
+
+      reductionSearchQuery = target;
+      activeCategoryFilter = 'ALL';
+      reductionViewMode = 'grouped';
+      const searchInput = document.getElementById('pa-seq-search-input');
+      if (searchInput) searchInput.value = target;
+
+      renderReductionSequenceFeed(document.getElementById('pa-comparison-body'), analyticsData?.reductionEvents || []);
+
+      const compSec = document.getElementById('pa-comparison-section');
+      if (compSec) compSec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+  });
+}
+
 function renderAnalytics(contentEl) {
   const data = analyticsData;
   const calls = data.apiCalls;
@@ -479,434 +591,38 @@ function renderAnalytics(contentEl) {
 
   renderTaskMetricsBar(data.task, calls, accurateTotalCost);
 
+  let curLens = activeLens;
+  if (!curLens || (curLens === 'subagents' && !data.subagentSummary?.hasSubagents)) {
+    curLens = data.subagentSummary?.hasSubagents ? 'subagents' : 'cache';
+  }
+  const subagentsBadge = data.subagentSummary?.hasSubagents
+    ? `${data.subagentSummary.totalWorkers} Workers`
+    : 'Single Agent';
+  const totalSaved = fileSaved + cmdSaved + envSaved + scratchSaved;
+
   contentEl.innerHTML = `
-    <!-- Financial Cost & Token Breakdown Panel -->
-    <div style="margin-bottom:16px;background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px;box-shadow:var(--shadow-sm)">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
-        <div style="font-weight:bold;font-size:12.5px;color:var(--text);display:flex;align-items:center;gap:6px">
-          <span>💰 Task Financial Cost & Token Breakdown</span>
-          <span style="background:rgba(56,189,248,0.15);color:#38bdf8;padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:bold" class="mono">🤖 ${escHtml(fb.modelId || 'Model')}</span>
-        </div>
-        <div style="font-size:11px;color:var(--text-3)">
-          Each call priced with its own model's rates (dynamic catalog, calibrated to the cost the extension logged)${fb.unpriced?.calls ? ` · ${fb.unpriced.calls} call(s) on models without a known price use the logged cost (${fmtCost(fb.unpriced.cost)})` : ''}
-        </div>
-      </div>
-
-      <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(170px, 1fr));gap:10px">
-        <!-- 1. Input Tokens -->
-        <div style="background:var(--bg-3);border:1px solid var(--border);padding:10px;border-radius:var(--radius-sm);border-top:3px solid #38bdf8">
-          <div style="font-size:10.5px;color:var(--text-3);margin-bottom:4px;font-weight:600">📥 Uncached Input</div>
-          <div class="mono" style="font-size:15px;font-weight:bold;color:var(--text)">${fmtTokens(fb.input?.tokens || 0)}</div>
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:10px">
-            <span style="color:#38bdf8;font-weight:bold">${fmtCost(fb.input?.cost || 0)}</span>
-            <span style="color:var(--text-3)" class="mono">${fmtRate(fb.input?.pricePerM)}</span>
-          </div>
-        </div>
-
-        <!-- 2. Output Tokens -->
-        <div style="background:var(--bg-3);border:1px solid var(--border);padding:10px;border-radius:var(--radius-sm);border-top:3px solid #e879f9">
-          <div style="font-size:10.5px;color:var(--text-3);margin-bottom:4px;font-weight:600">📤 Output Generation</div>
-          <div class="mono" style="font-size:15px;font-weight:bold;color:var(--text)">${fmtTokens(fb.output?.tokens || 0)}</div>
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:10px">
-            <span style="color:#e879f9;font-weight:bold">${fmtCost(fb.output?.cost || 0)}</span>
-            <span style="color:var(--text-3)" class="mono">${fmtRate(fb.output?.pricePerM)}</span>
-          </div>
-        </div>
-
-        <!-- 3. Cache Read Tokens -->
-        <div style="background:var(--bg-3);border:1px solid var(--border);padding:10px;border-radius:var(--radius-sm);border-top:3px solid var(--green)">
-          <div style="font-size:10.5px;color:var(--text-3);margin-bottom:4px;font-weight:600;display:flex;justify-content:space-between">
-            <span>📖 Cache Reads</span>
-            ${(() => { const i = fb.input?.pricePerM, r = fb.cacheRead?.pricePerM; return i > 0 && r != null ? `<span style="color:var(--green);font-size:9.5px;font-weight:bold">⚡ ${Math.round((1 - r / i) * 100)}% off input</span>` : ''; })()}
-          </div>
-          <div class="mono" style="font-size:15px;font-weight:bold;color:var(--text)">${fmtTokens(fb.cacheRead?.tokens || 0)}</div>
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:10px">
-            <span style="color:var(--green);font-weight:bold">${fmtCost(fb.cacheRead?.cost || 0)}</span>
-            <span style="color:var(--text-3)" class="mono">${fmtRate(fb.cacheRead?.pricePerM)}</span>
-          </div>
-        </div>
-
-        <!-- 4. Cache Write Tokens -->
-        <div style="background:var(--bg-3);border:1px solid var(--border);padding:10px;border-radius:var(--radius-sm);border-top:3px solid #f59e0b">
-          <div style="font-size:10.5px;color:var(--text-3);margin-bottom:4px;font-weight:600">✍️ Cache Writes</div>
-          <div class="mono" style="font-size:15px;font-weight:bold;color:var(--text)">${fmtTokens(fb.cacheWrite?.tokens || 0)}</div>
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:10px">
-            <span style="color:#f59e0b;font-weight:bold">${fmtCost(fb.cacheWrite?.cost || 0)}</span>
-            <span style="color:var(--text-3)" class="mono">${fmtRate(fb.cacheWrite?.pricePerM)}</span>
-          </div>
-          ${ttlSplit ? `<div style="margin-top:4px;font-size:9.5px;color:var(--text-3)" class="mono">${ttlSplit}</div>` : ''}
-        </div>
-
-        <!-- 5. Total Financial Cost -->
-        <div style="background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.3);padding:10px;border-radius:var(--radius-sm);border-top:3px solid var(--green)">
-          <div style="font-size:10.5px;color:var(--green);margin-bottom:4px;font-weight:bold">💵 Total Financial Cost</div>
-          <div class="mono" style="font-size:18px;font-weight:bold;color:var(--green)">${fmtCost(fb.totalCost || data.task?.totalCost || 0)}</div>
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;font-size:10px;color:var(--text-2)">
-            <span>${calls.length} API Calls</span>
-            <span>${fb.isMultiModel ? (fb.modelsUsed || []).length + ' models' : '100% Billable'}</span>
-          </div>
-        </div>
-      </div>
+    <!-- Intent-Driven Analytical Lenses Bar (taste-skill anti-slop) -->
+    <div class="pa-lenses-bar" id="pa-lenses-bar" role="tablist" aria-label="Analytical Perspectives">
+      <button class="pa-lens-tab ${curLens === 'subagents' ? 'active' : ''}" data-lens="subagents" role="tab" aria-selected="${curLens === 'subagents'}">
+        <span>🤖 Subagents & Concurrency</span>
+        <span class="pa-lens-badge ${data.subagentSummary?.hasSubagents ? 'blue' : 'neutral'}">${subagentsBadge}</span>
+      </button>
+      <button class="pa-lens-tab ${curLens === 'cache' ? 'active' : ''}" data-lens="cache" role="tab" aria-selected="${curLens === 'cache'}">
+        <span>⏱️ Cache & Cost Diagnostics</span>
+        <span class="pa-lens-badge green">${fmtCost(fb.totalCost || data.task?.totalCost || 0)}</span>
+      </button>
+      <button class="pa-lens-tab ${curLens === 'context' ? 'active' : ''}" data-lens="context" role="tab" aria-selected="${curLens === 'context'}">
+        <span>🛡️ Context Window Hygiene</span>
+        <span class="pa-lens-badge yellow">-${fmtBytes(totalSaved)}</span>
+      </button>
+      <button class="pa-lens-tab ${curLens === 'all' ? 'active' : ''}" data-lens="all" role="tab" aria-selected="${curLens === 'all'}" title="View all analytical lenses stacked together">
+        <span>📑 Full Dossier</span>
+      </button>
     </div>
 
-    <!-- Executive Subagents Economic ROI & Counterfactual Analysis -->
-    ${(data.subagentSummary?.hasSubagents && data.subagentSummary.roiAnalysis) ? (() => {
-      const s = data.subagentSummary;
-      const roi = s.roiAnalysis;
-      const actualCost = roi.actualCost || s.totalCost || 0;
-      const grounded = roi.groundedSingleAgent || roi.realisticFocused || { cost: actualCost, turns: s.totalTurns || 1, outputTokens: s.totalOutputTokens || 0, explorationPremium: 0, explorationPremiumPct: 0 };
-      const exh = roi.exhaustiveMonolithic || { cost: actualCost, turns: s.totalTurns || 1, sameModelCost: actualCost, arbitrageSavings: 0 };
-      const modes = roi.modes || {};
-      const wall = roi.wallClock || { actualSec: 0, sequentialSec: 0, savedSec: 0, speedupFactor: 1 };
-      const friction = roi.scratchFriction || { redundantCost: roi.redundantWorkCost || 0, redundantTurns: 0, scratchBytes: 0 };
-      const scope = roi.scopeAnalysis || { runs: [], summary: {} };
-
-      const mainModelShort = (modes.arbitrage?.mainModel || roi.modelArbitrage?.mainModel || 'opus').split('/').pop().replace('claude-', '').replace('latest', '');
-      const subModelShort = (modes.arbitrage?.subagentModel || roi.modelArbitrage?.subagentModel || 'sonnet').split('/').pop().replace('claude-', '').replace('latest', '');
-      const isArbitrage = modes.arbitrage?.isActive !== false;
-      const isBackground = modes.concurrency?.isBackground || false;
-      const isFork = modes.context?.isFork || false;
-
-      return `
-        <div style="margin-bottom:16px;background:linear-gradient(135deg, rgba(99,102,241,0.08), rgba(56,189,248,0.04));border:1px solid rgba(99,102,241,0.35);border-radius:var(--radius-sm);padding:14px;box-shadow:var(--shadow-sm)">
-          <!-- Panel Header with Settings Modes -->
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-              <span style="font-weight:bold;font-size:13px;color:#a5b4fc;display:flex;align-items:center;gap:6px">
-                <span>🤖</span> <span>Subagents Engineering Economics & Empirical Scope Analysis</span>
-              </span>
-              <span class="mono" style="background:rgba(99,102,241,0.22);color:#c7d2fe;padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:bold;border:1px solid rgba(99,102,241,0.35)">
-                ${s.totalRuns} Run${s.totalRuns === 1 ? '' : 's'} · ${s.totalWorkers} Worker${s.totalWorkers === 1 ? '' : 's'} · ${s.totalTurns} Turn${s.totalTurns === 1 ? '' : 's'}
-              </span>
-              <!-- Setting 1: Subagent Model / Arbitrage -->
-              <span class="mono" style="background:${isArbitrage ? 'rgba(56,189,248,0.18)' : 'rgba(148,163,184,0.18)'};color:${isArbitrage ? '#38bdf8' : '#cbd5e1'};padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:bold" title="Settings > Agents: Custom model ID configured for subagents">
-                ${isArbitrage ? `Arbitrage: ${escHtml(subModelShort)} (Sub) vs ${escHtml(mainModelShort)} (Main)` : `Model: ${escHtml(mainModelShort)}`}
-              </span>
-              <!-- Setting 2: Background Agents -->
-              <span class="mono" style="background:${isBackground ? 'rgba(34,197,94,0.18)' : 'rgba(99,102,241,0.15)'};color:${isBackground ? '#4ade80' : '#a5b4fc'};padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:bold" title="Settings > Agents: Background agents setting">
-                ${isBackground ? '⚡ Async Background Agent' : '⏱ Sync Workers (Parallel Batch)'}
-              </span>
-              <!-- Setting 3: Fork Agents -->
-              <span class="mono" style="background:${isFork ? 'rgba(245,158,11,0.18)' : 'rgba(56,189,248,0.12)'};color:${isFork ? '#fbbf24' : '#93c5fd'};padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:bold" title="Settings > Agents: Fork agents setting">
-                ${isFork ? '🔀 Forked Agent (Inherited History)' : '🛡️ Fresh Isolated Context'}
-              </span>
-            </div>
-            <div style="font-size:11px;color:var(--text-3);display:flex;align-items:center;gap:10px">
-              <span title="Provider Prompt Caching details">⏱ <strong>${escHtml(roi.ttlMode || 'Prompt Cache Active')}</strong></span>
-            </div>
-          </div>
-
-          <!-- 4-Column Realistic Trade-Off Grid -->
-          <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(210px, 1fr));gap:10px;margin-bottom:12px">
-            <!-- 1. Actual Subagents Run -->
-            <div style="background:var(--bg-1);border:1px solid var(--border);padding:10px 12px;border-radius:var(--radius-sm);border-left:3px solid #6366f1">
-              <div style="font-size:10.5px;color:var(--text-3);margin-bottom:2px;font-weight:600">With Subagents (Actual Spend)</div>
-              <div class="mono" style="font-size:16px;font-weight:bold;color:#a5b4fc">${fmtCost(actualCost)}</div>
-              <div style="font-size:10px;color:var(--text-2);margin-top:4px;display:flex;flex-direction:column;gap:2px">
-                <span>• <strong>${s.totalTurns}</strong> turn${s.totalTurns === 1 ? '' : 's'} across ${s.totalWorkers} parallel worker${s.totalWorkers === 1 ? '' : 's'}</span>
-                <span>• <strong>${fmtTokens(roi.totalOutputTokens || s.totalOutputTokens)}</strong> output tokens (${s.totalWorkers} worker report${s.totalWorkers === 1 ? '' : 's'})</span>
-                <span>• <strong>${fmtTokens(s.totalCacheReads)}</strong> cache reads (${(s.cacheHitPct || 0).toFixed(1)}% hit)</span>
-              </div>
-            </div>
-
-            <!-- 2. Data-Grounded Single Agent Baseline -->
-            <div style="background:var(--bg-1);border:1px solid var(--border);padding:10px 12px;border-radius:var(--radius-sm);border-left:3px solid #38bdf8">
-              <div style="font-size:10.5px;color:#38bdf8;margin-bottom:2px;font-weight:bold">Single Agent Baseline (${grounded.novelFilesCount != null ? grounded.novelFilesCount : 0} Novel Files)</div>
-              <div class="mono" style="font-size:16px;font-weight:bold;color:#38bdf8">${fmtCost(grounded.cost)}</div>
-              <div style="font-size:10px;color:var(--text-2);margin-top:4px;display:flex;flex-direction:column;gap:2px">
-                <span>• <strong>${grounded.novelFilesCount != null ? grounded.novelFilesCount : 0}</strong> unread file${grounded.novelFilesCount === 1 ? '' : 's'} required opening</span>
-                <span>• Min <strong>${grounded.turns || 1}</strong> sequential turn${(grounded.turns || 1) === 1 ? '' : 's'} (${fmtTokens(grounded.outputTokens || 0)} notes)</span>
-                <span>• Subagents carried <strong style="color:${(grounded.explorationPremium || 0) >= 0 ? '#fb7185' : '#34d399'}">${(grounded.explorationPremium || 0) >= 0 ? '+' : ''}${fmtCost(grounded.explorationPremium || grounded.explorationOverhead || 0)}</strong> report & discovery delta</span>
-              </div>
-            </div>
-
-            <!-- 3. Concurrency Wall-Clock Savings -->
-            <div style="background:var(--bg-1);border:1px solid var(--border);padding:10px 12px;border-radius:var(--radius-sm);border-left:3px solid #10b981">
-              <div style="font-size:10.5px;color:#10b981;margin-bottom:2px;font-weight:bold">⏱ Measured Concurrency Speedup</div>
-              <div class="mono" style="font-size:16px;font-weight:bold;color:#34d399">-${(wall.savedSec / 60).toFixed(1)} min saved</div>
-              <div style="font-size:10px;color:var(--text-2);margin-top:4px;display:flex;flex-direction:column;gap:2px">
-                <span>• <strong>${(wall.actualSec / 60).toFixed(1)} min</strong> concurrent vs <strong>${(wall.sequentialSec / 60).toFixed(1)} min</strong> sequential</span>
-                <span>• <strong>${(wall.speedupFactor || 1).toFixed(2)}x</strong> parallel speedup factor</span>
-                <span>• Grounded in exact worker timestamps</span>
-              </div>
-            </div>
-
-            <!-- 4. Scratch Amnesia & Redundant Work Overhead -->
-            <div style="background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.3);padding:10px 12px;border-radius:var(--radius-sm);border-left:3px solid #f59e0b">
-              <div style="font-size:10.5px;color:#f59e0b;margin-bottom:2px;font-weight:bold">⚠️ Scratch Amnesia & Friction</div>
-              <div class="mono" style="font-size:16px;font-weight:bold;color:#f59e0b">${friction.redundantCost > 0 ? `+${fmtCost(friction.redundantCost)}` : '$0.00'}</div>
-              <div style="font-size:10px;color:var(--text-2);margin-top:4px;display:flex;flex-direction:column;gap:2px">
-                <span>• <strong>${friction.redundantTurns || 0}</strong> extra main agent turn${friction.redundantTurns === 1 ? '' : 's'} triggered</span>
-                <span>• <strong>${fmtBytes(friction.scratchBytes || 0)}</strong> findings offloaded to scratch</span>
-                <span>• ${friction.description || 'No redundant scratch re-reads detected.'}</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- Scope Independence & Context Overlap Matrix -->
-          ${(scope.runs && scope.runs.length > 0) ? `
-            <div style="margin-bottom:12px;background:var(--bg-1);border:1px solid var(--border);border-radius:6px;padding:12px">
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
-                <div style="display:flex;align-items:center;gap:6px">
-                  <span style="font-weight:bold;font-size:12px;color:var(--text)">🎯 Subagent Task Independence & Context Overlap Matrix</span>
-                  <span class="mono" style="background:rgba(99,102,241,0.18);color:#a5b4fc;padding:1px 6px;border-radius:8px;font-size:10px;font-weight:bold">
-                    ${scope.summary.totalDistinctNovelFiles || 0} Total Novel Files Unseen by Main Agent
-                  </span>
-                </div>
-                <div style="font-size:10.5px;color:var(--text-3)">
-                  Programmatic verification of prior main context vs worker scopes
-                </div>
-              </div>
-
-              <div style="display:flex;flex-direction:column;gap:10px">
-                ${scope.runs.map(r => `
-                  <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:6px;padding:10px">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:6px">
-                      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-                        <strong style="font-size:11.5px;color:var(--text)">Run #${r.runIndex} (Call #${r.callIndex}): ${r.workerCount} Worker${r.workerCount === 1 ? '' : 's'}</strong>
-                        <span class="mono" style="background:${r.overallNoveltyPct >= 75 ? 'rgba(34,197,94,0.18)' : 'rgba(56,189,248,0.18)'};color:${r.overallNoveltyPct >= 75 ? '#4ade80' : '#38bdf8'};padding:1px 6px;border-radius:8px;font-size:10px;font-weight:bold">
-                          ${escHtml(r.taskType)} (${r.overallNoveltyPct}% Novel Files)
-                        </span>
-                        <span class="mono" style="background:rgba(168,85,247,0.18);color:#c084fc;padding:1px 6px;border-radius:8px;font-size:10px;font-weight:bold">
-                          ${r.uniquenessPct}% Worker-to-Worker Uniqueness
-                        </span>
-                      </div>
-                      <div style="font-size:10.5px;color:var(--text-3)">
-                        <strong>${r.uniqueNovelFilesCount}</strong> novel files · <strong>${r.uniqueTargetFilesCount}</strong> total scope files
-                      </div>
-                    </div>
-                    <div style="font-size:10.5px;color:var(--text-2);margin-bottom:8px">
-                      ${escHtml(r.taskTypeDescription)}
-                    </div>
-
-                    <!-- Worker Cards Grid -->
-                    <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(210px, 1fr));gap:8px">
-                      ${r.workers.map(w => `
-                        <div style="background:var(--bg-1);border:1px solid var(--border);border-radius:4px;padding:8px;font-size:10px">
-                          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-                            <strong style="color:#a5b4fc">${escHtml(w.label)}</strong>
-                            <span class="mono" style="font-weight:bold;color:${w.noveltyPct >= 75 ? '#4ade80' : (w.noveltyPct >= 35 ? '#38bdf8' : '#fbbf24')}">
-                              ${w.noveltyPct}% novel
-                            </span>
-                          </div>
-                          <div style="color:var(--text-3);margin-bottom:4px">
-                            <span>Prior Main Context: </span>
-                            <strong style="color:${w.knownToMainCount > 0 ? '#fbbf24' : '#4ade80'}">
-                              ${w.knownToMainCount > 0 ? `${w.knownToMainCount} file(s) seen` : '0% seen (100% Brand-New)'}
-                            </strong>
-                          </div>
-                          <div style="color:var(--text-2);line-height:1.3">
-                            <div style="font-weight:600;margin-bottom:2px">Assigned Scope Targets (${w.targetCount}):</div>
-                            ${w.targetCount > 0 ? `
-                              <ul style="margin:0 0 0 12px;padding:0;list-style:disc">
-                                ${w.targets.slice(0, 3).map(t => `<li title="${escHtml(t)}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(t.split('/').pop())}</li>`).join('')}
-                                ${w.targets.length > 3 ? `<li style="color:var(--text-3)">+${w.targets.length - 3} more files...</li>` : ''}
-                              </ul>
-                            ` : `<span style="color:var(--text-3);font-style:italic">Dynamic codebase inspection / directive</span>`}
-                          </div>
-                        </div>
-                      `).join('')}
-                    </div>
-                  </div>
-                `).join('')}
-              </div>
-            </div>
-          ` : ''}
-
-          <!-- Comprehensive Engineering Insights Banner -->
-          <div style="font-size:11px;color:var(--text-2);background:var(--bg-1);padding:12px 14px;border-radius:6px;border:1px solid var(--border);line-height:1.6;display:flex;flex-direction:column;gap:8px">
-            <div style="display:flex;align-items:flex-start;gap:8px">
-              <span style="font-size:14px;line-height:1">💡</span>
-              <div>
-                <strong style="color:var(--text)">The Scope-Grounded Reality:</strong>
-                ${escHtml(grounded.basisExplanation || `Subagents were assigned ${scope.summary?.totalDistinctNovelFiles || 0} novel files unseen by the main agent. Reading them sequentially would require at least ${grounded.turns || 1} tool turns, costing ${fmtCost(grounded.cost)} on ${mainModelShort}.`)}
-                Subagents completed in <strong style="color:#a5b4fc">${fmtCost(actualCost)}</strong> across ${s.totalWorkers} parallel worker${s.totalWorkers === 1 ? '' : 's'} (${s.totalTurns} turns, ${fmtTokens(s.totalOutputTokens || 0)} output tokens).
-              </div>
-            </div>
-
-            <div style="display:flex;align-items:flex-start;gap:8px">
-              <span style="font-size:14px;line-height:1">⚡</span>
-              <div>
-                <strong style="color:var(--text)">Why Subagents Were Used (Empirical Values):</strong>
-                <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(240px, 1fr));gap:6px;margin-top:4px">
-                  <span style="background:rgba(16,185,129,0.08);padding:4px 8px;border-radius:4px;border:1px solid rgba(16,185,129,0.2)">
-                    🚀 <strong>Concurrency Speedup:</strong> Completed in <strong>${(wall.actualSec / 60).toFixed(1)} min</strong> concurrent vs <strong>${(wall.sequentialSec / 60).toFixed(1)} min</strong> sequential (<strong>${(wall.savedSec / 60).toFixed(1)} min saved</strong>).
-                  </span>
-                  <span style="background:rgba(34,197,94,0.08);padding:4px 8px;border-radius:4px;border:1px solid rgba(34,197,94,0.2)">
-                    🛡️ <strong>Context Window Protection:</strong> Kept <strong>~${fmtTokens(roi.contextTokensPrevented || (s.totalTokensIn + s.totalTokensOut) || 0)}</strong> of raw file contents and worker reasoning out of the main thread.
-                  </span>
-                  <span style="background:rgba(168,85,247,0.08);padding:4px 8px;border-radius:4px;border:1px solid rgba(168,85,247,0.2)">
-                    🎯 <strong>Partition Uniqueness:</strong> <strong>${scope.runs?.[0]?.uniquenessPct != null ? `${scope.runs[0].uniquenessPct}%` : '100%'}</strong> inter-worker partitioning with minimal duplicate reads across workers.
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            <div style="display:flex;align-items:flex-start;gap:8px">
-              <span style="font-size:14px;line-height:1">⚙️</span>
-              <div>
-                <strong style="color:var(--text)">PostQode Subagent Settings in Effect:</strong>
-                <span>(1) <em>Model:</em> ${isArbitrage ? `Custom ID <code>${escHtml(subModelShort)}</code> (saving vs <code>${escHtml(mainModelShort)}</code>)` : `Inherited chat model (<code>${escHtml(mainModelShort)}</code>)`}. (2) <em>Concurrency:</em> ${isBackground ? 'Background mode (async non-blocking)' : 'Foreground mode (sync blocking)'}. (3) <em>Context:</em> ${isFork ? 'Fork mode (inherited conversation history)' : 'Fresh isolated context (lean memory)'}.</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      `;
-    })() : ''}
-
-    <!-- Executive Pruning Category Summary Grid -->
-    <div style="margin-bottom:16px">
-      <div style="font-weight:bold;font-size:12.5px;color:var(--text);margin-bottom:10px">
-        📌 Executive Context Reduction Summary — What Was Pruned During Task:
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(240px, 1fr));gap:12px">
-        <!-- Files Truncated Card -->
-        <div class="panel" style="background:var(--bg-2);border:1px solid var(--border);border-left:4px solid var(--green);padding:12px;border-radius:var(--radius-sm)">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-            <span style="font-weight:bold;font-size:11.5px;color:var(--green)">📁 File Read Truncations</span>
-            <span class="mono" style="font-size:11px;font-weight:bold;color:var(--green)">-${fmtBytes(fileSaved)}</span>
-          </div>
-          <div style="font-size:10.5px;color:var(--text-3);margin-bottom:8px">
-            ${(cats.truncatedFiles || []).length} unique files truncated in context:
-          </div>
-          <div style="display:flex;flex-direction:column;gap:4px;max-height:120px;overflow-y:auto">
-            ${(cats.truncatedFiles || []).map(f => `
-              <div class="pa-summary-row" title="Full File Path: ${escHtml(f.path)} &#10;Total Pruned: ${fmtBytes(f.bytesSaved)} (${f.count} times)" data-target="${escHtml(f.path)}" style="display:flex;justify-content:space-between;font-size:10px;background:var(--bg-3);padding:4px 8px;border-radius:3px;cursor:pointer;transition:background 0.15s">
-                <span style="color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:190px;font-family:monospace" title="${escHtml(f.path)}">${escHtml(f.path)}</span>
-                <span class="mono" style="color:var(--green);font-weight:bold;margin-left:6px">-${fmtBytes(f.bytesSaved)} (${f.count}x)</span>
-              </div>
-            `).join('')}
-          </div>
-        </div>
-
-        <!-- Terminal Output Card -->
-        <div class="panel" style="background:var(--bg-2);border:1px solid var(--border);border-left:4px solid #38bdf8;padding:12px;border-radius:var(--radius-sm)">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-            <span style="font-weight:bold;font-size:11.5px;color:#38bdf8">💻 Command Output Truncations</span>
-            <span class="mono" style="font-size:11px;font-weight:bold;color:#38bdf8">-${fmtBytes(cmdSaved)}</span>
-          </div>
-          <div style="font-size:10.5px;color:var(--text-3);margin-bottom:8px">
-            ${(cats.truncatedCommands || []).length} command outputs capped:
-          </div>
-          <div style="display:flex;flex-direction:column;gap:4px;max-height:120px;overflow-y:auto">
-            ${(cats.truncatedCommands || []).map(c => `
-              <div class="pa-summary-row" title="Full Command: ${escHtml(c.command)} &#10;Total Pruned: ${fmtBytes(c.bytesSaved)}" data-target="${escHtml(c.command)}" style="display:flex;justify-content:space-between;font-size:10px;background:var(--bg-3);padding:4px 8px;border-radius:3px;cursor:pointer;transition:background 0.15s">
-                <span style="color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:190px;font-family:monospace" title="${escHtml(c.command)}">${escHtml(c.command)}</span>
-                <span class="mono" style="color:#38bdf8;font-weight:bold;margin-left:6px">-${fmtBytes(c.bytesSaved)}</span>
-              </div>
-            `).join('')}
-          </div>
-        </div>
-
-        <!-- Environment Details Card -->
-        <div class="panel" style="background:var(--bg-2);border:1px solid var(--border);border-left:4px solid #f59e0b;padding:12px;border-radius:var(--radius-sm)">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-            <span style="font-weight:bold;font-size:11.5px;color:#f59e0b">🌲 Environment Snapshots Pruned</span>
-            <span class="mono" style="font-size:11px;font-weight:bold;color:#f59e0b">-${fmtBytes(envSaved)}</span>
-          </div>
-          <div style="font-size:10.5px;color:var(--text-3);margin-bottom:8px">
-            ${cats.environmentSnapshots?.count || 0} stale workspace snapshots removed to prevent context bloat.
-          </div>
-          <div style="font-size:11px;color:var(--text-2);background:var(--bg-3);padding:8px;border-radius:2px;margin-top:10px">
-            ✓ Keeps latest workspace state while purging historical duplicates.
-          </div>
-        </div>
-
-        <!-- Immediate Scratch Offloads Card -->
-        <div class="panel" style="background:var(--bg-2);border:1px solid var(--border);border-left:4px solid #e879f9;padding:12px;border-radius:var(--radius-sm)">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-            <span style="font-weight:bold;font-size:11.5px;color:#e879f9">⚡ Immediate Scratch Offloads</span>
-            <span class="mono" style="font-size:11px;font-weight:bold;color:#e879f9">-${fmtBytes(scratchSaved)}</span>
-          </div>
-          <div style="font-size:10.5px;color:var(--text-3);margin-bottom:8px">
-            ${scratchSum.count || 0} tool outputs offloaded to scratch/ files:
-          </div>
-          <div style="font-size:11px;color:var(--text-2);background:var(--bg-3);padding:8px;border-radius:2px;margin-top:10px">
-            ✓ Offloads raw bulk logs to disk at write-time, keeping only compact Head+Tail snippets in prompt.
-          </div>
-        </div>
-
-        <!-- Tool Errors & Retries Card -->
-        <div class="panel" style="background:var(--bg-2);border:1px solid var(--border);border-left:4px solid ${calls.filter(c => c.hasError).length > 0 ? '#ef4444' : '#6b7280'};padding:12px;border-radius:var(--radius-sm)">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-            <span style="font-weight:bold;font-size:11.5px;color:${calls.filter(c => c.hasError).length > 0 ? '#ef4444' : 'var(--text-3)'}">⚠️ Tool Errors & Retries</span>
-            <span class="mono" style="font-size:11px;font-weight:bold;color:${calls.filter(c => c.hasError).length > 0 ? '#ef4444' : 'var(--text-3)'}">${calls.filter(c => c.hasError).length} calls</span>
-          </div>
-          <div style="font-size:10.5px;color:var(--text-3);margin-bottom:8px">
-            ${calls.filter(c => c.hasError).length > 0 ? `${calls.filter(c => c.hasError).length} tool operations failed or triggered retries:` : 'Clean execution — 0 tool errors encountered.'}
-          </div>
-          ${calls.filter(c => c.hasError).length > 0 ? `
-            <div style="display:flex;flex-direction:column;gap:4px;max-height:120px;overflow-y:auto">
-              ${calls.filter(c => c.hasError).slice(0, 10).map(c => `
-                <div class="pa-summary-row" title="Call #${c.index + 1}: ${escHtml(c.errorDetails?.message || 'Error')}" data-call-index="${c.index}" style="display:flex;justify-content:space-between;font-size:10px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.25);padding:4px 8px;border-radius:3px;cursor:pointer;transition:background 0.15s">
-                  <span style="color:#f87171;font-weight:bold">#${c.index + 1} (${escHtml(c.errorDetails?.tool || 'tool')})</span>
-                  <span style="color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px">${escHtml(c.errorDetails?.message || '')}</span>
-                </div>
-              `).join('')}
-              ${calls.filter(c => c.hasError).length > 10 ? `<div style="font-size:9.5px;color:var(--text-3);text-align:center">+${calls.filter(c => c.hasError).length - 10} more error turns</div>` : ''}
-            </div>
-          ` : `
-            <div style="font-size:11px;color:var(--green);background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.25);padding:8px;border-radius:2px;margin-top:10px">
-              ✓ All tool executions succeeded without any failure errors.
-            </div>
-          `}
-        </div>
-
-        <!-- Subagents Parallel Runs Card -->
-        ${(data.subagentSummary?.hasSubagents) ? `
-        <div class="panel" style="background:var(--bg-2);border:1px solid var(--border);border-left:4px solid #6366f1;padding:12px;border-radius:var(--radius-sm)">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-            <span style="font-weight:bold;font-size:11.5px;color:#818cf8">🤖 Subagent Parallel Runs</span>
-            <span class="mono" style="font-size:11px;font-weight:bold;color:#818cf8">${data.subagentSummary.totalWorkers} workers (${data.subagentSummary.totalRuns} runs)</span>
-          </div>
-          <div style="font-size:10.5px;color:var(--text-3);margin-bottom:8px">
-            Cost: <strong style="color:var(--green)">${fmtCost(data.subagentSummary.totalCost)}</strong> · Tokens: <strong class="mono" style="color:var(--text)">↑${fmtTokens(data.subagentSummary.totalInputTokens || 0)} ↓${fmtTokens(data.subagentSummary.totalOutputTokens || 0)}</strong> · Tools: <strong class="mono" style="color:#818cf8">${data.subagentSummary.totalToolCalls}</strong>
-          </div>
-          ${data.subagentSummary.isFalseFailure ? `
-            <div style="background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.3);color:#fca5a5;padding:4px 8px;border-radius:4px;font-size:10px;margin-bottom:6px">
-              ⚠️ <strong>PostQode False Failure:</strong> UI reported "failed", but all ${data.subagentSummary.totalWorkers} workers completed (0 failures).
-            </div>
-          ` : ''}
-          ${data.subagentSummary.hasScratchOffload ? `
-            <div style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.3);color:#fde68a;padding:4px 8px;border-radius:4px;font-size:10px;margin-bottom:6px">
-              📦 <strong>Findings Offloaded:</strong> ${fmtBytes(data.subagentSummary.scratchSavedBytes)} saved to <code>${escHtml(data.subagentSummary.scratchFile || 'scratch.log')}</code>.
-            </div>
-          ` : ''}
-          <div style="display:flex;flex-direction:column;gap:4px;max-height:120px;overflow-y:auto">
-            ${calls.filter(c => c.hasSubagents).map(c => `
-              <div class="pa-summary-row" title="Call #${c.turn}: ${c.subagents?.total || c.subagents?.items?.length || 1} workers (${c.subagents?.modelId || 'subagent'})" data-call-index="${c.index}" style="display:flex;justify-content:space-between;font-size:10px;background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.25);padding:4px 8px;border-radius:3px;cursor:pointer;transition:background 0.15s">
-                <span style="color:#818cf8;font-weight:bold">#${c.turn} (${c.subagents?.items?.length || c.subagents?.total || 1} workers)</span>
-                <span style="color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px;font-family:monospace">${escHtml((c.subagents?.modelId || '').split('/').pop() || 'worker')}</span>
-              </div>
-            `).join('')}
-          </div>
-        </div>
-        ` : ''}
-
-        <!-- Parallel Tool Execution Card -->
-        ${(data.parallelStats && data.parallelStats.parallelBatches > 0) ? `
-        <div class="panel" style="background:var(--bg-2);border:1px solid var(--border);border-left:4px solid #38bdf8;padding:12px;border-radius:var(--radius-sm)">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-            <span style="font-weight:bold;font-size:11.5px;color:#38bdf8">⚡ Parallel Tool Execution</span>
-            <span class="mono" style="font-size:11px;font-weight:bold;color:#38bdf8">${data.parallelStats.concurrencyPct}% Concurrency</span>
-          </div>
-          <div style="font-size:10.5px;color:var(--text-3);margin-bottom:8px">
-            <strong style="color:#38bdf8">${data.parallelStats.parallelToolCalls}</strong> of ${data.parallelStats.totalToolCalls} tools parallel · <strong style="color:var(--green)">~${data.parallelStats.roundtripsSaved} roundtrips saved</strong>
-          </div>
-          <div style="font-size:10px;color:var(--text-2);background:var(--bg-3);padding:6px 8px;border-radius:4px;margin-bottom:6px">
-            ⚡ ${data.parallelStats.parallelBatches} parallel turns · Peak: <strong style="color:#38bdf8">${data.parallelStats.maxParallel} tools/turn</strong>
-          </div>
-          <div style="display:flex;flex-direction:column;gap:4px;max-height:120px;overflow-y:auto">
-            ${calls.filter(c => c.isParallel).map(c => `
-              <div class="pa-summary-row" title="Turn #${c.turn}: ${c.toolCount} tools executed concurrently in this turn" data-call-index="${c.index}" style="display:flex;justify-content:space-between;font-size:10px;background:rgba(56,189,248,0.1);border:1px solid rgba(56,189,248,0.25);padding:4px 8px;border-radius:3px;cursor:pointer;transition:background 0.15s">
-                <span style="color:#38bdf8;font-weight:bold">Turn #${c.turn} (⚡ ${c.toolCount} tools)</span>
-                <span style="color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px;font-family:monospace">${escHtml((c.tools || []).map(t => t.tool).slice(0, 3).join(', '))}${(c.tools || []).length > 3 ? '…' : ''}</span>
-              </div>
-            `).join('')}
-          </div>
-        </div>
-        ` : ''}
-      </div>
+    <!-- Active Lens Surface Area -->
+    <div id="pa-lens-content-area" class="pa-lens-content-area">
+      ${renderActiveLens(curLens, data)}
     </div>
 
     <!-- Timeline Chart Panel -->
@@ -3754,6 +3470,9 @@ function drawTimelineChart(calls, targetCanvas = null, zoomRange = null, crossha
 }
 
 function bindAnalyticsEvents(calls) {
+  bindLensTabEvents();
+  bindLensInternalEvents();
+
   bindGlobalLegendEvents(document.getElementById('pa-content'), () => {
     drawTimelineChart(calls);
     const compSec = document.getElementById('pa-comparison-section');
